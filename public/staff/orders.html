@@ -16,7 +16,7 @@
 const user = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
-(async function(){
+async function load(){
   const orders = await EXO.apiFetch('/orders');
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
@@ -25,8 +25,21 @@ document.getElementById('heading').textContent = user.role === 'admin' ? 'All or
       <td>${o.staffName}</td>
       <td>${o.items.length}</td>
       <td>${EXO.money(o.total)}</td>
-      <td><span class="badge ${o.status}">${o.status}</span></td>
+      <td>
+        <select class="status-select ${o.status}" onchange="changeStatus('${o.id}', this)">
+          <option value="pending" ${o.status==='pending'?'selected':''}>pending</option>
+          <option value="confirmed" ${o.status==='confirmed'?'selected':''}>confirmed</option>
+          <option value="cancelled" ${o.status==='cancelled'?'selected':''}>cancelled</option>
+        </select>
+      </td>
       <td><a href="/order/${o.shareToken}" target="_blank">View link ↗</a></td>
     </tr>`).join('') || '<tr><td colspan="7" class="muted">No orders yet — go take one!</td></tr>';
-})();
+}
+async function changeStatus(id, select){
+  const status = select.value;
+  select.className = 'status-select ' + status;
+  try { await EXO.apiFetch('/orders/'+id+'/status', { method:'PUT', body: JSON.stringify({ status }) }); }
+  catch(e) { alert(e.message); load(); }
+}
+load();
 </script>

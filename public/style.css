@@ -27,6 +27,10 @@ th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03
 .badge.pending{background:#fff4de;color:#9a6700}
 .badge.confirmed{background:#e6f7ed;color:var(--ok)}
 .badge.cancelled{background:#fdeceb;color:var(--danger)}
+.status-select{width:auto;padding:5px 8px;border-radius:20px;font-size:12px;font-weight:700;border:none;text-transform:capitalize}
+.status-select.pending{background:#fff4de;color:#9a6700}
+.status-select.confirmed{background:#e6f7ed;color:var(--ok)}
+.status-select.cancelled{background:#fdeceb;color:var(--danger)}
 .error{background:#fdeceb;color:var(--danger);padding:10px 14px;border-radius:8px;font-size:13px;margin:10px 0;display:none}
 .muted{color:var(--muted);font-size:13px}
 .hero{text-align:center;padding:70px 20px}
