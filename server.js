@@ -59,7 +59,8 @@ const tenantSchema = new mongoose.Schema({
   // Which item fields appear per line on the order link sent to buyers, and
   // which of those (number fields) get summed into a total — admin-configured
   // in Settings > Order Form.
-  orderFields: { type: [{ key: String, label: String, showTotal: Boolean }], default: [] },
+  orderFields: { type: [{ key: String, label: String, unit: String, showTotal: Boolean }], default: [] },
+  orderShowImages: { type: Boolean, default: true }, // whether item photos appear on the order link
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -80,6 +81,7 @@ const fieldDefSchema = new mongoose.Schema({
   type: { type: String, default: 'text' }, // text | number | dropdown | date
   options: [String],                  // for type=dropdown
   decimals: { type: Number, default: 2 }, // for type=number — values are rounded to this many places
+  unit: { type: String, default: '' },    // for type=number — display suffix, e.g. "Grams", "Rs.", "Mts"
   order: { type: Number, default: 0 },
   isScannerKey: { type: Boolean, default: false }, // true only for the built-in "itemCode" field
   fixed: { type: Boolean, default: false }, // built-in field (Item Code / Image Code) — cannot be deleted
@@ -108,13 +110,14 @@ const orderSchema = new mongoose.Schema({
   id: String, orderNo: String, tenantId: String, exhibitionId: String,
   partyId: String, partyName: String, partyPhone: String,
   staffId: String, staffName: String,
-  items: Array,                       // [{itemId, label, scannerCode, image, qty, price, subtotal, extra}]
+  items: Array,                       // [{itemId, label, scannerCode, images, qty, price, subtotal, extra}]
   total: Number, remark: String,
   // Snapshot of the tenant's Order Form config at the time this order was
   // placed, plus the computed per-field totals — kept on the order so it
   // still renders correctly even if the admin changes the config later.
-  orderFieldsSnapshot: { type: [{ key: String, label: String, showTotal: Boolean }], default: [] },
+  orderFieldsSnapshot: { type: [{ key: String, label: String, unit: String, showTotal: Boolean }], default: [] },
   fieldTotals: { type: mongoose.Schema.Types.Mixed, default: {} },
+  showImages: { type: Boolean, default: true },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   shareToken: { type: String, unique: true, sparse: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
@@ -451,12 +454,16 @@ app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), as
 // key can't sneak in.
 app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const list = Array.isArray(req.body.orderFields) ? req.body.orderFields : [];
-  const validKeys = new Set((await FieldDefDB.find({ tenantId: req.tenant.id, active: true })).map(f => f.key));
+  const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
+  const byKey = {}; fieldDefs.forEach(f => { byKey[f.key] = f; });
+  // Label/unit are pulled fresh from the real field def rather than trusting
+  // the client, so they can't drift out of sync with the field builder.
   const orderFields = list
-    .filter(f => f && validKeys.has(f.key))
-    .map(f => ({ key: f.key, label: String(f.label || f.key), showTotal: !!f.showTotal }));
-  await TenantDB.update({ id: req.tenant.id }, { orderFields });
-  res.json({ ok: true, orderFields });
+    .filter(f => f && byKey[f.key])
+    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', showTotal: !!f.showTotal }));
+  const orderShowImages = req.body.showImages !== undefined ? !!req.body.showImages : true;
+  await TenantDB.update({ id: req.tenant.id }, { orderFields, orderShowImages });
+  res.json({ ok: true, orderFields, orderShowImages });
 });
 
 app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req, res) => {
@@ -476,7 +483,7 @@ app.get('/api/fields', resolveTenant, auth, async (req, res) => {
 });
 
 app.post('/api/fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const { label, type, options, decimals } = req.body;
+  const { label, type, options, decimals, unit } = req.body;
   if (!label || !label.trim()) return res.status(400).json({ error: 'Field label is required' });
   if (RESERVED_FIELD_LABELS.includes(label.trim().toLowerCase()))
     return res.status(400).json({ error: `"${label.trim()}" is a built-in field already on every item` });
@@ -488,6 +495,7 @@ app.post('/api/fields', resolveTenant, auth, requireRole('admin'), async (req, r
     id: uuid(), tenantId: req.tenant.id, key, label: label.trim(),
     type: type || 'text', options: Array.isArray(options) ? options : [],
     decimals: type === 'number' ? Math.max(0, Math.min(6, Number(decimals) || 0)) : 2,
+    unit: type === 'number' ? String(unit || '').trim() : '',
     order: existing.length, isScannerKey: false, fixed: false, active: true, createdAt: new Date().toISOString(),
   };
   await FieldDefDB.create(field);
@@ -503,6 +511,7 @@ app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), async (req
   if (req.body.order !== undefined) updates.order = req.body.order;
   if (req.body.type !== undefined && !field.fixed) updates.type = req.body.type; // fixed fields always stay text
   if (req.body.decimals !== undefined) updates.decimals = Math.max(0, Math.min(6, Number(req.body.decimals) || 0));
+  if (req.body.unit !== undefined) updates.unit = String(req.body.unit).trim();
   await FieldDefDB.update({ id: req.params.id }, updates);
   res.json({ ok: true });
 });
@@ -918,7 +927,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
     lineItems.push({
       itemId: item.id, label: item.fields?.productName || item.scannerCode || item.id,
-      scannerCode: item.scannerCode, image: item.images?.[0] || '',
+      scannerCode: item.scannerCode, images: item.images || [],
       qty, price, subtotal: qty * price, extra,
     });
   }
@@ -936,6 +945,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     staffId: req.user.id, staffName: req.user.name,
     items: lineItems, total, remark: remark || '', status: 'pending',
     orderFieldsSnapshot: orderFields, fieldTotals,
+    showImages: req.tenant.orderShowImages !== false,
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };
   await OrderDB.create(order);

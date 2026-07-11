@@ -61,6 +61,18 @@ td.thumb-cell{width:56px}
 .field-row-edit input{margin:0}
 .btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
+.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:1000;align-items:center;justify-content:center}
+.lightbox.open{display:flex}
+.lightbox img{max-width:88vw;max-height:85vh;object-fit:contain;border-radius:8px}
+.lightbox-close{position:absolute;top:18px;right:22px;background:none;color:#fff;font-size:22px;padding:6px 10px}
+.lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.15);color:#fff;font-size:28px;padding:8px 16px;border-radius:8px}
+.lightbox-prev{left:16px}
+.lightbox-next{right:16px}
+@media (max-width:640px){
+  .lightbox-nav{font-size:22px;padding:6px 12px}
+  .lightbox-close{top:10px;right:14px}
+}
+
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
 @media (max-width:640px){
   .topbar{flex-direction:column;align-items:flex-start;gap:10px;padding:12px 16px}

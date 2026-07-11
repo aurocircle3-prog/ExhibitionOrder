@@ -16,6 +16,9 @@
 
   <div class="card">
     <h3 style="margin-top:0">Order Form <span class="muted">— choose which item fields appear on the order link sent to buyers</span></h3>
+    <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">
+      <input type="checkbox" id="showImages" style="width:auto"> <span>Show item photos on the order link</span>
+    </label>
     <div class="table-scroll"><table>
       <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
       <tbody id="orderFieldRows"></tbody>
@@ -47,6 +50,7 @@ async function load(){
   document.getElementById('name').value = me.tenant.name || '';
   document.getElementById('currency').value = me.tenant.currency || '₹';
   document.getElementById('slugShow').textContent = me.tenant.slug;
+  document.getElementById('showImages').checked = me.tenant.orderShowImages !== false;
   loadOrderFields(me.tenant.orderFields || []);
   loadExhibitions();
 }
@@ -56,7 +60,7 @@ async function loadOrderFields(saved){
   saved.forEach(f => { savedByKey[f.key] = f; });
   document.getElementById('orderFieldRows').innerHTML = fields.map(f => `
     <tr>
-      <td>${f.label}</td>
+      <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
       <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
     </tr>`).join('');
@@ -68,7 +72,8 @@ async function saveOrderFields(){
     const totalEl = document.querySelector(`.of-total[data-key="${key}"]`);
     return { key, label: el.dataset.label, showTotal: totalEl ? totalEl.checked : false };
   });
-  try { await EXO.apiFetch('/companies/order-fields', { method:'PUT', body: JSON.stringify({ orderFields }) }); }
+  const showImages = document.getElementById('showImages').checked;
+  try { await EXO.apiFetch('/companies/order-fields', { method:'PUT', body: JSON.stringify({ orderFields, showImages }) }); }
   catch(e) { err.textContent = e.message; err.style.display='block'; }
 }
 async function save(){
