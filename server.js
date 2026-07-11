@@ -969,23 +969,34 @@ app.get('/api/parties/:id', resolveTenant, auth, async (req, res) => {
 });
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
-// Shared by order create + order edit — turns { itemId, qty } lines into full
-// order line items (label, images, per-field snapshot) and computes the
-// showTotal field sums. Re-reads items fresh each time so an edit always
-// reflects the item master's current fields, not stale data from creation.
+// Shared by order create + order edit — turns { itemId, qty, extra, comment }
+// lines into full order line items (label, images, per-field snapshot) and
+// computes the showTotal field sums. Re-reads items fresh each time so an
+// edit always reflects the item master's current fields, not stale data
+// from creation — but a line's own `extra` values (if the staff typed an
+// override, e.g. this sale's actual melting % differs from the item
+// master default) win over the item master default for that field.
 async function buildOrderLines(tenant, items) {
   const orderFields = tenant.orderFields || [];
+  const orderKeys = new Set(orderFields.map(f => f.key));
+  const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const lineItems = [];
   for (const line of items) {
     const item = await ItemDB.findOne({ id: line.itemId, tenantId: tenant.id });
     if (!item) continue;
     const qty = Number(line.qty) || 1;
-    const extra = {};
-    orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
+    const rawExtra = {};
+    orderFields.forEach(f => { rawExtra[f.key] = item.fields?.[f.key] ?? ''; });
+    if (line.extra && typeof line.extra === 'object') {
+      for (const [k, v] of Object.entries(line.extra)) {
+        if (orderKeys.has(k)) rawExtra[k] = v; // only known Order Form fields — never trust arbitrary keys from the client
+      }
+    }
+    const extra = normalizeFieldValues(fieldDefs, rawExtra);
     lineItems.push({
       itemId: item.id, label: item.fields?.productName || item.scannerCode || item.id,
       scannerCode: item.scannerCode, images: item.images || [],
-      qty, extra,
+      qty, extra, comment: typeof line.comment === 'string' ? line.comment.trim().slice(0, 500) : '',
     });
   }
   const fieldTotals = {};

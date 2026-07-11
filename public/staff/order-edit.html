@@ -35,7 +35,7 @@
 const currentUser = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 
-let order = null, cart = [];
+let order = null, cart = [], orderFields = [];
 const orderId = new URLSearchParams(location.search).get('id');
 
 function showBlocked(msg){
@@ -47,11 +47,15 @@ function showBlocked(msg){
 async function load(){
   if (!orderId) return showBlocked('No order specified.');
   try {
+    const me = await EXO.apiFetch('/me');
+    orderFields = me.tenant?.orderFields || [];
     order = await EXO.apiFetch('/orders/' + orderId);
   } catch (e) { return showBlocked(e.message); }
   if (order.status !== 'pending') return showBlocked('Only pending orders can be edited — this order is ' + order.status + '.');
 
-  cart = order.items.map(i => ({ itemId: i.itemId, label: i.label, code: i.scannerCode, qty: i.qty }));
+  // Existing order lines already carry their own saved extra/comment values —
+  // edit those in place rather than re-pulling fresh item master defaults.
+  cart = order.items.map(i => ({ itemId: i.itemId, label: i.label, code: i.scannerCode, qty: i.qty, extra: { ...(i.extra || {}) }, comment: i.comment || '' }));
   document.getElementById('orderNo').textContent = '· ' + order.orderNo;
   document.getElementById('partyName').textContent = order.partyName;
   document.getElementById('partyPhone').textContent = order.partyPhone;
@@ -74,8 +78,10 @@ async function lookupItem(){
 }
 function addToCart(item){
   const existing = cart.find(c => c.itemId === item.id);
-  if (existing) existing.qty += 1;
-  else cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, qty: 1 });
+  if (existing) { existing.qty += 1; renderCart(); return; }
+  const extra = {};
+  orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
+  cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, qty: 1, extra, comment: '' });
   renderCart();
 }
 function changeQty(id, delta){
@@ -83,16 +89,25 @@ function changeQty(id, delta){
   line.qty = Math.max(1, line.qty + delta);
   renderCart();
 }
+function updateExtra(id, key, value){ const line = cart.find(c => c.itemId === id); if (line) line.extra[key] = value; }
+function updateComment(id, value){ const line = cart.find(c => c.itemId === id); if (line) line.comment = value; }
 function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart(); }
 function renderCart(){
-  document.getElementById('cartRows').innerHTML = cart.length ? cart.map(c => `
-    <div class="cart-row">
-      <span>${c.label} <span class="muted">(${c.code})</span></span>
-      <span class="qty-ctrl">
-        <button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button>
-        <button class="danger small" onclick="removeLine('${c.itemId}')">✕</button>
-      </span>
-    </div>`).join('') : '<p class="muted">No items — add at least one below</p>';
+  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items — add at least one below</p>'; return; }
+  const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
+  const rows = cart.map(c => `
+    <tr>
+      <td>${c.label}<br><span class="muted">${c.code}</span></td>
+      ${orderFields.map(f => `<td><input style="width:80px" value="${c.extra?.[f.key] ?? ''}" oninput="updateExtra('${c.itemId}','${f.key}',this.value)"></td>`).join('')}
+      <td><input style="width:140px" placeholder="Optional note" value="${c.comment || ''}" oninput="updateComment('${c.itemId}',this.value)"></td>
+      <td class="qty-ctrl"><button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button></td>
+      <td><button class="danger small" onclick="removeLine('${c.itemId}')">✕</button></td>
+    </tr>`).join('');
+  document.getElementById('cartRows').innerHTML = `
+    <div class="table-scroll"><table>
+      <thead><tr><th>Item</th>${fieldCols}<th>Comment</th><th>Qty</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
 }
 
 async function saveOrder(){
@@ -102,7 +117,7 @@ async function saveOrder(){
     await EXO.apiFetch('/orders/' + orderId, {
       method: 'PUT',
       body: JSON.stringify({
-        items: cart.map(c => ({ itemId: c.itemId, qty: c.qty })),
+        items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })),
         remark: document.getElementById('remark').value.trim(),
       }),
     });
