@@ -56,6 +56,10 @@ const tenantSchema = new mongoose.Schema({
   plan: { type: String, default: 'free' },
   logoUrl: String,
   currency: { type: String, default: '₹' },
+  // Which item fields appear per line on the order link sent to buyers, and
+  // which of those (number fields) get summed into a total — admin-configured
+  // in Settings > Order Form.
+  orderFields: { type: [{ key: String, label: String, showTotal: Boolean }], default: [] },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -104,8 +108,13 @@ const orderSchema = new mongoose.Schema({
   id: String, orderNo: String, tenantId: String, exhibitionId: String,
   partyId: String, partyName: String, partyPhone: String,
   staffId: String, staffName: String,
-  items: Array,                       // [{itemId, label, scannerCode, qty, price, subtotal}]
+  items: Array,                       // [{itemId, label, scannerCode, image, qty, price, subtotal, extra}]
   total: Number, remark: String,
+  // Snapshot of the tenant's Order Form config at the time this order was
+  // placed, plus the computed per-field totals — kept on the order so it
+  // still renders correctly even if the admin changes the config later.
+  orderFieldsSnapshot: { type: [{ key: String, label: String, showTotal: Boolean }], default: [] },
+  fieldTotals: { type: mongoose.Schema.Types.Mixed, default: {} },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   shareToken: { type: String, unique: true, sparse: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
@@ -437,6 +446,19 @@ app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), as
   res.json({ ok: true });
 });
 
+// Which item fields show up per line on the order link, and which get summed
+// into a total — validated against the tenant's real fields so a stale/typo'd
+// key can't sneak in.
+app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const list = Array.isArray(req.body.orderFields) ? req.body.orderFields : [];
+  const validKeys = new Set((await FieldDefDB.find({ tenantId: req.tenant.id, active: true })).map(f => f.key));
+  const orderFields = list
+    .filter(f => f && validKeys.has(f.key))
+    .map(f => ({ key: f.key, label: String(f.label || f.key), showTotal: !!f.showTotal }));
+  await TenantDB.update({ id: req.tenant.id }, { orderFields });
+  res.json({ ok: true, orderFields });
+});
+
 app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req, res) => {
   const uploader = makeUploader(`exo/${req.tenant.id}/logo`, path.join('logos', req.tenant.id));
   uploader.single('logo')(req, res, async err => {
@@ -514,18 +536,24 @@ app.delete('/api/fields/:id', resolveTenant, auth, requireRole('admin'), async (
 
 // ── ITEMS ─────────────────────────────────────────────────────────────────────
 // Item Code is always the scan/barcode value — no per-tenant configuration needed.
+// Normalized to uppercase so scanning/typing "dz1", "Dz1" or "DZ1" all match
+// the same item, whichever case the code was originally entered in.
 function scannerCodeOf(fields) {
-  return String(fields?.itemCode ?? '').trim();
+  return String(fields?.itemCode ?? '').trim().toUpperCase();
 }
 
 // Rounds number-type field values to that field's configured decimal places —
 // applied on manual save and bulk import alike, so a field's precision is a
-// real constraint rather than just a display hint.
+// real constraint rather than just a display hint. Also uppercases Item Code
+// so the displayed value always matches the (uppercased) scannerCode used for
+// lookup — one normalization point instead of two representations drifting.
 function normalizeFieldValues(fieldDefs, rawFields) {
   const out = {};
   for (const [key, val] of Object.entries(rawFields || {})) {
     const def = fieldDefs.find(f => f.key === key);
-    if (def?.type === 'number' && val !== '' && val !== null && val !== undefined) {
+    if (key === 'itemCode' && val !== '' && val !== null && val !== undefined) {
+      out[key] = String(val).trim().toUpperCase();
+    } else if (def?.type === 'number' && val !== '' && val !== null && val !== undefined) {
       const n = Number(val);
       out[key] = isNaN(n) ? val : Number(n.toFixed(def.decimals ?? 2));
     } else {
@@ -550,7 +578,8 @@ app.get('/api/items', resolveTenant, auth, async (req, res) => {
 });
 
 app.get('/api/items/scan/:code', resolveTenant, auth, async (req, res) => {
-  const item = await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode: req.params.code, active: true });
+  const code = String(req.params.code).trim().toUpperCase();
+  const item = await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode: code, active: true });
   if (!item) return res.status(404).json({ error: `No item found for code "${req.params.code}"` });
   res.json(item);
 });
@@ -878,20 +907,27 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   const party = await PartyDB.findOne({ id: partyId, tenantId: req.tenant.id });
   if (!party) return res.status(404).json({ error: 'Party not found' });
 
+  const orderFields = req.tenant.orderFields || [];
   const lineItems = [];
   for (const line of items) {
     const item = await ItemDB.findOne({ id: line.itemId, tenantId: req.tenant.id });
     if (!item) continue;
     const qty = Number(line.qty) || 1;
     const price = Number(line.price ?? item.fields?.price ?? 0);
+    const extra = {};
+    orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
     lineItems.push({
       itemId: item.id, label: item.fields?.productName || item.scannerCode || item.id,
       scannerCode: item.scannerCode, image: item.images?.[0] || '',
-      qty, price, subtotal: qty * price,
+      qty, price, subtotal: qty * price, extra,
     });
   }
   if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
   const total = lineItems.reduce((sum, l) => sum + l.subtotal, 0);
+  const fieldTotals = {};
+  orderFields.filter(f => f.showTotal).forEach(f => {
+    fieldTotals[f.key] = lineItems.reduce((sum, l) => sum + (Number(l.extra?.[f.key]) || 0) * l.qty, 0);
+  });
   const orderCount = await OrderDB.count({ tenantId: req.tenant.id });
 
   const order = {
@@ -899,6 +935,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     exhibitionId: exhibitionId || '', partyId, partyName: party.firmName, partyPhone: party.phone,
     staffId: req.user.id, staffName: req.user.name,
     items: lineItems, total, remark: remark || '', status: 'pending',
+    orderFieldsSnapshot: orderFields, fieldTotals,
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };
   await OrderDB.create(order);

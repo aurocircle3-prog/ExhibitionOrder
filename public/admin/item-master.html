@@ -14,10 +14,10 @@
     <div class="card">
       <h3 style="margin-top:0">Fields <span class="muted">— every item starts with the 2 built-in fields below; add, edit, reorder or remove the rest</span></h3>
       <div class="error" id="fieldErr"></div>
-      <table>
+      <div class="table-scroll"><table>
         <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
         <tbody id="fieldRows"></tbody>
-      </table>
+      </table></div>
       <div class="grid cols-3" style="margin-top:14px">
         <div><label>New field label</label><input id="newLabel" placeholder="e.g. Weight (g)"></div>
         <div><label>Type</label><select id="newType" onchange="toggleNewDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>

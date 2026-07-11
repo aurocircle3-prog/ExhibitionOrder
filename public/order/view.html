@@ -14,20 +14,31 @@ async function load(){
     const { order, company } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Exhibition Order');
     const cur = company.currency || '₹';
-    const rows = order.items.map(i => `
+    const extraFields = order.orderFieldsSnapshot || [];
+    const rows = order.items.map(i => {
+      const extraLine = extraFields.length
+        ? extraFields.map(f => i.extra?.[f.key] ? `${f.label}: ${i.extra[f.key]}` : '').filter(Boolean).join(' · ')
+        : '';
+      return `
       <div class="cart-row">
-        <span style="display:flex;align-items:center;gap:10px">
-          ${i.image ? `<img src="${i.image}" style="width:44px;height:44px;object-fit:cover;border-radius:6px">` : ''}
-          <span>${i.label}<br><span class="muted">${i.qty} × ${cur}${i.price}</span></span>
+        <span style="display:flex;align-items:center;gap:12px">
+          ${i.image ? `<img src="${i.image}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0">` : ''}
+          <span>${i.label}<br><span class="muted">${i.qty} × ${cur}${i.price}${extraLine ? '<br>' + extraLine : ''}</span></span>
         </span>
         <b>${cur}${i.subtotal}</b>
-      </div>`).join('');
+      </div>`;
+    }).join('');
+    const fieldTotalRows = Object.entries(order.fieldTotals || {}).map(([key, val]) => {
+      const f = extraFields.find(x => x.key === key);
+      return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${val}</span></div>`;
+    }).join('');
     box.innerHTML = `
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
         <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
         ${rows}
         <div class="cart-row" style="border-bottom:none;font-size:16px"><b>Total</b><b>${cur}${order.total}</b></div>
+        ${fieldTotalRows}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
       </div>
       <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>`;

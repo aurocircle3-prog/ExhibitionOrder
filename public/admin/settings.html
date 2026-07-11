@@ -15,11 +15,21 @@
   </div>
 
   <div class="card">
+    <h3 style="margin-top:0">Order Form <span class="muted">— choose which item fields appear on the order link sent to buyers</span></h3>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
+      <tbody id="orderFieldRows"></tbody>
+    </table></div>
+    <p class="muted" style="margin-top:8px">"Show total" adds up that field's value × quantity across the whole order (e.g. total weight) — only makes sense for number fields.</p>
+    <button class="primary" onclick="saveOrderFields()">Save order form</button>
+  </div>
+
+  <div class="card">
     <h3 style="margin-top:0">Exhibitions <span class="muted">— optional, group items/orders by event</span></h3>
-    <table>
+    <div class="table-scroll"><table>
       <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th></th></tr></thead>
       <tbody id="exRows"></tbody>
-    </table>
+    </table></div>
     <div class="grid cols-3" style="margin-top:12px">
       <div><label>Name</label><input id="exName"></div>
       <div><label>Location</label><input id="exLoc"></div>
@@ -37,7 +47,29 @@ async function load(){
   document.getElementById('name').value = me.tenant.name || '';
   document.getElementById('currency').value = me.tenant.currency || '₹';
   document.getElementById('slugShow').textContent = me.tenant.slug;
+  loadOrderFields(me.tenant.orderFields || []);
   loadExhibitions();
+}
+async function loadOrderFields(saved){
+  const fields = await EXO.apiFetch('/fields');
+  const savedByKey = {};
+  saved.forEach(f => { savedByKey[f.key] = f; });
+  document.getElementById('orderFieldRows').innerHTML = fields.map(f => `
+    <tr>
+      <td>${f.label}</td>
+      <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
+      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
+    </tr>`).join('');
+}
+async function saveOrderFields(){
+  const err = document.getElementById('err'); err.style.display='none';
+  const orderFields = Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => {
+    const key = el.dataset.key;
+    const totalEl = document.querySelector(`.of-total[data-key="${key}"]`);
+    return { key, label: el.dataset.label, showTotal: totalEl ? totalEl.checked : false };
+  });
+  try { await EXO.apiFetch('/companies/order-fields', { method:'PUT', body: JSON.stringify({ orderFields }) }); }
+  catch(e) { err.textContent = e.message; err.style.display='block'; }
 }
 async function save(){
   const err = document.getElementById('err'); err.style.display='none';

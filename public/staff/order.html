@@ -1,6 +1,7 @@
 <title>Take Order — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <div id="nav"></div>
 <div class="wrap">
   <div class="card" id="partyCard">
@@ -17,6 +18,7 @@
       <label>Photograph visiting card</label>
       <input type="file" id="cardFile" accept="image/*" capture="environment" onchange="scanCard()">
       <div id="cardPreview" style="margin-top:10px"></div>
+      <p class="muted" id="ocrStatus" style="display:none;margin-top:6px"></p>
       <div class="grid cols-2" style="margin-top:10px">
         <div><label>Firm name</label><input id="firmName"></div>
         <div><label>Contact person</label><input id="contactPerson"></div>
@@ -48,7 +50,7 @@
     <h3 style="margin-top:0">Order created ✅</h3>
     <p>Order <b id="orderNo"></b> — <span id="orderTotal"></span></p>
     <input id="shareUrl" readonly onclick="this.select()">
-    <div style="margin-top:12px">
+    <div class="btn-row" style="margin-top:12px">
       <button class="primary" onclick="window.open(waLink(),'_blank')">Send on WhatsApp</button>
       <button class="ghost" onclick="copyLink()">Copy link</button>
       <button class="ghost" onclick="newOrder()">Start new order</button>
@@ -77,20 +79,45 @@ function showPartyPicked(){
 function clearParty(){ party = null; document.getElementById('partyPicker').style.display='block'; document.getElementById('partyPicked').style.display='none'; }
 
 let cardImageUrl = '';
+// Reads the card entirely in the browser (Tesseract.js, WASM) — works with no
+// server-side setup, unlike the optional Google Vision path (OCR_API_KEY).
+async function readCardWithTesseract(file){
+  try {
+    const { data: { text } } = await Tesseract.recognize(file, 'eng');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const phoneMatch = text.match(/(\+?\d[\d\s-]{8,}\d)/);
+    const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    return {
+      firmName: lines[0] || '', contactPerson: lines[1] || '',
+      phone: phoneMatch ? phoneMatch[1].replace(/\s+/g, '') : '',
+      email: emailMatch ? emailMatch[0] : '',
+    };
+  } catch (e) { console.error('[OCR] Tesseract failed:', e); return { firmName: '', contactPerson: '', phone: '', email: '' }; }
+}
 async function scanCard(){
   const err = document.getElementById('partyErr'); err.style.display='none';
   const file = document.getElementById('cardFile').files[0];
   if (!file) return;
   document.getElementById('cardPreview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:220px;border-radius:8px">`;
+  const status = document.getElementById('ocrStatus');
+  status.style.display = 'block'; status.textContent = 'Reading card… (a few seconds)';
   try {
     const fd = new FormData(); fd.append('card', file);
-    const res = await EXO.apiFetch('/parties/scan-card', { method:'POST', body: fd });
+    const [res, ocrGuess] = await Promise.all([
+      EXO.apiFetch('/parties/scan-card', { method:'POST', body: fd }),
+      readCardWithTesseract(file),
+    ]);
     cardImageUrl = res.cardImageUrl;
-    document.getElementById('firmName').value = res.guess.firmName || '';
-    document.getElementById('contactPerson').value = res.guess.contactPerson || '';
-    document.getElementById('phone').value = res.guess.phone || '';
-    document.getElementById('email').value = res.guess.email || '';
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+    // Prefer the in-browser OCR result — it works regardless of whether the
+    // server has an OCR_API_KEY configured; fall back to the server's guess
+    // (Google Vision) only if Tesseract found nothing usable.
+    const guess = (ocrGuess.firmName || ocrGuess.phone) ? ocrGuess : res.guess;
+    document.getElementById('firmName').value = guess.firmName || '';
+    document.getElementById('contactPerson').value = guess.contactPerson || '';
+    document.getElementById('phone').value = guess.phone || '';
+    document.getElementById('email').value = guess.email || '';
+    status.style.display = 'none';
+  } catch(e) { err.textContent = e.message; err.style.display='block'; status.style.display='none'; }
 }
 async function createParty(){
   const err = document.getElementById('partyErr'); err.style.display='none';
