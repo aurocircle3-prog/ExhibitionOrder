@@ -1,0 +1,39 @@
+<title>Order — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div class="topbar"><div class="brand" id="companyName">🎪 Exhibition Order</div></div>
+<div class="wrap" style="max-width:640px" id="content">
+  <p class="muted">Loading order…</p>
+</div>
+<script>
+async function load(){
+  const token = location.pathname.split('/').pop();
+  const box = document.getElementById('content');
+  try {
+    const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
+    const { order, company } = res;
+    document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Exhibition Order');
+    const cur = company.currency || '₹';
+    const rows = order.items.map(i => `
+      <div class="cart-row">
+        <span style="display:flex;align-items:center;gap:10px">
+          ${i.image ? `<img src="${i.image}" style="width:44px;height:44px;object-fit:cover;border-radius:6px">` : ''}
+          <span>${i.label}<br><span class="muted">${i.qty} × ${cur}${i.price}</span></span>
+        </span>
+        <b>${cur}${i.subtotal}</b>
+      </div>`).join('');
+    box.innerHTML = `
+      <div class="card">
+        <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
+        <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
+        ${rows}
+        <div class="cart-row" style="border-bottom:none;font-size:16px"><b>Total</b><b>${cur}${order.total}</b></div>
+        ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
+      </div>
+      <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>`;
+  } catch (e) {
+    box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
+  }
+}
+load();
+</script>

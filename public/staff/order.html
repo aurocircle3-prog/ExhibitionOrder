@@ -1,0 +1,188 @@
+<title>Take Order — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card" id="partyCard">
+    <h3 style="margin-top:0">1. Buyer</h3>
+    <div class="error" id="partyErr"></div>
+    <div id="partyPicked" style="display:none">
+      <p><b id="partyName"></b> — <span id="partyPhone" class="muted"></span> <button class="ghost small" onclick="clearParty()">Change</button></p>
+    </div>
+    <div id="partyPicker">
+      <label>Search existing buyer by phone</label>
+      <input id="partySearch" placeholder="98765..." oninput="searchParty(this.value)">
+      <div id="partyResults"></div>
+      <p class="muted" style="margin:14px 0 6px">— or —</p>
+      <label>Photograph visiting card</label>
+      <input type="file" id="cardFile" accept="image/*" capture="environment" onchange="scanCard()">
+      <div id="cardPreview" style="margin-top:10px"></div>
+      <div class="grid cols-2" style="margin-top:10px">
+        <div><label>Firm name</label><input id="firmName"></div>
+        <div><label>Contact person</label><input id="contactPerson"></div>
+        <div><label>Phone</label><input id="phone"></div>
+        <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
+      </div>
+      <button class="primary" style="margin-top:12px" onclick="createParty()">Use this buyer</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">2. Scan items</h3>
+    <div class="error" id="scanErr"></div>
+    <div class="grid cols-2">
+      <input id="scanCode" placeholder="Scan or type item code, then Enter" autofocus onkeydown="if(event.key==='Enter')lookupItem()">
+      <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">3. Cart <span class="muted" id="cartTotal"></span></h3>
+    <div id="cartRows"><p class="muted">No items scanned yet</p></div>
+    <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
+    <textarea id="remark" rows="2"></textarea>
+    <button class="primary" style="margin-top:14px" onclick="submitOrder()">Create order</button>
+  </div>
+
+  <div class="card" id="shareCard" style="display:none">
+    <h3 style="margin-top:0">Order created ✅</h3>
+    <p>Order <b id="orderNo"></b> — <span id="orderTotal"></span></p>
+    <input id="shareUrl" readonly onclick="this.select()">
+    <div style="margin-top:12px">
+      <button class="primary" onclick="window.open(waLink(),'_blank')">Send on WhatsApp</button>
+      <button class="ghost" onclick="copyLink()">Copy link</button>
+      <button class="ghost" onclick="newOrder()">Start new order</button>
+    </div>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+const currentUser = EXO.requireRole('admin','staff');
+document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
+let party = null, cart = [], lastOrder = null;
+
+async function searchParty(q){
+  const box = document.getElementById('partyResults');
+  if (!q || q.length < 3) { box.innerHTML = ''; return; }
+  const results = await EXO.apiFetch('/parties?q=' + encodeURIComponent(q));
+  box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${JSON.stringify(p)})'><span>${p.firmName} — ${p.phone}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
+}
+function pickParty(p){ party = p; showPartyPicked(); }
+function showPartyPicked(){
+  document.getElementById('partyPicker').style.display = 'none';
+  document.getElementById('partyPicked').style.display = 'block';
+  document.getElementById('partyName').textContent = party.firmName;
+  document.getElementById('partyPhone').textContent = party.phone;
+}
+function clearParty(){ party = null; document.getElementById('partyPicker').style.display='block'; document.getElementById('partyPicked').style.display='none'; }
+
+let cardImageUrl = '';
+async function scanCard(){
+  const err = document.getElementById('partyErr'); err.style.display='none';
+  const file = document.getElementById('cardFile').files[0];
+  if (!file) return;
+  document.getElementById('cardPreview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:220px;border-radius:8px">`;
+  try {
+    const fd = new FormData(); fd.append('card', file);
+    const res = await EXO.apiFetch('/parties/scan-card', { method:'POST', body: fd });
+    cardImageUrl = res.cardImageUrl;
+    document.getElementById('firmName').value = res.guess.firmName || '';
+    document.getElementById('contactPerson').value = res.guess.contactPerson || '';
+    document.getElementById('phone').value = res.guess.phone || '';
+    document.getElementById('email').value = res.guess.email || '';
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+async function createParty(){
+  const err = document.getElementById('partyErr'); err.style.display='none';
+  try {
+    const body = {
+      firmName: document.getElementById('firmName').value.trim(),
+      contactPerson: document.getElementById('contactPerson').value.trim(),
+      phone: document.getElementById('phone').value.trim(),
+      email: document.getElementById('email').value.trim(),
+      cardImageUrl, source: cardImageUrl ? 'scanned' : 'manual',
+    };
+    party = await EXO.apiFetch('/parties', { method:'POST', body: JSON.stringify(body) });
+    showPartyPicked();
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+
+async function lookupItem(){
+  const err = document.getElementById('scanErr'); err.style.display='none';
+  const code = document.getElementById('scanCode').value.trim();
+  document.getElementById('scanCode').value = '';
+  if (!code) return;
+  try {
+    const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
+    addToCart(item);
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+function addToCart(item){
+  const existing = cart.find(c => c.itemId === item.id);
+  if (existing) existing.qty += 1;
+  else cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, price: Number(item.fields.price)||0, image: item.images?.[0]||'', qty: 1 });
+  renderCart();
+}
+function changeQty(id, delta){
+  const line = cart.find(c => c.itemId === id);
+  line.qty = Math.max(1, line.qty + delta);
+  renderCart();
+}
+function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart(); }
+function renderCart(){
+  const total = cart.reduce((s,c)=>s+c.qty*c.price,0);
+  document.getElementById('cartTotal').textContent = cart.length ? `— ${EXO.money(total)}` : '';
+  document.getElementById('cartRows').innerHTML = cart.length ? cart.map(c => `
+    <div class="cart-row">
+      <span>${c.label} <span class="muted">(${c.code})</span></span>
+      <span class="qty-ctrl">
+        <button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button>
+        <span style="width:70px;display:inline-block;text-align:right">${EXO.money(c.qty*c.price)}</span>
+        <button class="danger small" onclick="removeLine('${c.itemId}')">✕</button>
+      </span>
+    </div>`).join('') : '<p class="muted">No items scanned yet</p>';
+}
+
+async function submitOrder(){
+  const err = document.getElementById('scanErr'); err.style.display='none';
+  if (!party) { err.textContent = 'Pick or create a buyer first'; err.style.display='block'; return; }
+  if (!cart.length) { err.textContent = 'Scan at least one item'; err.style.display='block'; return; }
+  try {
+    const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, price: c.price })), remark: document.getElementById('remark').value.trim() };
+    lastOrder = await EXO.apiFetch('/orders', { method:'POST', body: JSON.stringify(body) });
+    document.getElementById('shareCard').style.display = 'block';
+    document.getElementById('orderNo').textContent = lastOrder.orderNo;
+    document.getElementById('orderTotal').textContent = EXO.money(lastOrder.total);
+    document.getElementById('shareUrl').value = lastOrder.shareUrl;
+    document.getElementById('shareCard').scrollIntoView({behavior:'smooth'});
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+function waLink(){
+  const msg = encodeURIComponent(`Your order ${lastOrder.orderNo} — ${EXO.money(lastOrder.total)}\n${lastOrder.shareUrl}`);
+  return `https://wa.me/${(party.phone||'').replace(/\D/g,'')}?text=${msg}`;
+}
+function copyLink(){ document.getElementById('shareUrl').select(); document.execCommand('copy'); }
+function newOrder(){ cart = []; renderCart(); clearParty(); document.getElementById('remark').value=''; document.getElementById('shareCard').style.display='none'; document.getElementById('scanCode').focus(); }
+
+// Progressive enhancement — native camera barcode scanning where the browser supports it
+if ('BarcodeDetector' in window) {
+  document.getElementById('cameraBtn').style.display = 'inline-block';
+}
+async function cameraScan(){
+  try {
+    const detector = new BarcodeDetector();
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const video = document.createElement('video'); video.srcObject = stream; video.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:999;background:#000';
+    document.body.appendChild(video); await video.play();
+    const iv = setInterval(async () => {
+      const codes = await detector.detect(video).catch(() => []);
+      if (codes.length) {
+        clearInterval(iv); stream.getTracks().forEach(t => t.stop()); video.remove();
+        document.getElementById('scanCode').value = codes[0].rawValue;
+        lookupItem();
+      }
+    }, 400);
+    video.onclick = () => { clearInterval(iv); stream.getTracks().forEach(t => t.stop()); video.remove(); };
+  } catch (e) { document.getElementById('scanErr').textContent = 'Camera scan unavailable: ' + e.message; document.getElementById('scanErr').style.display='block'; }
+}
+</script>

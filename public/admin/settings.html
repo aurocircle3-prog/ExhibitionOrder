@@ -1,0 +1,67 @@
+<title>Settings — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card">
+    <h3 style="margin-top:0">Company</h3>
+    <div class="error" id="err"></div>
+    <div class="grid cols-2">
+      <div><label>Company name</label><input id="name"></div>
+      <div><label>Currency symbol</label><input id="currency"></div>
+    </div>
+    <p class="muted" style="margin-top:10px">Company link: <b id="slugShow"></b>.orders.is <span class="muted">(fixed at signup)</span></p>
+    <button class="primary" onclick="save()">Save</button>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Exhibitions <span class="muted">— optional, group items/orders by event</span></h3>
+    <table>
+      <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th></th></tr></thead>
+      <tbody id="exRows"></tbody>
+    </table>
+    <div class="grid cols-3" style="margin-top:12px">
+      <div><label>Name</label><input id="exName"></div>
+      <div><label>Location</label><input id="exLoc"></div>
+      <div><label>&nbsp;</label><button class="primary" onclick="addExhibition()">Add exhibition</button></div>
+    </div>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('settings');
+
+async function load(){
+  const me = await EXO.apiFetch('/me');
+  document.getElementById('name').value = me.tenant.name || '';
+  document.getElementById('currency').value = me.tenant.currency || '₹';
+  document.getElementById('slugShow').textContent = me.tenant.slug;
+  loadExhibitions();
+}
+async function save(){
+  const err = document.getElementById('err'); err.style.display='none';
+  try {
+    await EXO.apiFetch('/companies/settings', { method:'PUT', body: JSON.stringify({
+      name: document.getElementById('name').value.trim(), currency: document.getElementById('currency').value.trim()
+    })});
+    localStorage.setItem('exo_tenant_name', document.getElementById('name').value.trim());
+    document.getElementById('nav').innerHTML = EXO.adminNav('settings');
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+async function loadExhibitions(){
+  const list = await EXO.apiFetch('/exhibitions');
+  document.getElementById('exRows').innerHTML = list.map(e => `
+    <tr><td>${e.name}</td><td>${e.location||'—'}</td><td>${e.startDate||''} ${e.endDate?'– '+e.endDate:''}</td>
+    <td><button class="danger small" onclick="removeExhibition('${e.id}')">Remove</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">None yet</td></tr>';
+}
+async function addExhibition(){
+  const name = document.getElementById('exName').value.trim();
+  if (!name) return;
+  await EXO.apiFetch('/exhibitions', { method:'POST', body: JSON.stringify({ name, location: document.getElementById('exLoc').value.trim() }) });
+  document.getElementById('exName').value = document.getElementById('exLoc').value = '';
+  loadExhibitions();
+}
+async function removeExhibition(id){ await EXO.apiFetch('/exhibitions/'+id, { method:'DELETE' }); loadExhibitions(); }
+load();
+</script>

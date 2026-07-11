@@ -1,0 +1,311 @@
+<title>Item Master — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="tabs">
+    <button class="tab-btn" data-tab="fields" onclick="switchTab('fields')">Fields</button>
+    <button class="tab-btn" data-tab="io" onclick="switchTab('io')">Import / Export</button>
+    <button class="tab-btn" data-tab="items" onclick="switchTab('items')">Items</button>
+  </div>
+
+  <!-- ── FIELDS TAB ─────────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-fields">
+    <div class="card">
+      <h3 style="margin-top:0">Fields <span class="muted">— every item starts with the 2 built-in fields below; add, edit, reorder or remove the rest</span></h3>
+      <div class="error" id="fieldErr"></div>
+      <table>
+        <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
+        <tbody id="fieldRows"></tbody>
+      </table>
+      <div class="grid cols-3" style="margin-top:14px">
+        <div><label>New field label</label><input id="newLabel" placeholder="e.g. Weight (g)"></div>
+        <div><label>Type</label><select id="newType" onchange="toggleNewDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>
+        <div id="newDecimalsWrap" style="display:none"><label>Decimal places</label><input id="newDecimals" type="number" min="0" max="6" value="2"></div>
+      </div>
+      <button class="primary" style="margin-top:14px" onclick="addField()">Add field</button>
+    </div>
+  </div>
+
+  <!-- ── IMPORT / EXPORT TAB ────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-io">
+    <div class="card">
+      <h3 style="margin-top:0">Item data <span class="muted">— add or update many items at once via Excel</span></h3>
+      <div class="error" id="bulkErr"></div>
+      <p class="muted" id="bulkMsg" style="display:none;color:#1a8f4c;background:#e6f7ed;padding:10px 14px;border-radius:8px"></p>
+      <div class="grid cols-3">
+        <div>
+          <label>1. Get the template</label>
+          <button class="ghost" style="width:100%" onclick="downloadTemplate()">⬇ Download Excel template</button>
+        </div>
+        <div>
+          <label>2. Fill it in, then upload</label>
+          <input type="file" id="importFile" accept=".xlsx,.xls,.csv">
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="primary" style="width:100%" onclick="importExcel()">Import items</button>
+        </div>
+      </div>
+      <p class="muted" style="margin-top:10px">Columns match your fields by name — the template header shows each field's type (and decimal places for numbers) in brackets. The Item Code column is required in every row; a matching scan code updates that item instead of duplicating it, and number values are rounded to the field's configured decimals.</p>
+      <button class="ghost small" style="margin-top:6px" onclick="downloadExport()">Export current items to Excel</button>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Photos <span class="muted">— upload many photos at once, auto-matched to items by Image Code</span></h3>
+      <div class="error" id="bulkImgErr"></div>
+      <p class="muted" id="bulkImgMsg" style="display:none;color:#1a8f4c;background:#e6f7ed;padding:10px 14px;border-radius:8px"></p>
+      <label>Select photo files — name each one after the item's Image Code (e.g. <code>1.jpg</code>, <code>1_1.jpg</code>, <code>1_2.jpg</code> for image code "1")</label>
+      <input type="file" id="bulkImages" multiple accept="image/*">
+      <button class="primary" style="margin-top:12px" onclick="importBulkImages()">Upload &amp; match photos</button>
+    </div>
+  </div>
+
+  <!-- ── ITEMS TAB ──────────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-items">
+    <div class="card">
+      <h3 style="margin-top:0">Items <span class="muted" id="itemCount"></span></h3>
+      <div class="error" id="itemErr"></div>
+      <input placeholder="Search items…" oninput="searchItems(this.value)" style="margin-bottom:12px">
+      <div class="table-scroll">
+        <table>
+          <thead id="itemsHead"></thead>
+          <tbody id="itemsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0" id="formTitle">Add item</h3>
+      <div id="itemForm" class="grid cols-3"></div>
+      <div style="margin-top:14px" id="photosSection">
+        <label>Photos <span class="muted">— up to 3, named from the Image Code above (code, code_1, code_2)</span></label>
+        <div id="existingPhotos" style="display:flex;gap:10px;margin-bottom:8px"></div>
+        <input type="file" id="images" multiple accept="image/*">
+        <p class="muted" id="photoHint" style="margin-top:4px"></p>
+      </div>
+      <button class="primary" style="margin-top:14px" onclick="saveItem()">Save item</button>
+      <button class="ghost" style="margin-top:14px" onclick="resetForm()">Clear</button>
+    </div>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('items');
+let fields = [], items = [], editingId = null, editingFieldId = null;
+
+function switchTab(name){
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  localStorage.setItem('exo_itemmaster_tab', name);
+}
+
+// ---------- Fields ----------
+function toggleNewDecimals(){
+  document.getElementById('newDecimalsWrap').style.display = document.getElementById('newType').value === 'number' ? 'block' : 'none';
+}
+async function loadFields(){
+  fields = await EXO.apiFetch('/fields');
+  renderFieldRows();
+  renderItemForm();
+}
+function typeLabel(f){
+  return f.type === 'number' ? `Number (${f.decimals ?? 2} dp)` : f.type.charAt(0).toUpperCase() + f.type.slice(1);
+}
+function renderFieldRows(){
+  document.getElementById('fieldRows').innerHTML = fields.map((f, i) => {
+    if (f.id === editingFieldId) {
+      return `<tr class="field-row-edit">
+        <td><input id="editLabel" value="${f.label}"></td>
+        <td>${typeLabel(f)}</td>
+        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px">` : ''}</td>
+        <td>
+          <button class="primary small" onclick="saveEditField('${f.id}')">Save</button>
+          <button class="ghost small" onclick="cancelEditField()">Cancel</button>
+        </td>
+      </tr>`;
+    }
+    return `<tr>
+      <td>${f.label}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${typeLabel(f)}</td>
+      <td></td>
+      <td>
+        <button class="icon-btn" title="Move up" ${i===0?'disabled':''} onclick="moveField('${f.id}','up')">↑</button>
+        <button class="icon-btn" title="Move down" ${i===fields.length-1?'disabled':''} onclick="moveField('${f.id}','down')">↓</button>
+        <button class="ghost small" onclick="startEditField('${f.id}')">Edit</button>
+        ${f.fixed ? '' : `<button class="danger small" onclick="deleteField('${f.id}')">Delete</button>`}
+      </td>
+    </tr>`;
+  }).join('');
+}
+function startEditField(id){ editingFieldId = id; renderFieldRows(); }
+function cancelEditField(){ editingFieldId = null; renderFieldRows(); }
+async function saveEditField(id){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  const label = document.getElementById('editLabel').value.trim();
+  const decimalsEl = document.getElementById('editDecimals');
+  const body = { label };
+  if (decimalsEl) body.decimals = Number(decimalsEl.value);
+  try { await EXO.apiFetch('/fields/'+id, { method:'PUT', body: JSON.stringify(body) }); editingFieldId = null; loadFields(); }
+  catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+async function moveField(id, direction){
+  await EXO.apiFetch('/fields/'+id+'/move', { method:'PUT', body: JSON.stringify({ direction }) });
+  loadFields();
+}
+async function addField(){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  const label = document.getElementById('newLabel').value.trim();
+  const type = document.getElementById('newType').value;
+  const decimals = Number(document.getElementById('newDecimals').value);
+  if (!label) return;
+  try {
+    await EXO.apiFetch('/fields', { method:'POST', body: JSON.stringify({ label, type, decimals }) });
+    document.getElementById('newLabel').value = ''; document.getElementById('newType').value = 'text'; toggleNewDecimals();
+    loadFields();
+  } catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+async function deleteField(id){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  try { await EXO.apiFetch('/fields/'+id, { method:'DELETE' }); loadFields(); }
+  catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+
+function renderItemForm(){
+  document.getElementById('itemForm').innerHTML = fields.map(f => `
+    <div>
+      <label>${f.label}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
+      ${f.type==='dropdown'
+        ? `<select id="f_${f.key}"><option value="">—</option>${(f.options||[]).map(o=>`<option>${o}</option>`).join('')}</select>`
+        : `<input id="f_${f.key}" type="${f.type==='number'?'number':f.type==='date'?'date':'text'}" ${f.type==='number'?`step="${f.decimals?1/Math.pow(10,f.decimals):'any'}"`:''}>`}
+    </div>`).join('');
+}
+
+// ---------- Items ----------
+async function loadItems(){
+  items = await EXO.apiFetch('/items');
+  document.getElementById('itemCount').textContent = `(${items.length})`;
+  renderItemsTable(items);
+}
+function renderItemsTable(list){
+  document.getElementById('itemsHead').innerHTML = `<tr><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  document.getElementById('itemsBody').innerHTML = list.map(it => `
+    <tr>
+      <td class="thumb-cell"><img src="${it.images?.[0]||''}" onerror="this.style.visibility='hidden'"></td>
+      ${fields.map(f=>`<td>${it.fields[f.key] ?? ''}</td>`).join('')}
+      <td>${(it.images||[]).length}/3</td>
+      <td>
+        <button class="ghost small" onclick="editItem('${it.id}')">Edit</button>
+        <button class="danger small" onclick="deleteItem('${it.id}')">Delete</button>
+      </td>
+    </tr>`).join('') || `<tr><td colspan="${fields.length+3}" class="muted">No items yet — add one below.</td></tr>`;
+}
+function searchItems(q){
+  q = q.toLowerCase();
+  renderItemsTable(items.filter(it => it.scannerCode?.toLowerCase().includes(q) || Object.values(it.fields).some(v=>String(v).toLowerCase().includes(q))));
+}
+async function deleteItem(id){
+  if (!confirm('Delete this item? This cannot be undone.')) return;
+  await EXO.apiFetch('/items/'+id, { method:'DELETE' });
+  if (editingId === id) resetForm();
+  loadItems();
+}
+
+let editingImages = [];
+function editItem(id){
+  editingId = id;
+  const it = items.find(i=>i.id===id);
+  document.getElementById('formTitle').textContent = 'Edit item — ' + (it.scannerCode||'');
+  fields.forEach(f => { const el = document.getElementById('f_'+f.key); if (el) el.value = it.fields[f.key] ?? ''; });
+  editingImages = it.images || [];
+  renderExistingPhotos();
+  document.getElementById('formTitle').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function resetForm(){
+  editingId = null; editingImages = [];
+  document.getElementById('formTitle').textContent = 'Add item';
+  renderItemForm(); renderExistingPhotos();
+}
+function renderExistingPhotos(){
+  document.getElementById('existingPhotos').innerHTML = editingImages.map((url,i) => `
+    <div style="position:relative">
+      <img src="${url}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #e6e6e6">
+      <button class="danger small" style="position:absolute;top:-8px;right:-8px;padding:2px 6px" onclick="removeImage(event,${i})">✕</button>
+    </div>`).join('');
+  const remaining = 3 - editingImages.length;
+  document.getElementById('photoHint').textContent = editingId
+    ? (remaining > 0 ? `${remaining} photo slot(s) left` : 'Maximum of 3 photos reached — remove one to add another')
+    : 'Save the item first, then add photos (needs an Image Code).';
+}
+async function removeImage(ev, index){
+  ev.stopPropagation();
+  if (!editingId) return;
+  const res = await EXO.apiFetch('/items/'+editingId+'/images/'+index, { method:'DELETE' });
+  editingImages = res.images;
+  renderExistingPhotos();
+  loadItems();
+}
+
+async function saveItem(){
+  const err = document.getElementById('itemErr'); err.style.display='none';
+  const values = {};
+  fields.forEach(f => { const el = document.getElementById('f_'+f.key); if (el && el.value !== '') values[f.key] = el.value; });
+  try {
+    let item;
+    if (editingId) { await EXO.apiFetch('/items/'+editingId, { method:'PUT', body: JSON.stringify({ fields: values }) }); item = { id: editingId }; }
+    else { item = await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values }) }); }
+    const files = document.getElementById('images').files;
+    if (files.length) {
+      const fd = new FormData();
+      for (const f of files) fd.append('images', f);
+      await EXO.apiFetch('/items/'+item.id+'/images', { method:'POST', body: fd });
+    }
+    resetForm();
+    document.getElementById('images').value = '';
+    loadItems();
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+
+// ---------- Import / Export ----------
+function authedUrl(path){
+  const p = new URLSearchParams({ token: localStorage.getItem('exo_token'), tenant: EXO.getTenantSlug() });
+  return path + '?' + p.toString();
+}
+function downloadTemplate(){ location.href = authedUrl('/api/items/template/excel'); }
+function downloadExport(){ location.href = authedUrl('/api/items/export/excel'); }
+async function importExcel(){
+  const err = document.getElementById('bulkErr'); err.style.display='none';
+  const msg = document.getElementById('bulkMsg'); msg.style.display='none';
+  const file = document.getElementById('importFile').files[0];
+  if (!file) { err.textContent = 'Choose a file first'; err.style.display='block'; return; }
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const res = await EXO.apiFetch('/items/import/excel', { method:'POST', body: fd });
+    msg.textContent = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows).`;
+    msg.style.display = 'block';
+    document.getElementById('importFile').value = '';
+    loadItems();
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+async function importBulkImages(){
+  const err = document.getElementById('bulkImgErr'); err.style.display='none';
+  const msg = document.getElementById('bulkImgMsg'); msg.style.display='none';
+  const files = document.getElementById('bulkImages').files;
+  if (!files.length) { err.textContent = 'Choose photo files first'; err.style.display='block'; return; }
+  try {
+    const fd = new FormData();
+    for (const f of files) fd.append('images', f);
+    const res = await EXO.apiFetch('/items/bulk-images', { method:'POST', body: fd });
+    msg.textContent = `Matched ${res.matched} photo(s) to items. ${res.unmatchedCode ? res.unmatchedCode+' had no matching Image Code. ' : ''}${res.full ? res.full+' skipped — item already had 3 photos.' : ''}`;
+    msg.style.display = 'block';
+    document.getElementById('bulkImages').value = '';
+    loadItems();
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+
+(async function init(){
+  await loadFields(); await loadItems(); renderExistingPhotos();
+  switchTab(localStorage.getItem('exo_itemmaster_tab') || 'fields');
+})();
+</script>

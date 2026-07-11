@@ -1,0 +1,60 @@
+<title>Staff — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card">
+    <h3 style="margin-top:0">Staff accounts</h3>
+    <p class="muted">Created internally by the admin — staff cannot self-register.</p>
+    <div class="error" id="err"></div>
+    <table>
+      <thead><tr><th>Name</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Add staff</h3>
+    <div class="grid cols-3">
+      <div><label>Name</label><input id="name"></div>
+      <div><label>Phone</label><input id="phone"></div>
+      <div><label>Email <span class="muted">(used as login ID)</span></label><input id="email" type="email"></div>
+      <div><label>Password</label><input id="password" type="password"></div>
+    </div>
+    <button class="primary" style="margin-top:14px" onclick="addStaff()">Create staff login</button>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('staff');
+
+async function load(){
+  const staff = await EXO.apiFetch('/staff');
+  document.getElementById('rows').innerHTML = staff.map(s => `
+    <tr>
+      <td>${s.name}</td><td>${s.loginId}</td><td>${s.phone||'—'}</td>
+      <td>${s.active?'Active':'<span class="muted">Disabled</span>'}</td>
+      <td>
+        <button class="ghost small" onclick="toggle('${s.id}', ${!s.active})">${s.active?'Disable':'Enable'}</button>
+        <button class="danger small" onclick="remove('${s.id}')">Delete</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No staff yet</td></tr>';
+}
+async function addStaff(){
+  const err = document.getElementById('err'); err.style.display='none';
+  try {
+    const body = {
+      name: document.getElementById('name').value.trim(),
+      phone: document.getElementById('phone').value.trim(),
+      email: document.getElementById('email').value.trim(),
+      password: document.getElementById('password').value,
+    };
+    await EXO.apiFetch('/staff', { method:'POST', body: JSON.stringify(body) });
+    document.getElementById('name').value = document.getElementById('phone').value = document.getElementById('email').value = document.getElementById('password').value = '';
+    load();
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+async function toggle(id, active){ await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }
+async function remove(id){ if (!confirm('Delete this staff account?')) return; await EXO.apiFetch('/staff/'+id, { method:'DELETE' }); load(); }
+load();
+</script>

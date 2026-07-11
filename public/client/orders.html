@@ -1,0 +1,27 @@
+<title>My Orders — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card">
+    <h3 style="margin-top:0">My orders</h3>
+    <table>
+      <thead><tr><th>Order #</th><th>Items</th><th>Total</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.requireRole('client');
+document.getElementById('nav').innerHTML = EXO.clientNav('orders');
+(async function(){
+  const orders = await EXO.apiFetch('/orders');
+  document.getElementById('rows').innerHTML = orders.map(o => `
+    <tr>
+      <td>${o.orderNo}</td><td>${o.items.length}</td><td>${EXO.money(o.total)}</td>
+      <td><span class="badge ${o.status}">${o.status}</span></td>
+      <td><a href="/order/${o.shareToken}" target="_blank">View ↗</a></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
+})();
+</script>
