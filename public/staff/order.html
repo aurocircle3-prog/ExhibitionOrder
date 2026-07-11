@@ -4,6 +4,8 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <div id="nav"></div>
 <div class="wrap">
+  <div class="card" id="syncBanner" style="display:none"></div>
+
   <div class="card" id="partyCard">
     <h3 style="margin-top:0">1. Buyer</h3>
     <div class="error" id="partyErr"></div>
@@ -56,18 +58,77 @@
       <button class="ghost" onclick="newOrder()">Start new order</button>
     </div>
   </div>
+
+  <div class="card" id="queuedCard" style="display:none">
+    <h3 style="margin-top:0">Order saved offline 📴</h3>
+    <p class="muted">No connection right now — this order is saved on this device and will be sent automatically once you're back online. You can't share a WhatsApp link for it until then.</p>
+    <button class="primary" onclick="newOrder()">Start new order</button>
+  </div>
 </div>
+<script src="/offline.js"></script>
 <script src="/app.js"></script>
 <script>
 const currentUser = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
 let party = null, cart = [], lastOrder = null, orderFields = [];
-(async function(){ try { const me = await EXO.apiFetch('/me'); orderFields = me.tenant?.orderFields || []; renderCart(); } catch {} })();
+const tenantSlug = EXO.getTenantSlug();
+
+function isNetworkFailure(e){
+  const m = (e && e.message || '').toLowerCase();
+  return !navigator.onLine || m.includes('failed to fetch') || m.includes('networkerror') || m.includes('load failed');
+}
+
+// Warms the offline cache (items + parties) whenever we're online, so scan
+// lookups and buyer search still work if the connection drops mid-booth.
+async function refreshOfflineCache(){
+  try {
+    const [items, parties, me] = await Promise.all([
+      EXO.apiFetch('/items'), EXO.apiFetch('/parties'), EXO.apiFetch('/me'),
+    ]);
+    orderFields = me.tenant?.orderFields || [];
+    await ExoOffline.cacheItems(tenantSlug, items);
+    await ExoOffline.cacheParties(tenantSlug, parties);
+    renderCart();
+  } catch (e) { /* offline already — cache just won't refresh this pass */ }
+}
+
+async function updateSyncBanner(){
+  const outbox = await ExoOffline.getOutbox(tenantSlug);
+  const banner = document.getElementById('syncBanner');
+  if (!navigator.onLine) {
+    banner.style.display = 'block';
+    banner.innerHTML = `<p style="margin:0"><b>📴 Offline</b> — orders you take now are saved on this device and will send automatically once you're back online.${outbox.length ? ` (${outbox.length} waiting)` : ''}</p>`;
+  } else if (outbox.length) {
+    banner.style.display = 'block';
+    banner.innerHTML = `<p style="margin:0">🔄 ${outbox.length} order(s) waiting to sync. <button class="ghost small" onclick="trySync()">Sync now</button></p>`;
+  } else {
+    banner.style.display = 'none';
+  }
+}
+async function trySync(){
+  const { synced, remaining } = await ExoOffline.flushOutbox(tenantSlug, EXO.apiFetch);
+  if (synced) await refreshOfflineCache();
+  await updateSyncBanner();
+}
+window.addEventListener('online', () => { trySync(); });
+window.addEventListener('offline', updateSyncBanner);
+setInterval(trySync, 20000); // periodic retry — the 'online' event doesn't always fire on flaky wifi
+
+(async function(){
+  await refreshOfflineCache();
+  await updateSyncBanner();
+})();
 
 async function searchParty(q){
   const box = document.getElementById('partyResults');
   if (!q || q.length < 3) { box.innerHTML = ''; return; }
-  const results = await EXO.apiFetch('/parties?q=' + encodeURIComponent(q));
+  let results;
+  try {
+    results = await EXO.apiFetch('/parties?q=' + encodeURIComponent(q));
+  } catch (e) {
+    if (!isNetworkFailure(e)) throw e;
+    results = await ExoOffline.searchPartiesOffline(tenantSlug, q);
+  }
   box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${JSON.stringify(p)})'><span>${p.firmName} — ${p.phone}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
 }
 function pickParty(p){ party = p; showPartyPicked(); }
@@ -82,6 +143,8 @@ function clearParty(){ party = null; document.getElementById('partyPicker').styl
 let cardImageUrl = '';
 // Reads the card entirely in the browser (Tesseract.js, WASM) — works with no
 // server-side setup, unlike the optional Google Vision path (OCR_API_KEY).
+// This keeps working offline too, as long as the browser already cached the
+// Tesseract script + language data from an earlier online visit.
 async function readCardWithTesseract(file){
   try {
     const { data: { text } } = await Tesseract.recognize(file, 'eng');
@@ -102,37 +165,48 @@ async function scanCard(){
   document.getElementById('cardPreview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:220px;border-radius:8px">`;
   const status = document.getElementById('ocrStatus');
   status.style.display = 'block'; status.textContent = 'Reading card… (a few seconds)';
+  // In-browser OCR always runs; the server-side card upload (for a saved
+  // card image + Vision fallback) is skipped gracefully if there's no
+  // connection — staff aren't blocked just because the upload can't happen yet.
+  const ocrGuess = await readCardWithTesseract(file);
+  let serverGuess = null;
   try {
-    const fd = new FormData(); fd.append('card', file);
-    const [res, ocrGuess] = await Promise.all([
-      EXO.apiFetch('/parties/scan-card', { method:'POST', body: fd }),
-      readCardWithTesseract(file),
-    ]);
+    const res = await EXO.apiFetch('/parties/scan-card', { method:'POST', body: (() => { const fd = new FormData(); fd.append('card', file); return fd; })() });
     cardImageUrl = res.cardImageUrl;
-    // Prefer the in-browser OCR result — it works regardless of whether the
-    // server has an OCR_API_KEY configured; fall back to the server's guess
-    // (Google Vision) only if Tesseract found nothing usable.
-    const guess = (ocrGuess.firmName || ocrGuess.phone) ? ocrGuess : res.guess;
-    document.getElementById('firmName').value = guess.firmName || '';
-    document.getElementById('contactPerson').value = guess.contactPerson || '';
-    document.getElementById('phone').value = guess.phone || '';
-    document.getElementById('email').value = guess.email || '';
-    status.style.display = 'none';
-  } catch(e) { err.textContent = e.message; err.style.display='block'; status.style.display='none'; }
+    serverGuess = res.guess;
+  } catch (e) {
+    if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; }
+    cardImageUrl = ''; // no connection — card image just won't be attached to the buyer record
+  }
+  const guess = (ocrGuess.firmName || ocrGuess.phone) ? ocrGuess : (serverGuess || {});
+  document.getElementById('firmName').value = guess.firmName || '';
+  document.getElementById('contactPerson').value = guess.contactPerson || '';
+  document.getElementById('phone').value = guess.phone || '';
+  document.getElementById('email').value = guess.email || '';
+  status.style.display = 'none';
 }
 async function createParty(){
   const err = document.getElementById('partyErr'); err.style.display='none';
+  const body = {
+    firmName: document.getElementById('firmName').value.trim(),
+    contactPerson: document.getElementById('contactPerson').value.trim(),
+    phone: document.getElementById('phone').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    cardImageUrl, source: cardImageUrl ? 'scanned' : 'manual',
+  };
+  if (!body.firmName || !body.phone) { err.textContent = 'Firm name and phone are required'; err.style.display='block'; return; }
   try {
-    const body = {
-      firmName: document.getElementById('firmName').value.trim(),
-      contactPerson: document.getElementById('contactPerson').value.trim(),
-      phone: document.getElementById('phone').value.trim(),
-      email: document.getElementById('email').value.trim(),
-      cardImageUrl, source: cardImageUrl ? 'scanned' : 'manual',
-    };
     party = await EXO.apiFetch('/parties', { method:'POST', body: JSON.stringify(body) });
     showPartyPicked();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) {
+    if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
+    // Offline — use this buyer locally right away and queue the real creation for sync.
+    const localId = 'local:' + Date.now() + ':' + Math.random().toString(36).slice(2);
+    party = { id: localId, ...body };
+    await ExoOffline.queue({ type: 'party', id: localId, tenantSlug, payload: body });
+    showPartyPicked();
+    updateSyncBanner();
+  }
 }
 
 async function lookupItem(){
@@ -143,7 +217,13 @@ async function lookupItem(){
   try {
     const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
     addToCart(item);
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) {
+    if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
+    const cached = await ExoOffline.findItemByCode(tenantSlug, code.toUpperCase());
+    if (cached) { addToCart(cached); return; }
+    err.textContent = 'Not in the offline item cache — connect once to refresh it, or check the code.';
+    err.style.display='block';
+  }
 }
 function addToCart(item){
   const existing = cart.find(c => c.itemId === item.id);
@@ -185,21 +265,35 @@ async function submitOrder(){
   const err = document.getElementById('scanErr'); err.style.display='none';
   if (!party) { err.textContent = 'Pick or create a buyer first'; err.style.display='block'; return; }
   if (!cart.length) { err.textContent = 'Scan at least one item'; err.style.display='block'; return; }
+  const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim() };
   try {
-    const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim() };
     lastOrder = await EXO.apiFetch('/orders', { method:'POST', body: JSON.stringify(body) });
     document.getElementById('shareCard').style.display = 'block';
     document.getElementById('orderNo').textContent = lastOrder.orderNo;
     document.getElementById('shareUrl').value = lastOrder.shareUrl;
     document.getElementById('shareCard').scrollIntoView({behavior:'smooth'});
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) {
+    if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
+    // Offline — queue it. If the buyer is also still-unsynced (local: id),
+    // the sync pass resolves that reference automatically once it goes through.
+    await ExoOffline.queue({ type: 'order', tenantSlug, payload: body });
+    document.getElementById('queuedCard').style.display = 'block';
+    document.getElementById('queuedCard').scrollIntoView({behavior:'smooth'});
+    updateSyncBanner();
+  }
 }
 function waLink(){
   const msg = encodeURIComponent(`Your order ${lastOrder.orderNo}\n${lastOrder.shareUrl}`);
   return `https://wa.me/${(party.phone||'').replace(/\D/g,'')}?text=${msg}`;
 }
 function copyLink(){ document.getElementById('shareUrl').select(); document.execCommand('copy'); }
-function newOrder(){ cart = []; renderCart(); clearParty(); document.getElementById('remark').value=''; document.getElementById('shareCard').style.display='none'; document.getElementById('scanCode').focus(); }
+function newOrder(){
+  cart = []; renderCart(); clearParty();
+  document.getElementById('remark').value='';
+  document.getElementById('shareCard').style.display='none';
+  document.getElementById('queuedCard').style.display='none';
+  document.getElementById('scanCode').focus();
+}
 
 // Progressive enhancement — native camera barcode scanning where the browser supports it
 if ('BarcodeDetector' in window) {

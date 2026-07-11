@@ -62,6 +62,11 @@ const tenantSchema = new mongoose.Schema({
   // in Settings > Order Form.
   orderFields: { type: [{ key: String, label: String, unit: String, showTotal: Boolean }], default: [] },
   orderShowImages: { type: Boolean, default: true }, // whether item photos appear on the order link
+  // Atomically incremented to generate order numbers (EX1001, EX1002...).
+  // Replaces the old "count existing orders, then create" approach, which
+  // had a race window: two staff submitting at the same instant could both
+  // read the same count and get the same order number.
+  orderSeq: { type: Number, default: 1000 },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -395,7 +400,7 @@ app.post('/api/companies/register', async (req, res) => {
   if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
-  const tenant = { id: uuid(), name: companyName, slug, plan: 'free', createdAt: new Date().toISOString() };
+  const tenant = { id: uuid(), name: companyName, slug, plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString() };
   await TenantDB.create(tenant);
 
   for (let i = 0; i < FIXED_FIELDS.length; i++) {
@@ -1006,6 +1011,36 @@ async function buildOrderLines(tenant, items) {
   return { lineItems, fieldTotals, orderFields };
 }
 
+// Atomically claims the next order number for a tenant. Uses Mongo's $inc
+// (a true atomic increment — safe for two staff submitting in the same
+// instant) instead of the old "count orders, then create" approach. If a
+// tenant predates this field (orderSeq missing), seeds it once from the
+// existing order count so numbering keeps incrementing rather than
+// restarting — that one-time seed has a small race window of its own, but
+// only on the very first order after upgrade, which is an acceptable trade
+// vs. the previous always-racy behavior.
+async function nextOrderNo(tenant) {
+  if (useMongoose) {
+    let t = await Tenant.findOne({ id: tenant.id });
+    if (t.orderSeq == null) {
+      const count = await Order.countDocuments({ tenantId: tenant.id });
+      t = await Tenant.findOneAndUpdate({ id: tenant.id }, { $set: { orderSeq: 1000 + count } }, { new: true });
+    }
+    const updated = await Tenant.findOneAndUpdate({ id: tenant.id }, { $inc: { orderSeq: 1 } }, { new: true });
+    return `EX${updated.orderSeq}`;
+  }
+  // lowdb — dev-only, single Node process, no real concurrency to race against.
+  let t = db.get('tenants').find({ id: tenant.id }).value();
+  if (t.orderSeq == null) {
+    const count = await OrderDB.count({ tenantId: tenant.id });
+    db.get('tenants').find({ id: tenant.id }).assign({ orderSeq: 1000 + count }).write();
+  }
+  t = db.get('tenants').find({ id: tenant.id }).value();
+  const next = t.orderSeq + 1;
+  db.get('tenants').find({ id: tenant.id }).assign({ orderSeq: next }).write();
+  return `EX${next}`;
+}
+
 app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { partyId, exhibitionId, items, remark } = req.body;
   if (!partyId || !Array.isArray(items) || !items.length)
@@ -1018,10 +1053,10 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   // Order Form config below. Qty is the only quantity that's always tracked.
   const { lineItems, fieldTotals, orderFields } = await buildOrderLines(req.tenant, items);
   if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
-  const orderCount = await OrderDB.count({ tenantId: req.tenant.id });
+  const orderNo = await nextOrderNo(req.tenant);
 
   const order = {
-    id: uuid(), orderNo: `EX${1000 + orderCount + 1}`, tenantId: req.tenant.id,
+    id: uuid(), orderNo, tenantId: req.tenant.id,
     exhibitionId: exhibitionId || '', partyId, partyName: party.firmName, partyPhone: party.phone,
     staffId: req.user.id, staffName: req.user.name,
     items: lineItems, remark: remark || '', status: 'pending',

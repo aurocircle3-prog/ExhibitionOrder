@@ -74,4 +74,11 @@
   }
 
   window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav };
+
+  // Caches the app shell (order-taking page + scripts) so it can still load
+  // with zero connection. Registration itself needs to happen once online;
+  // after that the browser keeps it available offline.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
 })();
