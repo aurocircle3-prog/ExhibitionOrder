@@ -55,7 +55,6 @@ const tenantSchema = new mongoose.Schema({
   slug: { type: String, unique: true, sparse: true }, // "kaashvi" -> kaashvi.orders.is
   plan: { type: String, default: 'free' },
   logoUrl: String,
-  currency: { type: String, default: '₹' },
   // Which item fields appear per line on the order link sent to buyers, and
   // which of those (number fields) get summed into a total — admin-configured
   // in Settings > Order Form.
@@ -110,8 +109,8 @@ const orderSchema = new mongoose.Schema({
   id: String, orderNo: String, tenantId: String, exhibitionId: String,
   partyId: String, partyName: String, partyPhone: String,
   staffId: String, staffName: String,
-  items: Array,                       // [{itemId, label, scannerCode, images, qty, price, subtotal, extra}]
-  total: Number, remark: String,
+  items: Array,                       // [{itemId, label, scannerCode, images, qty, extra}]
+  remark: String,
   // Snapshot of the tenant's Order Form config at the time this order was
   // placed, plus the computed per-field totals — kept on the order so it
   // still renders correctly even if the admin changes the config later.
@@ -344,7 +343,7 @@ app.post('/api/companies/register', async (req, res) => {
   if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
-  const tenant = { id: uuid(), name: companyName, slug, plan: 'free', currency: '₹', createdAt: new Date().toISOString() };
+  const tenant = { id: uuid(), name: companyName, slug, plan: 'free', createdAt: new Date().toISOString() };
   await TenantDB.create(tenant);
 
   for (let i = 0; i < FIXED_FIELDS.length; i++) {
@@ -444,7 +443,7 @@ app.get('/api/me', resolveTenant, auth, async (req, res) => {
 
 app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const updates = {};
-  ['name', 'currency'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
+  ['name'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
   await TenantDB.update({ id: req.tenant.id }, updates);
   res.json({ ok: true });
 });
@@ -916,23 +915,24 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   const party = await PartyDB.findOne({ id: partyId, tenantId: req.tenant.id });
   if (!party) return res.status(404).json({ error: 'Party not found' });
 
+  // No built-in "price" concept — every value on an order (price, weight,
+  // whatever) is just a regular Item Master field, shown per the tenant's
+  // Order Form config below. Qty is the only quantity that's always tracked.
   const orderFields = req.tenant.orderFields || [];
   const lineItems = [];
   for (const line of items) {
     const item = await ItemDB.findOne({ id: line.itemId, tenantId: req.tenant.id });
     if (!item) continue;
     const qty = Number(line.qty) || 1;
-    const price = Number(line.price ?? item.fields?.price ?? 0);
     const extra = {};
     orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
     lineItems.push({
       itemId: item.id, label: item.fields?.productName || item.scannerCode || item.id,
       scannerCode: item.scannerCode, images: item.images || [],
-      qty, price, subtotal: qty * price, extra,
+      qty, extra,
     });
   }
   if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
-  const total = lineItems.reduce((sum, l) => sum + l.subtotal, 0);
   const fieldTotals = {};
   orderFields.filter(f => f.showTotal).forEach(f => {
     fieldTotals[f.key] = lineItems.reduce((sum, l) => sum + (Number(l.extra?.[f.key]) || 0) * l.qty, 0);
@@ -943,7 +943,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     id: uuid(), orderNo: `EX${1000 + orderCount + 1}`, tenantId: req.tenant.id,
     exhibitionId: exhibitionId || '', partyId, partyName: party.firmName, partyPhone: party.phone,
     staffId: req.user.id, staffName: req.user.name,
-    items: lineItems, total, remark: remark || '', status: 'pending',
+    items: lineItems, remark: remark || '', status: 'pending',
     orderFieldsSnapshot: orderFields, fieldTotals,
     showImages: req.tenant.orderShowImages !== false,
     shareToken: uuid(), createdAt: new Date().toISOString(),
@@ -987,7 +987,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
   const order = await OrderDB.findOne({ shareToken: req.params.token });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   const tenant = await TenantDB.findOne({ id: order.tenantId });
-  res.json({ order, company: { name: tenant?.name, logoUrl: tenant?.logoUrl, currency: tenant?.currency || '₹' } });
+  res.json({ order, company: { name: tenant?.name, logoUrl: tenant?.logoUrl } });
 });
 
 // ── EXHIBITIONS (optional grouping — one company can run several events) ─────
@@ -1026,11 +1026,10 @@ app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'st
   const byParty = {};
   for (const o of orders) {
     const key = o.partyId;
-    byParty[key] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0, total: 0 };
+    byParty[key] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
     byParty[key].orderCount += 1;
-    byParty[key].total += o.total;
   }
-  res.json(Object.values(byParty).sort((a, b) => b.total - a.total));
+  res.json(Object.values(byParty).sort((a, b) => b.orderCount - a.orderCount));
 });
 
 app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
@@ -1038,9 +1037,8 @@ app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'sta
   const byItem = {};
   for (const o of orders) {
     for (const line of o.items || []) {
-      byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, qty: 0, total: 0 };
+      byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, qty: 0 };
       byItem[line.itemId].qty += line.qty;
-      byItem[line.itemId].total += line.subtotal;
     }
   }
   res.json(Object.values(byItem).sort((a, b) => b.qty - a.qty));
@@ -1050,11 +1048,10 @@ app.get('/api/reports/staff-wise', resolveTenant, auth, requireRole('admin'), as
   const orders = await OrderDB.find({ tenantId: req.tenant.id });
   const byStaff = {};
   for (const o of orders) {
-    byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0, total: 0 };
+    byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0 };
     byStaff[o.staffId].orderCount += 1;
-    byStaff[o.staffId].total += o.total;
   }
-  res.json(Object.values(byStaff).sort((a, b) => b.total - a.total));
+  res.json(Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount));
 });
 
 // ── STATIC PAGES ──────────────────────────────────────────────────────────────

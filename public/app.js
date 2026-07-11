@@ -43,8 +43,6 @@
     if (!localStorage.getItem('exo_token') || !user || !roles.includes(user.role)) { location.href = '/login.html'; return null; }
     return user;
   }
-  function money(n, cur) { return (cur || '₹') + Number(n || 0).toLocaleString('en-IN'); }
-
   function navBar(links, active) {
     const user = getUser();
     const items = links.map(l => `<a href="${l.href}" class="${l.key===active?'active':''}">${l.label}</a>`).join('');
@@ -75,5 +73,5 @@
     return navBar([{ key: 'orders', href: '/client/orders.html', label: 'My Orders' }], active);
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, money, adminNav, staffNav, clientNav };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav };
 })();

@@ -6,7 +6,7 @@
   <div class="card">
     <h3 style="margin-top:0">My orders</h3>
     <div class="table-scroll"><table>
-      <thead><tr><th>Order #</th><th>Items</th><th>Total</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Order #</th><th>Items</th><th>Status</th><th></th></tr></thead>
       <tbody id="rows"></tbody>
     </table></div>
   </div>
@@ -19,9 +19,9 @@ document.getElementById('nav').innerHTML = EXO.clientNav('orders');
   const orders = await EXO.apiFetch('/orders');
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
-      <td>${o.orderNo}</td><td>${o.items.length}</td><td>${EXO.money(o.total)}</td>
+      <td>${o.orderNo}</td><td>${o.items.length}</td>
       <td><span class="badge ${o.status}">${o.status}</span></td>
       <td><a href="/order/${o.shareToken}" target="_blank">View ↗</a></td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">No orders yet</td></tr>';
 })();
 </script>

@@ -55,6 +55,8 @@ th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03
 .table-scroll table{white-space:nowrap}
 td.thumb-cell img{width:44px;height:44px;object-fit:cover;border-radius:6px;background:#f0f0f0;display:block}
 td.thumb-cell{width:56px}
+.thumb-more{position:absolute;bottom:-4px;right:-4px;background:var(--brand);color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:20px;line-height:1.4}
+.order-thumb img{width:64px;height:64px;object-fit:cover;border-radius:8px;background:#f0f0f0;display:block}
 .icon-btn{background:none;border:none;padding:4px 6px;font-size:15px;cursor:pointer;color:var(--muted)}
 .icon-btn:hover{color:var(--ink)}
 .icon-btn:disabled{opacity:.25;cursor:default}

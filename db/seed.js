@@ -10,7 +10,14 @@ const adapter = new FileSync(path.join(__dirname, 'db.json'));
 const db = low(adapter);
 
 const now = () => new Date().toISOString();
-const tenant = { id: uuid(), name: 'Kaashvi Jewels', slug: 'kaashvi', plan: 'free', currency: '₹', createdAt: now() };
+// No built-in currency/price concept — a tenant that wants to show amounts on
+// the order form just adds a Number field with a unit ("Rs.") like any other,
+// configured in Settings > Order Form (demoed below with the seeded Price field).
+const tenant = {
+  id: uuid(), name: 'Kaashvi Jewels', slug: 'kaashvi', plan: 'free', createdAt: now(),
+  orderFields: [{ key: 'price', label: 'Price', unit: 'Rs.', showTotal: true }],
+  orderShowImages: true,
+};
 
 // Every company starts with just these 2 built-in fields (see FIXED_FIELDS in
 // server.js); the rest here are examples of fields an admin has added on top.
@@ -21,13 +28,13 @@ const FIXED_FIELDS = [
 const CUSTOM_FIELDS = [
   { key: 'productName', label: 'Product Name', type: 'text' },
   { key: 'category',    label: 'Category',     type: 'text' },
-  { key: 'price',       label: 'Price',        type: 'number' },
+  { key: 'price',       label: 'Price',        type: 'number', decimals: 2, unit: 'Rs.' },
   { key: 'minQty',      label: 'Min Qty',      type: 'number' },
   { key: 'unit',        label: 'Unit',         type: 'text' },
   { key: 'color',       label: 'Color',        type: 'text' },
   { key: 'material',    label: 'Material',     type: 'text' },
 ];
-const fielddefs = [...FIXED_FIELDS, ...CUSTOM_FIELDS].map((f, i) => ({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], fixed: false, createdAt: now(), ...f }));
+const fielddefs = [...FIXED_FIELDS, ...CUSTOM_FIELDS].map((f, i) => ({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], fixed: false, decimals: 2, unit: '', createdAt: now(), ...f }));
 
 const admin = { id: uuid(), tenantId: tenant.id, role: 'admin', loginId: 'admin@kaashvi.test', password: bcrypt.hashSync('admin123', 10), name: 'Sanjay Jain', phone: '+919029006090', email: 'admin@kaashvi.test', active: true, createdAt: now() };
 const staff = { id: uuid(), tenantId: tenant.id, role: 'staff', loginId: 'staff@kaashvi.test', password: bcrypt.hashSync('staff123', 10), name: 'Priya Mehta', phone: '+919876500011', email: 'staff@kaashvi.test', active: true, createdAt: now() };
@@ -44,8 +51,9 @@ const order = {
   id: uuid(), orderNo: 'EX1001', tenantId: tenant.id, exhibitionId: '',
   partyId: party.id, partyName: party.firmName, partyPhone: party.phone,
   staffId: staff.id, staffName: staff.name,
-  items: [{ itemId: items[0].id, label: 'Gold Necklace', scannerCode: 'DZ1', image: '', qty: 2, price: 15000, subtotal: 30000 }],
-  total: 30000, remark: '', status: 'pending', shareToken: uuid(), createdAt: now(),
+  items: [{ itemId: items[0].id, label: 'Gold Necklace', scannerCode: 'DZ1', images: [], qty: 2, extra: { price: 15000 } }],
+  orderFieldsSnapshot: tenant.orderFields, fieldTotals: { price: 30000 }, showImages: true,
+  remark: '', status: 'pending', shareToken: uuid(), createdAt: now(),
 };
 
 db.setState({

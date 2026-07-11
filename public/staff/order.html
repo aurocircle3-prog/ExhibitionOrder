@@ -48,7 +48,7 @@
 
   <div class="card" id="shareCard" style="display:none">
     <h3 style="margin-top:0">Order created ✅</h3>
-    <p>Order <b id="orderNo"></b> — <span id="orderTotal"></span></p>
+    <p>Order <b id="orderNo"></b></p>
     <input id="shareUrl" readonly onclick="this.select()">
     <div class="btn-row" style="margin-top:12px">
       <button class="primary" onclick="window.open(waLink(),'_blank')">Send on WhatsApp</button>
@@ -147,7 +147,7 @@ async function lookupItem(){
 function addToCart(item){
   const existing = cart.find(c => c.itemId === item.id);
   if (existing) existing.qty += 1;
-  else cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, price: Number(item.fields.price)||0, image: item.images?.[0]||'', qty: 1 });
+  else cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, qty: 1 });
   renderCart();
 }
 function changeQty(id, delta){
@@ -157,14 +157,13 @@ function changeQty(id, delta){
 }
 function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart(); }
 function renderCart(){
-  const total = cart.reduce((s,c)=>s+c.qty*c.price,0);
-  document.getElementById('cartTotal').textContent = cart.length ? `— ${EXO.money(total)}` : '';
+  const itemCount = cart.reduce((s,c)=>s+c.qty,0);
+  document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
   document.getElementById('cartRows').innerHTML = cart.length ? cart.map(c => `
     <div class="cart-row">
       <span>${c.label} <span class="muted">(${c.code})</span></span>
       <span class="qty-ctrl">
         <button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button>
-        <span style="width:70px;display:inline-block;text-align:right">${EXO.money(c.qty*c.price)}</span>
         <button class="danger small" onclick="removeLine('${c.itemId}')">✕</button>
       </span>
     </div>`).join('') : '<p class="muted">No items scanned yet</p>';
@@ -175,17 +174,16 @@ async function submitOrder(){
   if (!party) { err.textContent = 'Pick or create a buyer first'; err.style.display='block'; return; }
   if (!cart.length) { err.textContent = 'Scan at least one item'; err.style.display='block'; return; }
   try {
-    const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, price: c.price })), remark: document.getElementById('remark').value.trim() };
+    const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty })), remark: document.getElementById('remark').value.trim() };
     lastOrder = await EXO.apiFetch('/orders', { method:'POST', body: JSON.stringify(body) });
     document.getElementById('shareCard').style.display = 'block';
     document.getElementById('orderNo').textContent = lastOrder.orderNo;
-    document.getElementById('orderTotal').textContent = EXO.money(lastOrder.total);
     document.getElementById('shareUrl').value = lastOrder.shareUrl;
     document.getElementById('shareCard').scrollIntoView({behavior:'smooth'});
   } catch(e) { err.textContent = e.message; err.style.display='block'; }
 }
 function waLink(){
-  const msg = encodeURIComponent(`Your order ${lastOrder.orderNo} — ${EXO.money(lastOrder.total)}\n${lastOrder.shareUrl}`);
+  const msg = encodeURIComponent(`Your order ${lastOrder.orderNo}\n${lastOrder.shareUrl}`);
   return `https://wa.me/${(party.phone||'').replace(/\D/g,'')}?text=${msg}`;
 }
 function copyLink(){ document.getElementById('shareUrl').select(); document.execCommand('copy'); }

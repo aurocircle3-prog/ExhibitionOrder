@@ -8,7 +8,6 @@
     <div class="error" id="err"></div>
     <div class="grid cols-2">
       <div><label>Company name</label><input id="name"></div>
-      <div><label>Currency symbol</label><input id="currency"></div>
     </div>
     <p class="muted" style="margin-top:10px">Company link: <b id="slugShow"></b>.orders.is <span class="muted">(fixed at signup)</span></p>
     <button class="primary" onclick="save()">Save</button>
@@ -48,7 +47,6 @@ document.getElementById('nav').innerHTML = EXO.adminNav('settings');
 async function load(){
   const me = await EXO.apiFetch('/me');
   document.getElementById('name').value = me.tenant.name || '';
-  document.getElementById('currency').value = me.tenant.currency || '₹';
   document.getElementById('slugShow').textContent = me.tenant.slug;
   document.getElementById('showImages').checked = me.tenant.orderShowImages !== false;
   loadOrderFields(me.tenant.orderFields || []);
@@ -80,7 +78,7 @@ async function save(){
   const err = document.getElementById('err'); err.style.display='none';
   try {
     await EXO.apiFetch('/companies/settings', { method:'PUT', body: JSON.stringify({
-      name: document.getElementById('name').value.trim(), currency: document.getElementById('currency').value.trim()
+      name: document.getElementById('name').value.trim()
     })});
     localStorage.setItem('exo_tenant_name', document.getElementById('name').value.trim());
     document.getElementById('nav').innerHTML = EXO.adminNav('settings');

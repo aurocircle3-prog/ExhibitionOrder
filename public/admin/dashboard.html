@@ -7,7 +7,7 @@
   <div class="card">
     <h3 style="margin-top:0">Recent orders</h3>
     <div class="table-scroll"><table>
-      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Items</th><th>Total</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
       <tbody id="orderRows"></tbody>
     </table></div>
   </div>
@@ -21,11 +21,9 @@ async function load(){
   const [items, parties, orders, staff] = await Promise.all([
     EXO.apiFetch('/items'), EXO.apiFetch('/parties'), EXO.apiFetch('/orders'), EXO.apiFetch('/staff')
   ]);
-  const total = orders.reduce((s,o)=>s+o.total,0);
   document.getElementById('stats').innerHTML = `
     <div class="card"><div class="stat">${items.length}</div><div class="stat-label">Items</div></div>
     <div class="card"><div class="stat">${orders.length}</div><div class="stat-label">Orders</div></div>
-    <div class="card"><div class="stat">${EXO.money(total)}</div><div class="stat-label">Total order value</div></div>
     <div class="card"><div class="stat">${parties.length}</div><div class="stat-label">Buyers captured</div></div>
     <div class="card"><div class="stat">${staff.length}</div><div class="stat-label">Staff accounts</div></div>
   `;
@@ -35,7 +33,6 @@ async function load(){
       <td>${o.partyName}<br><span class="muted">${o.partyPhone}</span></td>
       <td>${o.staffName}</td>
       <td>${o.items.length}</td>
-      <td>${EXO.money(o.total)}</td>
       <td>
         <select class="status-select ${o.status}" onchange="changeStatus('${o.id}', this)">
           <option value="pending" ${o.status==='pending'?'selected':''}>pending</option>
@@ -44,7 +41,7 @@ async function load(){
         </select>
       </td>
       <td><a href="/order/${o.shareToken}" target="_blank">View link ↗</a></td>
-    </tr>`).join('') || '<tr><td colspan="7" class="muted">No orders yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">No orders yet</td></tr>';
 }
 async function changeStatus(id, select){
   const status = select.value;
