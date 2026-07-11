@@ -1,12 +1,21 @@
 // Shared helpers used by every page — resolves which company (tenant) we're
 // talking to, and wraps fetch() so every API call carries the tenant + auth token.
 (function () {
+  // Shared hosting platforms (Render, Vercel, etc.) hand out URLs shaped like
+  // <service>.onrender.com — structurally identical to a real per-company
+  // subdomain, so treating any 3-part hostname as a tenant slug is wrong
+  // until you're on your own custom domain. Skip those known platform hosts.
+  const PLATFORM_HOST_SUFFIXES = ['onrender.com', 'vercel.app', 'netlify.app', 'herokuapp.com'];
   function getTenantSlug() {
     const urlSlug = new URLSearchParams(location.search).get('tenant');
     if (urlSlug) { localStorage.setItem('exo_tenant', urlSlug); return urlSlug; }
-    const host = location.hostname.split('.');
-    if (host.length > 2 && host[0] !== 'www') return host[0];
-    return localStorage.getItem('exo_tenant') || '';
+    const cached = localStorage.getItem('exo_tenant');
+    if (cached) return cached;
+    const host = location.hostname.toLowerCase();
+    const onPlatformHost = PLATFORM_HOST_SUFFIXES.some(suf => host.endsWith(suf)) || host === 'localhost';
+    const parts = host.split('.');
+    if (!onPlatformHost && parts.length > 2 && parts[0] !== 'www') return parts[0];
+    return '';
   }
 
   async function apiFetch(path, opts = {}) {

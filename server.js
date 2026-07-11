@@ -199,12 +199,17 @@ app.get('/api/ping', (req, res) => res.send('exhibition-order-saas OK'));
 // Resolves the company (tenant) for every /api/* call from, in priority order:
 // explicit header/query (used by the frontend + during local dev without subdomains),
 // then the request's subdomain (kaashvi.orders.is -> slug "kaashvi") in production.
+// Shared hosting platforms hand out <service>.onrender.com-style URLs that are
+// structurally identical to a real per-company subdomain — skip those known
+// platform hosts so a Render/Vercel/etc. deployment isn't mistaken for a tenant.
+const PLATFORM_HOST_SUFFIXES = ['onrender.com', 'vercel.app', 'netlify.app', 'herokuapp.com'];
 async function resolveTenant(req, res, next) {
   let slug = req.headers['x-tenant-slug'] || req.query.tenant;
   if (!slug) {
     const host = (req.hostname || '').toLowerCase();
+    const onPlatformHost = PLATFORM_HOST_SUFFIXES.some(suf => host.endsWith(suf)) || host === 'localhost';
     const parts = host.split('.');
-    if (parts.length > 2 && parts[0] !== 'www') slug = parts[0];
+    if (!onPlatformHost && parts.length > 2 && parts[0] !== 'www') slug = parts[0];
   }
   if (!slug) return res.status(400).json({ error: 'Company not specified. Use the company subdomain, or pass ?tenant=slug / X-Tenant-Slug header.' });
   const tenant = await TenantDB.findOne({ slug: String(slug).toLowerCase() });
