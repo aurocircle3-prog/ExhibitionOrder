@@ -55,8 +55,8 @@ th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03
 .table-scroll table{white-space:nowrap}
 td.thumb-cell img{width:44px;height:44px;object-fit:cover;border-radius:6px;background:#f0f0f0;display:block}
 td.thumb-cell{width:56px}
-.thumb-more{position:absolute;bottom:-4px;right:-4px;background:var(--brand);color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:20px;line-height:1.4}
-.order-thumb img{width:64px;height:64px;object-fit:cover;border-radius:8px;background:#f0f0f0;display:block}
+.order-thumbs{display:flex;gap:6px}
+.order-thumbs img{width:48px;height:48px;object-fit:cover;border-radius:8px;background:#f0f0f0;display:block;cursor:pointer}
 .icon-btn{background:none;border:none;padding:4px 6px;font-size:15px;cursor:pointer;color:var(--muted)}
 .icon-btn:hover{color:var(--ink)}
 .icon-btn:disabled{opacity:.25;cursor:default}
@@ -70,6 +70,7 @@ td.thumb-cell{width:56px}
 .lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.15);color:#fff;font-size:28px;padding:8px 16px;border-radius:8px}
 .lightbox-prev{left:16px}
 .lightbox-next{right:16px}
+.lightbox-count{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;background:rgba(255,255,255,.15);padding:4px 12px;border-radius:20px}
 @media (max-width:640px){
   .lightbox-nav{font-size:22px;padding:6px 12px}
   .lightbox-close{top:10px;right:14px}

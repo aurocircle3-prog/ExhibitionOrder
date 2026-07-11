@@ -969,20 +969,15 @@ app.get('/api/parties/:id', resolveTenant, auth, async (req, res) => {
 });
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
-app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const { partyId, exhibitionId, items, remark } = req.body;
-  if (!partyId || !Array.isArray(items) || !items.length)
-    return res.status(400).json({ error: 'partyId and at least one item are required' });
-  const party = await PartyDB.findOne({ id: partyId, tenantId: req.tenant.id });
-  if (!party) return res.status(404).json({ error: 'Party not found' });
-
-  // No built-in "price" concept — every value on an order (price, weight,
-  // whatever) is just a regular Item Master field, shown per the tenant's
-  // Order Form config below. Qty is the only quantity that's always tracked.
-  const orderFields = req.tenant.orderFields || [];
+// Shared by order create + order edit — turns { itemId, qty } lines into full
+// order line items (label, images, per-field snapshot) and computes the
+// showTotal field sums. Re-reads items fresh each time so an edit always
+// reflects the item master's current fields, not stale data from creation.
+async function buildOrderLines(tenant, items) {
+  const orderFields = tenant.orderFields || [];
   const lineItems = [];
   for (const line of items) {
-    const item = await ItemDB.findOne({ id: line.itemId, tenantId: req.tenant.id });
+    const item = await ItemDB.findOne({ id: line.itemId, tenantId: tenant.id });
     if (!item) continue;
     const qty = Number(line.qty) || 1;
     const extra = {};
@@ -993,11 +988,25 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
       qty, extra,
     });
   }
-  if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
   const fieldTotals = {};
   orderFields.filter(f => f.showTotal).forEach(f => {
     fieldTotals[f.key] = lineItems.reduce((sum, l) => sum + (Number(l.extra?.[f.key]) || 0) * l.qty, 0);
   });
+  return { lineItems, fieldTotals, orderFields };
+}
+
+app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const { partyId, exhibitionId, items, remark } = req.body;
+  if (!partyId || !Array.isArray(items) || !items.length)
+    return res.status(400).json({ error: 'partyId and at least one item are required' });
+  const party = await PartyDB.findOne({ id: partyId, tenantId: req.tenant.id });
+  if (!party) return res.status(404).json({ error: 'Party not found' });
+
+  // No built-in "price" concept — every value on an order (price, weight,
+  // whatever) is just a regular Item Master field, shown per the tenant's
+  // Order Form config below. Qty is the only quantity that's always tracked.
+  const { lineItems, fieldTotals, orderFields } = await buildOrderLines(req.tenant, items);
+  if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
   const orderCount = await OrderDB.count({ tenantId: req.tenant.id });
 
   const order = {
@@ -1035,7 +1044,35 @@ app.get('/api/orders/:id', resolveTenant, auth, async (req, res) => {
   res.json(order);
 });
 
-app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+// Edit an order's items/remark — pending only. Once confirmed or cancelled,
+// an order is a record of what happened and shouldn't be silently rewritten;
+// staff who need to change a confirmed order should cancel it and create a
+// new one (keeps the audit trail honest). Same admin+staff access as create.
+app.put('/api/orders/:id', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (req.user.role === 'staff' && order.staffId !== req.user.id)
+    return res.status(403).json({ error: 'You can only edit your own orders' });
+  if (order.status !== 'pending') return res.status(400).json({ error: 'Only pending orders can be edited' });
+
+  const { items, remark, exhibitionId } = req.body;
+  const updates = {};
+  if (items !== undefined) {
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'At least one item is required' });
+    const { lineItems, fieldTotals } = await buildOrderLines(req.tenant, items);
+    if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
+    updates.items = lineItems;
+    updates.fieldTotals = fieldTotals;
+  }
+  if (remark !== undefined) updates.remark = remark;
+  if (exhibitionId !== undefined) updates.exhibitionId = exhibitionId;
+
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, updates);
+  logAudit(req, 'order.update', 'order', req.params.id, { orderNo: order.orderNo, itemCount: updates.items?.length });
+  res.json({ ok: true });
+});
+
+app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const { status } = req.body;
   if (!['pending', 'confirmed', 'cancelled'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   const before = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });

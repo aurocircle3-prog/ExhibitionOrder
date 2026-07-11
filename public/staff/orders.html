@@ -25,13 +25,16 @@ async function load(){
       <td>${o.staffName}</td>
       <td>${o.items.length}</td>
       <td>
+        ${user.role === 'admin' ? `
         <select class="status-select ${o.status}" onchange="changeStatus('${o.id}', this)">
           <option value="pending" ${o.status==='pending'?'selected':''}>pending</option>
           <option value="confirmed" ${o.status==='confirmed'?'selected':''}>confirmed</option>
           <option value="cancelled" ${o.status==='cancelled'?'selected':''}>cancelled</option>
-        </select>
+        </select>` : `<span class="badge ${o.status}">${o.status}</span>`}
       </td>
-      <td><a href="/order/${o.shareToken}" target="_blank">View link ↗</a></td>
+      <td>
+        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="/order/${o.shareToken}" target="_blank">View link ↗</a>
+      </td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No orders yet — go take one!</td></tr>';
 }
 async function changeStatus(id, select){

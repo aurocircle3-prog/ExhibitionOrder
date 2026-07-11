@@ -1,0 +1,113 @@
+<title>Edit Order — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card" id="loadingCard">
+    <p class="muted">Loading order…</p>
+  </div>
+
+  <div class="card" id="editCard" style="display:none">
+    <h3 style="margin-top:0">Edit order <span id="orderNo" class="muted"></span></h3>
+    <p class="muted" style="margin-top:-8px">Buyer: <b id="partyName"></b> — <span id="partyPhone"></span> <span class="muted">(buyer can't be changed here — cancel and re-create if it's wrong)</span></p>
+    <div class="error" id="editErr"></div>
+
+    <label>Scan or type item code to add</label>
+    <input id="scanCode" placeholder="Scan or type item code, then Enter" onkeydown="if(event.key==='Enter')lookupItem()">
+
+    <div id="cartRows" style="margin-top:14px"></div>
+
+    <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
+    <textarea id="remark" rows="2"></textarea>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="primary" onclick="saveOrder()">Save changes</button>
+      <button class="ghost" onclick="location.href='/staff/orders.html'">Cancel</button>
+    </div>
+  </div>
+
+  <div class="card" id="blockedCard" style="display:none">
+    <p class="error" style="display:block" id="blockedMsg"></p>
+    <button class="ghost" onclick="location.href='/staff/orders.html'">Back to orders</button>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+const currentUser = EXO.requireRole('admin','staff');
+document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
+
+let order = null, cart = [];
+const orderId = new URLSearchParams(location.search).get('id');
+
+function showBlocked(msg){
+  document.getElementById('loadingCard').style.display = 'none';
+  document.getElementById('blockedCard').style.display = 'block';
+  document.getElementById('blockedMsg').textContent = msg;
+}
+
+async function load(){
+  if (!orderId) return showBlocked('No order specified.');
+  try {
+    order = await EXO.apiFetch('/orders/' + orderId);
+  } catch (e) { return showBlocked(e.message); }
+  if (order.status !== 'pending') return showBlocked('Only pending orders can be edited — this order is ' + order.status + '.');
+
+  cart = order.items.map(i => ({ itemId: i.itemId, label: i.label, code: i.scannerCode, qty: i.qty }));
+  document.getElementById('orderNo').textContent = '· ' + order.orderNo;
+  document.getElementById('partyName').textContent = order.partyName;
+  document.getElementById('partyPhone').textContent = order.partyPhone;
+  document.getElementById('remark').value = order.remark || '';
+  renderCart();
+  document.getElementById('loadingCard').style.display = 'none';
+  document.getElementById('editCard').style.display = 'block';
+  document.getElementById('scanCode').focus();
+}
+
+async function lookupItem(){
+  const err = document.getElementById('editErr'); err.style.display = 'none';
+  const code = document.getElementById('scanCode').value.trim();
+  document.getElementById('scanCode').value = '';
+  if (!code) return;
+  try {
+    const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
+    addToCart(item);
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+function addToCart(item){
+  const existing = cart.find(c => c.itemId === item.id);
+  if (existing) existing.qty += 1;
+  else cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, qty: 1 });
+  renderCart();
+}
+function changeQty(id, delta){
+  const line = cart.find(c => c.itemId === id);
+  line.qty = Math.max(1, line.qty + delta);
+  renderCart();
+}
+function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart(); }
+function renderCart(){
+  document.getElementById('cartRows').innerHTML = cart.length ? cart.map(c => `
+    <div class="cart-row">
+      <span>${c.label} <span class="muted">(${c.code})</span></span>
+      <span class="qty-ctrl">
+        <button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button>
+        <button class="danger small" onclick="removeLine('${c.itemId}')">✕</button>
+      </span>
+    </div>`).join('') : '<p class="muted">No items — add at least one below</p>';
+}
+
+async function saveOrder(){
+  const err = document.getElementById('editErr'); err.style.display = 'none';
+  if (!cart.length) { err.textContent = 'Add at least one item'; err.style.display = 'block'; return; }
+  try {
+    await EXO.apiFetch('/orders/' + orderId, {
+      method: 'PUT',
+      body: JSON.stringify({
+        items: cart.map(c => ({ itemId: c.itemId, qty: c.qty })),
+        remark: document.getElementById('remark').value.trim(),
+      }),
+    });
+    location.href = '/staff/orders.html';
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+load();
+</script>
