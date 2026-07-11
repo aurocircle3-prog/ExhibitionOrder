@@ -9,6 +9,8 @@ const { v4: uuid } = require('uuid');
 const mongoose   = require('mongoose');
 const https      = require('https');
 const XLSX       = require('xlsx');
+const pinoHttp   = require('pino-http');
+const log        = require('./logger');
 
 const app = express();
 const PORT       = process.env.PORT       || 3000;
@@ -17,7 +19,7 @@ const MONGO_URI  = process.env.MONGO_URI  || '';
 const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 
 if (!process.env.JWT_SECRET) {
-  console.warn('⚠️  WARNING: JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
+  log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
 }
 
 // ── CLOUDFLARE R2 SETUP (same pattern as ecatlog — zero egress, R2 with local fallback) ──
@@ -42,9 +44,9 @@ function initR2() {
     });
     S3PutObjectCommand = PutObjectCommand;
     useR2 = true;
-    console.log('🌩️  Cloudflare R2 image storage enabled');
+    log.info('Cloudflare R2 image storage enabled');
   } else {
-    console.log('🖼  R2 not configured — using local disk storage (set R2_* env vars to switch)');
+    log.warn('R2 not configured — using local disk storage (set R2_* env vars to switch)');
   }
 }
 
@@ -122,6 +124,21 @@ const orderSchema = new mongoose.Schema({
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Audit trail — persisted separately from app logs. App logs (stdout, via
+// logger.js) are for debugging and don't outlive a Render restart. This
+// collection is for "who did what, when" accountability and must survive.
+// Deliberately schema-light (Mixed `changes`) so any route can log any shape
+// of before/after without a migration.
+const auditLogSchema = new mongoose.Schema({
+  id: String, tenantId: String,
+  actorId: String, actorName: String, actorRole: String,
+  action: String,                     // e.g. 'staff.create', 'item.delete', 'order.status_change'
+  entityType: String, entityId: String,
+  changes: { type: mongoose.Schema.Types.Mixed, default: null },
+  ip: String,
+  createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
 const exhibitionSchema = new mongoose.Schema({
   id: String, tenantId: String,
   name: String, location: String, startDate: String, endDate: String,
@@ -136,6 +153,7 @@ const Item       = mongoose.model('Item', itemSchema);
 const Party      = mongoose.model('Party', partySchema);
 const Order      = mongoose.model('Order', orderSchema);
 const Exhibition = mongoose.model('Exhibition', exhibitionSchema);
+const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
 
 // ── DB INIT ───────────────────────────────────────────────────────────────────
 let db = null;
@@ -145,7 +163,7 @@ async function connectDB() {
   if (MONGO_URI) {
     await mongoose.connect(MONGO_URI);
     useMongoose = true;
-    console.log('✅ MongoDB connected');
+    log.info('MongoDB connected');
   } else {
     const low      = require('lowdb');
     const FileSync = require('lowdb/adapters/FileSync');
@@ -153,8 +171,8 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [] }).write();
-    console.log('📁 Using local JSON db (set MONGO_URI to use MongoDB)');
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], auditlogs: [] }).write();
+    log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
 
@@ -189,6 +207,20 @@ const ItemDB       = makeCollectionOps(Item, 'items', { createdAt: -1 });
 const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
+const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
+
+// Fire-and-forget audit write — never let a logging failure break the
+// request that triggered it. Call this AFTER the mutation succeeds, with
+// req so we can pull actor + tenant + IP consistently everywhere.
+function logAudit(req, action, entityType, entityId, changes = null) {
+  const entry = {
+    id: uuid(), tenantId: req.tenant?.id || '',
+    actorId: req.user?.id || '', actorName: req.user?.name || '', actorRole: req.user?.role || '',
+    action, entityType, entityId: String(entityId || ''),
+    changes, ip: req.ip, createdAt: new Date().toISOString(),
+  };
+  AuditLogDB.create(entry).catch(err => log.error({ err, action }, 'Failed to write audit log'));
+}
 
 // Every new company starts with just these two built-in fields — admin adds
 // whatever else they need from the field builder. Both are permanent: Item
@@ -201,9 +233,29 @@ const FIXED_FIELDS = [
 const RESERVED_FIELD_LABELS = FIXED_FIELDS.map(f => f.label.toLowerCase());
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
+app.set('trust proxy', true); // Render sits behind a proxy — needed for req.ip to be the real client IP
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Request logging — one line per request, written after the response finishes
+// so it can include status + duration. Placed early so it wraps every route,
+// but customProps reads req.tenant/req.user which are set later in the chain
+// by resolveTenant/auth — safe because this only runs (and reads them) at
+// response-finish time, by which point those middlewares have already run.
+app.use(pinoHttp({
+  logger: log,
+  customProps: (req) => ({ tenant: req.tenant?.slug, userId: req.user?.id, role: req.user?.role }),
+  // Don't spam logs at info level for routine health checks
+  customLogLevel: (req, res, err) => {
+    if (req.url === '/api/ping') return 'silent';
+    if (err || res.statusCode >= 500) return 'error';
+    if (res.statusCode >= 400) return 'warn';
+    return 'info';
+  },
+  redact: ['req.headers.authorization', 'req.body.password', 'req.body.newPassword'],
+}));
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.get('/api/ping', (req, res) => res.send('exhibition-order-saas OK'));
 
@@ -367,10 +419,14 @@ app.post('/api/auth/login', resolveTenant, async (req, res) => {
   const { loginId, password } = req.body;
   if (!loginId || !password) return res.status(400).json({ error: 'Login ID and password are required' });
   const user = await UserDB.findOne({ tenantId: req.tenant.id, loginId: String(loginId).toLowerCase() });
-  if (!user || !user.active || !bcrypt.compareSync(password, user.password))
+  if (!user || !user.active || !bcrypt.compareSync(password, user.password)) {
+    log.warn({ tenant: req.tenant.slug, loginId, ip: req.ip }, 'Failed login attempt');
     return res.status(401).json({ error: 'Invalid login ID or password' });
+  }
   const token = jwt.sign({ id: user.id, tenantId: req.tenant.id, role: user.role, loginId: user.loginId, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
   const { password: _pw, ...safeUser } = user;
+  req.user = safeUser; // so logAudit can pick up actor info for this request
+  logAudit(req, 'auth.login', 'user', user.id);
   res.json({ token, user: safeUser, tenant: req.tenant });
 });
 
@@ -407,6 +463,7 @@ app.post('/api/staff', resolveTenant, auth, requireRole('admin'), async (req, re
     active: true, createdAt: new Date().toISOString(),
   };
   await UserDB.create(staff);
+  logAudit(req, 'staff.create', 'user', staff.id, { name: staff.name, loginId: staff.loginId });
   const { password: _pw, ...safeStaff } = staff;
   res.json(safeStaff);
 });
@@ -426,11 +483,13 @@ app.put('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req,
     updates.password = bcrypt.hashSync(req.body.newPassword, 10);
   }
   await UserDB.update({ id: req.params.id }, updates);
+  logAudit(req, 'staff.update', 'user', req.params.id, { fields: Object.keys(updates) });
   res.json({ ok: true });
 });
 
 app.delete('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'staff' });
+  logAudit(req, 'staff.delete', 'user', req.params.id);
   res.json({ ok: true });
 });
 
@@ -445,6 +504,7 @@ app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), as
   const updates = {};
   ['name'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
   await TenantDB.update({ id: req.tenant.id }, updates);
+  logAudit(req, 'company.settings_update', 'tenant', req.tenant.id, updates);
   res.json({ ok: true });
 });
 
@@ -624,6 +684,7 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
 
 app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await ItemDB.update({ id: req.params.id, tenantId: req.tenant.id }, { active: false });
+  logAudit(req, 'item.delete', 'item', req.params.id);
   res.json({ ok: true });
 });
 
@@ -859,7 +920,7 @@ async function runVisitingCardOcr(base64Image) {
     const text = result?.responses?.[0]?.fullTextAnnotation?.text || '';
     return parseCardText(text);
   } catch (e) {
-    console.error('[OCR] Vision API call failed:', e.message);
+    log.error({ err: e }, 'OCR Vision API call failed');
     return { firmName: '', contactPerson: '', phone: '', email: '' };
   }
 }
@@ -949,6 +1010,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };
   await OrderDB.create(order);
+  logAudit(req, 'order.create', 'order', order.id, { orderNo: order.orderNo, partyId, itemCount: lineItems.length });
   res.json({ ...order, shareUrl: `${APP_URL}/order/${order.shareToken}` });
 });
 
@@ -976,7 +1038,9 @@ app.get('/api/orders/:id', resolveTenant, auth, async (req, res) => {
 app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { status } = req.body;
   if (!['pending', 'confirmed', 'cancelled'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  const before = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { status });
+  logAudit(req, 'order.status_change', 'order', req.params.id, { from: before?.status, to: status });
   res.json({ ok: true });
 });
 
@@ -1015,6 +1079,7 @@ app.put('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), async
 
 app.delete('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await ExhibitionDB.update({ id: req.params.id, tenantId: req.tenant.id }, { active: false });
+  logAudit(req, 'exhibition.delete', 'exhibition', req.params.id);
   res.json({ ok: true });
 });
 
@@ -1054,16 +1119,50 @@ app.get('/api/reports/staff-wise', resolveTenant, auth, requireRole('admin'), as
   res.json(Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount));
 });
 
+// Admin-only view into the audit trail — filter by tenant automatically,
+// optionally narrow by entityType/action/actorId via query params.
+app.get('/api/audit-log', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const q = { tenantId: req.tenant.id };
+  if (req.query.entityType) q.entityType = req.query.entityType;
+  if (req.query.action) q.action = req.query.action;
+  if (req.query.actorId) q.actorId = req.query.actorId;
+  const entries = await AuditLogDB.find(q);
+  res.json(entries.slice(0, 500)); // simple cap — add real pagination if this grows large
+});
+
 // ── STATIC PAGES ──────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
 // Public order-confirmation page — token is looked up client-side via /api/orders/public/:token
 app.get('/order/:token', (req, res) => res.sendFile(path.join(__dirname, 'public', 'order', 'view.html')));
 
+// ── CENTRAL ERROR HANDLER ──────────────────────────────────────────────────────
+// Express 5 auto-forwards rejected promises from async route handlers here, so
+// this catches anything a route didn't handle itself with its own try/catch.
+// Full error (with stack) goes to the log; the client only ever gets a generic
+// message — never err.message, which can leak internals (DB names, file
+// paths, library internals).
+app.use((err, req, res, next) => {
+  (req.log || log).error({ err }, 'Unhandled request error');
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({ error: 'Something went wrong. Please try again.' });
+});
+
+// Belt-and-suspenders: catch anything that escapes Express entirely (e.g. a
+// throw inside a callback, not a route handler) so it's logged with a stack
+// trace before Render restarts the process, instead of vanishing.
+process.on('uncaughtException', (err) => {
+  log.fatal({ err }, 'Uncaught exception — process will exit');
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  log.error({ err: reason }, 'Unhandled promise rejection');
+});
+
 connectDB().then(() => {
   initR2();
-  app.listen(PORT, () => console.log(`🎪 Exhibition Order SaaS running on port ${PORT}`));
+  app.listen(PORT, () => log.info({ port: PORT }, 'Exhibition Order SaaS running'));
 }).catch(err => {
-  console.error('Failed to connect to database:', err.message);
+  log.fatal({ err }, 'Failed to connect to database');
   process.exit(1);
 });
