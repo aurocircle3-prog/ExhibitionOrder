@@ -73,10 +73,29 @@
     </div>
 
     <div class="tab-panel" id="dtab-config">
-      <h4 style="margin-top:0">Order Form fields</h4>
-      <p id="detailOrderFields" class="muted"></p>
-      <h4>Item Master fields (<span id="fieldCount"></span>)</h4>
-      <p id="detailFields" class="muted"></p>
+      <h4 style="margin-top:0">Item Master fields</h4>
+      <div class="error" id="fieldErr"></div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
+        <tbody id="detailFieldRows"></tbody>
+      </table></div>
+      <div class="grid cols-3" style="margin-top:14px">
+        <div><label>New field label</label><input id="newFieldLabel" placeholder="e.g. Weight"></div>
+        <div><label>Type</label><select id="newFieldType" onchange="toggleNewFieldDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>
+        <div id="newFieldDecimalsWrap" style="display:none"><label>Decimal places</label><input id="newFieldDecimals" type="number" min="0" max="6" value="2"></div>
+      </div>
+      <div id="newFieldUnitRow" style="display:none"><label>Unit <span class="muted">(e.g. "Grams", "Rs.")</span></label><input id="newFieldUnit" placeholder="e.g. Grams"></div>
+      <button class="primary" style="margin-top:14px" onclick="addDetailField()">Add field</button>
+
+      <h4>Order Form <span class="muted">— which fields appear on the order link sent to buyers</span></h4>
+      <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">
+        <input type="checkbox" id="detailShowImages" style="width:auto"> <span>Show item photos on the order link</span>
+      </label>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
+        <tbody id="detailOrderFieldRows"></tbody>
+      </table></div>
+      <button class="primary" style="margin-top:14px" onclick="saveDetailOrderFields()">Save order form</button>
     </div>
 
     <div class="tab-panel" id="dtab-orders">
@@ -203,12 +222,12 @@ async function openDetail(id){
       <input type="checkbox" id="perm_${key}" style="width:auto" ${perms[key] === true ? 'checked' : ''}> <span>${label}</span>
     </label>`).join('');
 
-  document.getElementById('detailOrderFields').textContent = (tenant.orderFields || []).length
-    ? tenant.orderFields.map(f => f.label || f.key).join(', ')
-    : 'None configured — orders only show item name and qty.';
-
-  document.getElementById('fieldCount').textContent = fieldDefs.length;
-  document.getElementById('detailFields').textContent = fieldDefs.map(f => f.label).join(', ') || 'None';
+  detailFields = fieldDefs;
+  detailOrderFieldsSaved = tenant.orderFields || [];
+  detailFieldEditingId = null;
+  renderDetailFieldRows();
+  document.getElementById('detailShowImages').checked = tenant.orderShowImages !== false;
+  renderDetailOrderFieldRows();
 
   document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
     <tr>
@@ -222,6 +241,116 @@ async function openDetail(id){
   document.getElementById('detailCard').scrollIntoView({ behavior: 'smooth' });
 }
 function closeDetail(){ document.getElementById('detailCard').style.display = 'none'; }
+
+// ── Item Master fields (mirrors admin/item-master.html's Fields tab, but
+// acting on whichever company is currently open, via platformFetch) ──
+let detailFields = [], detailFieldEditingId = null, detailOrderFieldsSaved = [];
+function toggleNewFieldDecimals(){
+  const isNumber = document.getElementById('newFieldType').value === 'number';
+  document.getElementById('newFieldDecimalsWrap').style.display = isNumber ? 'block' : 'none';
+  document.getElementById('newFieldUnitRow').style.display = isNumber ? 'block' : 'none';
+}
+function fieldTypeLabel(f){
+  if (f.type !== 'number') return f.type.charAt(0).toUpperCase() + f.type.slice(1);
+  return `Number (${f.decimals ?? 2} dp${f.unit ? ', ' + f.unit : ''})`;
+}
+function renderDetailFieldRows(){
+  document.getElementById('detailFieldRows').innerHTML = detailFields.map((f, i) => {
+    if (f.id === detailFieldEditingId) {
+      return `<tr class="field-row-edit">
+        <td><input id="editDetailLabel" value="${f.label}"></td>
+        <td>${fieldTypeLabel(f)}</td>
+        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}</td>
+        <td>
+          <button class="primary small" onclick="saveEditDetailField('${f.id}')">Save</button>
+          <button class="ghost small" onclick="cancelEditDetailField()">Cancel</button>
+        </td>
+      </tr>`;
+    }
+    return `<tr>
+      <td>${f.label}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${fieldTypeLabel(f)}</td>
+      <td></td>
+      <td>
+        <button class="icon-btn" title="Move up" ${i===0?'disabled':''} onclick="moveDetailField('${f.id}','up')">↑</button>
+        <button class="icon-btn" title="Move down" ${i===detailFields.length-1?'disabled':''} onclick="moveDetailField('${f.id}','down')">↓</button>
+        <button class="ghost small" onclick="startEditDetailField('${f.id}')">Edit</button>
+        ${f.fixed ? '' : `<button class="danger small" onclick="deleteDetailField('${f.id}')">Delete</button>`}
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No fields yet</td></tr>';
+}
+function startEditDetailField(id){ detailFieldEditingId = id; renderDetailFieldRows(); }
+function cancelEditDetailField(){ detailFieldEditingId = null; renderDetailFieldRows(); }
+async function reloadDetailFields(){
+  const detail = await platformFetch('/tenants/' + lastTenantId);
+  detailFields = detail.fieldDefs;
+  detailOrderFieldsSaved = detail.tenant.orderFields || [];
+  renderDetailFieldRows();
+  renderDetailOrderFieldRows();
+}
+async function saveEditDetailField(id){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  const label = document.getElementById('editDetailLabel').value.trim();
+  const decimalsEl = document.getElementById('editDetailDecimals');
+  const unitEl = document.getElementById('editDetailUnit');
+  const body = { label };
+  if (decimalsEl) body.decimals = Number(decimalsEl.value);
+  if (unitEl) body.unit = unitEl.value.trim();
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/fields/${id}`, { method:'PUT', body: JSON.stringify(body) });
+    detailFieldEditingId = null; await reloadDetailFields();
+  } catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+async function moveDetailField(id, direction){
+  await platformFetch(`/tenants/${lastTenantId}/fields/${id}/move`, { method:'PUT', body: JSON.stringify({ direction }) });
+  await reloadDetailFields();
+}
+async function addDetailField(){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  const label = document.getElementById('newFieldLabel').value.trim();
+  const type = document.getElementById('newFieldType').value;
+  const decimals = Number(document.getElementById('newFieldDecimals').value);
+  const unit = document.getElementById('newFieldUnit').value.trim();
+  if (!label) { err.textContent = 'Field label is required'; err.style.display='block'; return; }
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/fields`, { method:'POST', body: JSON.stringify({ label, type, decimals, unit }) });
+    document.getElementById('newFieldLabel').value = ''; document.getElementById('newFieldUnit').value = '';
+    document.getElementById('newFieldType').value = 'text'; toggleNewFieldDecimals();
+    await reloadDetailFields();
+  } catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+async function deleteDetailField(id){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  if (!confirm('Delete this field? Existing item values for it are kept but hidden.')) return;
+  try { await platformFetch(`/tenants/${lastTenantId}/fields/${id}`, { method:'DELETE' }); await reloadDetailFields(); }
+  catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+
+// ── Order Form (which fields — and whether photos — show on the buyer link) ──
+function renderDetailOrderFieldRows(){
+  const savedByKey = {}; detailOrderFieldsSaved.forEach(f => { savedByKey[f.key] = f; });
+  document.getElementById('detailOrderFieldRows').innerHTML = detailFields.map(f => `
+    <tr>
+      <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
+      <td><input type="checkbox" data-key="${f.key}" class="dof-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
+      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="dof-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">Add Item Master fields first</td></tr>';
+}
+async function saveDetailOrderFields(){
+  const err = document.getElementById('fieldErr'); err.style.display='none';
+  const orderFields = Array.from(document.querySelectorAll('.dof-show')).filter(el => el.checked).map(el => {
+    const key = el.dataset.key;
+    const totalEl = document.querySelector(`.dof-total[data-key="${key}"]`);
+    return { key, showTotal: totalEl ? totalEl.checked : false };
+  });
+  const showImages = document.getElementById('detailShowImages').checked;
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/order-fields`, { method:'PUT', body: JSON.stringify({ orderFields, showImages }) });
+    alert('Order form saved.');
+    await reloadDetailFields();
+  } catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
 async function resetUserPassword(tenantId, userId, name){
   const pw = prompt(`New password for ${name} (min 6 characters):`);
   if (pw === null) return;

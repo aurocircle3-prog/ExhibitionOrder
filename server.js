@@ -658,6 +658,36 @@ app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) 
   res.json({ ok: true, settingsPermissions });
 });
 
+// Platform admin managing a tenant's Item Master fields and Order Form
+// directly — the primary path now, since these are locked from the company
+// admin by default (see requireSettingPermission above). No permission gate
+// here: the platform admin can always manage any tenant's configuration,
+// regardless of what's been opened up for that tenant's own admin. Built on
+// the exact same helpers as the tenant-scoped routes, so validation can
+// never drift between the two surfaces.
+app.post('/api/platform/tenants/:id/fields', platformAuth, async (req, res) => {
+  try { res.json(await createFieldForTenant(req.params.id, req.body)); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/fields/:fieldId', platformAuth, async (req, res) => {
+  try { await updateFieldForTenant(req.params.id, req.params.fieldId, req.body); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/fields/:fieldId/move', platformAuth, async (req, res) => {
+  try { await moveFieldForTenant(req.params.id, req.params.fieldId, req.body.direction); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.delete('/api/platform/tenants/:id/fields/:fieldId', platformAuth, async (req, res) => {
+  try { await deleteFieldForTenant(req.params.id, req.params.fieldId); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/order-fields', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const result = await saveOrderFieldsForTenant(tenant.id, req.body.orderFields, req.body.showImages);
+  res.json({ ok: true, ...result });
+});
+
 // ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
 app.get('/api/auth/setup-token/:token', async (req, res) => {
   const entry = await PasswordSetupTokenDB.findOne({ token: req.params.token });
@@ -803,19 +833,8 @@ app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), re
 // into a total — validated against the tenant's real fields so a stale/typo'd
 // key can't sneak in.
 app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderForm'), async (req, res) => {
-  const list = Array.isArray(req.body.orderFields) ? req.body.orderFields : [];
-  const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
-  const byKey = {}; fieldDefs.forEach(f => { byKey[f.key] = f; });
-  // Label/unit/type are pulled fresh from the real field def rather than
-  // trusting the client, so they can't drift out of sync with the field
-  // builder — type matters here specifically so formulas (below) can offer
-  // only numeric fields, not text ones that can't meaningfully be multiplied.
-  const orderFields = list
-    .filter(f => f && byKey[f.key])
-    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', type: byKey[f.key].type, showTotal: !!f.showTotal }));
-  const orderShowImages = req.body.showImages !== undefined ? !!req.body.showImages : true;
-  await TenantDB.update({ id: req.tenant.id }, { orderFields, orderShowImages });
-  res.json({ ok: true, orderFields, orderShowImages });
+  const result = await saveOrderFieldsForTenant(req.tenant.id, req.body.orderFields, req.body.showImages);
+  res.json({ ok: true, ...result });
 });
 
 // Order-level custom fields (Delivery Date, PO Number, etc.) — asked once
@@ -949,70 +968,96 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 });
 
 // ── ITEM MASTER FIELD DEFINITIONS — the "10-12 fields, add/delete, customer-wise" builder ──
-app.get('/api/fields', resolveTenant, auth, async (req, res) => {
-  const fields = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
-  res.json(fields);
-});
-
-app.post('/api/fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
-  const { label, type, options, decimals, unit } = req.body;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'Field label is required' });
+// Shared by the tenant-scoped field routes (gated by requireSettingPermission)
+// and the platform-admin equivalents below (which bypass that gate by
+// design — the platform admin can always manage any tenant's fields,
+// regardless of what's been opened up for that tenant's own admin). Single-
+// sourced so the two surfaces can never drift into different validation rules.
+async function createFieldForTenant(tenantId, body) {
+  const { label, type, options, decimals, unit } = body;
+  if (!label || !label.trim()) throw Object.assign(new Error('Field label is required'), { status: 400 });
   if (RESERVED_FIELD_LABELS.includes(label.trim().toLowerCase()))
-    return res.status(400).json({ error: `"${label.trim()}" is a built-in field already on every item` });
+    throw Object.assign(new Error(`"${label.trim()}" is a built-in field already on every item`), { status: 400 });
   const key = normalizeSlug(label).replace(/-/g, '_') || uuid().slice(0, 8);
-  if (await FieldDefDB.findOne({ tenantId: req.tenant.id, key, active: true }))
-    return res.status(400).json({ error: 'A field with a similar name already exists' });
-  const existing = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
+  if (await FieldDefDB.findOne({ tenantId, key, active: true }))
+    throw Object.assign(new Error('A field with a similar name already exists'), { status: 400 });
+  const existing = await FieldDefDB.find({ tenantId, active: true });
   const field = {
-    id: uuid(), tenantId: req.tenant.id, key, label: label.trim(),
+    id: uuid(), tenantId, key, label: label.trim(),
     type: type || 'text', options: Array.isArray(options) ? options : [],
     decimals: type === 'number' ? Math.max(0, Math.min(6, Number(decimals) || 0)) : 2,
     unit: type === 'number' ? String(unit || '').trim() : '',
     order: existing.length, isScannerKey: false, fixed: false, active: true, createdAt: new Date().toISOString(),
   };
   await FieldDefDB.create(field);
-  res.json(field);
-});
-
-app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
-  const field = await FieldDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
-  if (!field) return res.status(404).json({ error: 'Field not found' });
+  return field;
+}
+async function updateFieldForTenant(tenantId, fieldId, body) {
+  const field = await FieldDefDB.findOne({ id: fieldId, tenantId });
+  if (!field) throw Object.assign(new Error('Field not found'), { status: 404 });
   const updates = {};
-  if (req.body.label !== undefined && req.body.label.trim()) updates.label = req.body.label.trim();
-  if (req.body.options !== undefined) updates.options = req.body.options;
-  if (req.body.order !== undefined) updates.order = req.body.order;
-  if (req.body.type !== undefined && !field.fixed) updates.type = req.body.type; // fixed fields always stay text
-  if (req.body.decimals !== undefined) updates.decimals = Math.max(0, Math.min(6, Number(req.body.decimals) || 0));
-  if (req.body.unit !== undefined) updates.unit = String(req.body.unit).trim();
-  await FieldDefDB.update({ id: req.params.id }, updates);
-  res.json({ ok: true });
-});
-
-// Swaps this field's order with its neighbor — used by the ↑/↓ buttons in the field builder
-app.put('/api/fields/:id/move', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
-  const list = await FieldDefDB.find({ tenantId: req.tenant.id, active: true }); // sorted by order
-  const idx = list.findIndex(f => f.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Field not found' });
-  const swapIdx = req.body.direction === 'up' ? idx - 1 : idx + 1;
-  if (swapIdx < 0 || swapIdx >= list.length) return res.json({ ok: true }); // already at the edge
-  // Snapshot both ids/orders as primitives before writing — the lowdb dev
-  // fallback returns live object references from find(), so mutating one via
-  // update() would otherwise silently corrupt the other's captured order too.
+  if (body.label !== undefined && body.label.trim()) updates.label = body.label.trim();
+  if (body.options !== undefined) updates.options = body.options;
+  if (body.order !== undefined) updates.order = body.order;
+  if (body.type !== undefined && !field.fixed) updates.type = body.type; // fixed fields always stay text
+  if (body.decimals !== undefined) updates.decimals = Math.max(0, Math.min(6, Number(body.decimals) || 0));
+  if (body.unit !== undefined) updates.unit = String(body.unit).trim();
+  await FieldDefDB.update({ id: fieldId }, updates);
+}
+async function moveFieldForTenant(tenantId, fieldId, direction) {
+  const list = await FieldDefDB.find({ tenantId, active: true }); // sorted by order
+  const idx = list.findIndex(f => f.id === fieldId);
+  if (idx === -1) throw Object.assign(new Error('Field not found'), { status: 404 });
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= list.length) return; // already at the edge
   const aId = list[idx].id, aOrder = list[idx].order;
   const bId = list[swapIdx].id, bOrder = list[swapIdx].order;
   await FieldDefDB.update({ id: aId }, { order: bOrder });
   await FieldDefDB.update({ id: bId }, { order: aOrder });
-  res.json({ ok: true });
+}
+async function deleteFieldForTenant(tenantId, fieldId) {
+  const field = await FieldDefDB.findOne({ id: fieldId, tenantId });
+  if (!field) throw Object.assign(new Error('Field not found'), { status: 404 });
+  if (field.fixed) throw Object.assign(new Error(`"${field.label}" is a built-in field and can't be deleted`), { status: 400 });
+  await FieldDefDB.update({ id: fieldId }, { active: false });
+}
+async function saveOrderFieldsForTenant(tenantId, list, showImages) {
+  const fieldDefs = await FieldDefDB.find({ tenantId, active: true });
+  const byKey = {}; fieldDefs.forEach(f => { byKey[f.key] = f; });
+  const orderFields = (Array.isArray(list) ? list : [])
+    .filter(f => f && byKey[f.key])
+    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', type: byKey[f.key].type, showTotal: !!f.showTotal }));
+  const orderShowImages = showImages !== undefined ? !!showImages : true;
+  await TenantDB.update({ id: tenantId }, { orderFields, orderShowImages });
+  return { orderFields, orderShowImages };
+}
+
+app.get('/api/fields', resolveTenant, auth, async (req, res) => {
+  const fields = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
+  res.json(fields);
+});
+
+app.post('/api/fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
+  try { res.json(await createFieldForTenant(req.tenant.id, req.body)); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
+  try { await updateFieldForTenant(req.tenant.id, req.params.id, req.body); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Swaps this field's order with its neighbor — used by the ↑/↓ buttons in the field builder
+app.put('/api/fields/:id/move', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
+  try { await moveFieldForTenant(req.tenant.id, req.params.id, req.body.direction); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Soft-delete — keeps historical items readable even after a field is removed from the builder.
 // The two built-in fields (Item Code, Image Code) can never be deleted.
 app.delete('/api/fields/:id', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
-  const field = await FieldDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
-  if (!field) return res.status(404).json({ error: 'Field not found' });
-  if (field.fixed) return res.status(400).json({ error: `"${field.label}" is a built-in field and can't be deleted` });
-  await FieldDefDB.update({ id: req.params.id }, { active: false });
-  res.json({ ok: true });
+  try { await deleteFieldForTenant(req.tenant.id, req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ── ITEMS ─────────────────────────────────────────────────────────────────────
