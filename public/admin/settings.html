@@ -230,6 +230,7 @@ function renderColumns(){
           <label>Column type</label>
           <select onchange="updateColumn('${c._id}','type',this.value)">
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
+            <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
@@ -244,7 +245,7 @@ function renderColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
@@ -258,7 +259,7 @@ function renderColumns(){
         </div>` : ''}
       ${c.type === 'formula' ? `
         <div style="margin-top:10px">
-          <label>Formula <span class="muted">— use field names and qty, e.g. <code>price * qty</code>. Available: ${availableFields.map(f=>f.key).concat('qty').join(', ') || '(add fields to your Order Form first)'}</span></label>
+          <label>Formula <span class="muted">— use field names and qty with + − × / ^ and parentheses, e.g. <code>(price + 50) * qty</code>. Also supports round(), max(), min() — e.g. <code>round(price * 1.18)</code>. Available: ${availableFields.map(f=>f.key).concat('qty').join(', ') || '(add fields to your Order Form first)'}</span></label>
           <input placeholder="price * qty" value="${c.formula||''}" oninput="updateColumn('${c._id}','formula',this.value)">
           ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
         </div>` : ''}

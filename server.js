@@ -770,7 +770,7 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
 
   const columns = [];
   for (const raw of list) {
-    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield'].includes(raw.type)) {
+    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield', 'itemcode'].includes(raw.type)) {
       return res.status(400).json({ error: 'Each column needs a valid type' });
     }
     const width = Number(raw.width);
@@ -800,6 +800,8 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
       col.label = (raw.label || 'Photo').trim().slice(0, 60) || 'Photo';
     } else if (raw.type === 'remark') {
       col.label = (raw.label || 'Remark').trim().slice(0, 60) || 'Remark';
+    } else if (raw.type === 'itemcode') {
+      col.label = (raw.label || 'Item Code').trim().slice(0, 60) || 'Item Code';
     } else { // serial
       col.label = (raw.label || 'Sr. No.').trim().slice(0, 60) || 'Sr. No.';
     }

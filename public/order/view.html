@@ -130,6 +130,7 @@ function renderDynamicTable(order){
       if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], unitFor(col.fieldKey))}</td>`;
       if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;
       if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
+      if (col.type === 'itemcode') return `<td ${widthStyle(col.width)}>${item.scannerCode || ''}</td>`;
       if (col.type === 'formula') {
         try {
           const scope = { qty: Number(item.qty) || 0 };
