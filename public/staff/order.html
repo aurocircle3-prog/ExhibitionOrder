@@ -36,7 +36,10 @@
     <div class="error" id="scanErr"></div>
     <div class="grid cols-2">
       <input id="scanCode" placeholder="Scan or type item code, then Enter" autofocus onkeydown="if(event.key==='Enter')lookupItem()">
-      <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
+      <div class="btn-row">
+        <button class="primary" onclick="lookupItem()">Add item</button>
+        <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
+      </div>
     </div>
   </div>
 
@@ -89,15 +92,17 @@ async function refreshOfflineCache(){
     await ExoOffline.cacheItems(tenantSlug, items);
     await ExoOffline.cacheParties(tenantSlug, parties);
     renderCart();
+    await updateSyncBanner();
   } catch (e) { /* offline already — cache just won't refresh this pass */ }
 }
 
 async function updateSyncBanner(){
   const outbox = await ExoOffline.getOutbox(tenantSlug);
+  const cachedCount = await ExoOffline.countItems(tenantSlug);
   const banner = document.getElementById('syncBanner');
   if (!navigator.onLine) {
     banner.style.display = 'block';
-    banner.innerHTML = `<p style="margin:0"><b>📴 Offline</b> — orders you take now are saved on this device and will send automatically once you're back online.${outbox.length ? ` (${outbox.length} waiting)` : ''}</p>`;
+    banner.innerHTML = `<p style="margin:0"><b>📴 Offline</b> — ${cachedCount} item(s) available to scan from cache. Orders you take now are saved on this device and will send automatically once you're back online.${outbox.length ? ` (${outbox.length} waiting)` : ''}</p>`;
   } else if (outbox.length) {
     banner.style.display = 'block';
     banner.innerHTML = `<p style="margin:0">🔄 ${outbox.length} order(s) waiting to sync. <button class="ghost small" onclick="trySync()">Sync now</button></p>`;
@@ -106,13 +111,13 @@ async function updateSyncBanner(){
   }
 }
 async function trySync(){
-  const { synced, remaining } = await ExoOffline.flushOutbox(tenantSlug, EXO.apiFetch);
+  const { synced } = await ExoOffline.flushOutbox(tenantSlug, EXO.apiFetch);
   if (synced) await refreshOfflineCache();
   await updateSyncBanner();
 }
 window.addEventListener('online', () => { trySync(); });
 window.addEventListener('offline', updateSyncBanner);
-setInterval(trySync, 20000); // periodic retry — the 'online' event doesn't always fire on flaky wifi
+setInterval(() => { if (navigator.onLine) refreshOfflineCache(); trySync(); }, 20000); // periodic refresh + retry — 'online' doesn't always fire on flaky wifi
 
 (async function(){
   await refreshOfflineCache();
@@ -217,6 +222,7 @@ async function lookupItem(){
   try {
     const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
     addToCart(item);
+    ExoOffline.cacheItems(tenantSlug, [item]); // fire-and-forget — belt-and-suspenders on top of the page-load cache refresh
   } catch(e) {
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
     const cached = await ExoOffline.findItemByCode(tenantSlug, code.toUpperCase());

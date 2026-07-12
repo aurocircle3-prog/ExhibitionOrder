@@ -1066,7 +1066,13 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   };
   await OrderDB.create(order);
   logAudit(req, 'order.create', 'order', order.id, { orderNo: order.orderNo, partyId, itemCount: lineItems.length });
-  res.json({ ...order, shareUrl: `${APP_URL}/order/${order.shareToken}` });
+  // APP_URL is meant to be set explicitly in production, but a misconfigured
+  // or forgotten env var shouldn't silently break every shared order link —
+  // fall back to the actual request's host, which is always correct.
+  const baseUrl = (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000')
+    ? APP_URL
+    : `${req.protocol}://${req.get('host')}`;
+  res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
 });
 
 app.get('/api/orders', resolveTenant, auth, async (req, res) => {

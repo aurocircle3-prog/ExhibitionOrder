@@ -50,6 +50,10 @@
   async function cacheItems(tenantSlug, items) {
     await putAll('items', items.map(it => ({ key: tenantSlug + '::' + it.id, tenantSlug, item: it })));
   }
+  async function countItems(tenantSlug) {
+    const all = await getAll('items');
+    return all.filter(r => r.tenantSlug === tenantSlug).length;
+  }
   async function findItemByCode(tenantSlug, code) {
     const all = await getAll('items');
     const hit = all.find(r => r.tenantSlug === tenantSlug && r.item.scannerCode === code);
@@ -123,5 +127,5 @@
     return { synced, remaining };
   }
 
-  window.ExoOffline = { cacheItems, findItemByCode, cacheParties, searchPartiesOffline, queue, getOutbox, removeFromOutbox, flushOutbox };
+  window.ExoOffline = { cacheItems, countItems, findItemByCode, cacheParties, searchPartiesOffline, queue, getOutbox, removeFromOutbox, flushOutbox };
 })();
