@@ -240,20 +240,31 @@ const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 })
 const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
 const PlatformAdminDB = makeCollectionOps(PlatformAdmin, 'platformadmins');
 
+// Image Code matching is deliberately case-insensitive everywhere below —
+// "4K" and "4k" are treated as the same code. Staff typing codes by hand
+// across a long day at a booth will drift in case sooner or later, and a
+// silent mismatch there means an item quietly loses its shared photos with
+// no visible error, which is a worse failure than just normalizing it away.
+async function findImageSetCI(tenantId, imageCode) {
+  const needle = String(imageCode).trim().toLowerCase();
+  const all = await ImageSetDB.find({ tenantId });
+  return all.find(s => String(s.imageCode).trim().toLowerCase() === needle) || null;
+}
 async function findItemsByImageCode(tenantId, imageCode) {
+  const needle = String(imageCode).trim().toLowerCase();
   const items = await ItemDB.find({ tenantId, active: true });
-  return items.filter(it => String(it.fields?.imageCode || '').trim() === imageCode);
+  return items.filter(it => String(it.fields?.imageCode || '').trim().toLowerCase() === needle);
 }
 async function getImagesForCode(tenantId, imageCode) {
-  const set = await ImageSetDB.findOne({ tenantId, imageCode });
+  const set = await findImageSetCI(tenantId, imageCode);
   return set?.images || [];
 }
 // The single write path for "what photos does this Image Code have" —
 // upload, delete, and bulk-import all go through here so every item sharing
 // an Image Code always shows the same photos with no per-item re-upload.
 async function applyImagesForCode(tenantId, imageCode, images) {
-  const existing = await ImageSetDB.findOne({ tenantId, imageCode });
-  if (existing) await ImageSetDB.update({ tenantId, imageCode }, { images, updatedAt: new Date().toISOString() });
+  const existing = await findImageSetCI(tenantId, imageCode);
+  if (existing) await ImageSetDB.update({ id: existing.id }, { images, updatedAt: new Date().toISOString() });
   else await ImageSetDB.create({ id: uuid(), tenantId, imageCode, images, updatedAt: new Date().toISOString() });
   const items = await findItemsByImageCode(tenantId, imageCode);
   for (const it of items) await ItemDB.update({ id: it.id }, { images });
@@ -451,9 +462,12 @@ app.get('/api/companies/check-slug', async (req, res) => {
 
 // ── PLATFORM ADMIN (super admin) ─────────────────────────────────────────────
 // Entirely separate surface from the per-tenant API above — no resolveTenant,
-// no tenant-scoped auth(). Read-only by design: lets AuroCircle see every
-// company's account details, users, and settings without being able to
-// silently edit a tenant's own data through this surface.
+// no tenant-scoped auth(). Mostly read-only by design: lets AuroCircle see
+// every company's account details, users, and settings without being able to
+// silently edit a tenant's own data through this surface. The one deliberate
+// exception is password reset below — a company admin locked out has no
+// other way back in, and this keeps that capability narrow (password only,
+// nothing else about the account) rather than opening general user editing.
 app.post('/api/platform/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
@@ -500,6 +514,29 @@ app.get('/api/platform/tenants/:id', platformAuth, async (req, res) => {
     counts: { itemCount, orderCount, partyCount, exhibitionCount },
     recentOrders: orders.slice(0, 10),
   });
+});
+
+// Lets the platform admin reset any user's password in any tenant — for
+// when a company admin is locked out and has no other way back in. Logged
+// to that tenant's own audit trail (actor recorded as the platform admin,
+// not a tenant user) so this is never a silent, invisible action.
+app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platformAuth, async (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const tenant = await TenantDB.findOne({ id: req.params.tenantId });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const user = await UserDB.findOne({ id: req.params.userId, tenantId: tenant.id });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  await UserDB.update({ id: user.id }, { password: bcrypt.hashSync(newPassword, 10) });
+  const entry = {
+    id: uuid(), tenantId: tenant.id,
+    actorId: req.platformAdmin.id, actorName: `${req.platformAdmin.name} (platform admin)`, actorRole: 'platform_admin',
+    action: 'user.password_reset_by_platform', entityType: 'user', entityId: user.id,
+    changes: { targetUser: user.email || user.loginId }, ip: req.ip, createdAt: new Date().toISOString(),
+  };
+  AuditLogDB.create(entry).catch(err => log.error({ err }, 'Failed to write audit log'));
+  log.info({ tenant: tenant.slug, targetUser: user.email, platformAdmin: req.platformAdmin.email }, 'Platform admin reset a user password');
+  res.json({ ok: true });
 });
 
 app.post('/api/companies/register', async (req, res) => {
@@ -736,7 +773,7 @@ function normalizeFieldValues(fieldDefs, rawFields) {
   const out = {};
   for (const [key, val] of Object.entries(rawFields || {})) {
     const def = fieldDefs.find(f => f.key === key);
-    if (key === 'itemCode' && val !== '' && val !== null && val !== undefined) {
+    if ((key === 'itemCode' || key === 'imageCode') && val !== '' && val !== null && val !== undefined) {
       out[key] = String(val).trim().toUpperCase();
     } else if (def?.type === 'number' && val !== '' && val !== null && val !== undefined) {
       const n = Number(val);
@@ -796,11 +833,11 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     updates.fields = { ...item.fields, ...normalizeFieldValues(fieldDefs, req.body.fields) };
     updates.scannerCode = scannerCodeOf(updates.fields);
-    const oldCode = String(item.fields?.imageCode || '').trim();
-    const newCode = String(updates.fields.imageCode || '').trim();
+    const oldCode = String(item.fields?.imageCode || '').trim().toLowerCase();
+    const newCode = String(updates.fields.imageCode || '').trim().toLowerCase();
     // Image Code changed — this item now belongs to a different (or no)
     // shared photo set, so swap its images to match rather than keep stale ones.
-    if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, newCode) : [];
+    if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
   }
   await ItemDB.update({ id: req.params.id }, updates);
   res.json({ ok: true });
@@ -872,7 +909,7 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
     if (!req.files?.length) return res.status(400).json({ error: 'No files uploaded' });
 
     const items = await ItemDB.find({ tenantId: req.tenant.id, active: true });
-    const codesInUse = new Set(items.map(it => String(it.fields?.imageCode || '').trim()).filter(Boolean));
+    const codesInUse = new Set(items.map(it => String(it.fields?.imageCode || '').trim().toLowerCase()).filter(Boolean));
 
     const groups = {};
     req.files.forEach(file => {
@@ -883,7 +920,7 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
     let matched = 0, unmatchedCode = 0, full = 0;
     for (const code of Object.keys(groups)) {
       const candidates = groups[code].sort((a, b) => a.slot - b.slot);
-      if (!codesInUse.has(code)) { unmatchedCode += candidates.length; continue; }
+      if (!codesInUse.has(code.toLowerCase())) { unmatchedCode += candidates.length; continue; }
 
       const images = await getImagesForCode(req.tenant.id, code);
       for (const c of candidates) {

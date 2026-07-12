@@ -71,6 +71,8 @@ td.thumb-cell{width:56px}
 .lightbox-prev{left:16px}
 .lightbox-next{right:16px}
 .lightbox-count{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;background:rgba(255,255,255,.15);padding:4px 12px;border-radius:20px}
+.crop-box{background:#fff;border-radius:12px;padding:18px;max-width:520px;width:92vw;max-height:85vh;overflow:auto}
+.crop-canvas-wrap{max-height:60vh;overflow:hidden;background:#111;border-radius:8px}
 @media (max-width:640px){
   .lightbox-nav{font-size:22px;padding:6px 12px}
   .lightbox-close{top:10px;right:14px}

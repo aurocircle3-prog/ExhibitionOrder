@@ -1,7 +1,9 @@
 <title>Take Order — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.css">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.js"></script>
 <div id="nav"></div>
 <div class="wrap">
   <div class="card" id="syncBanner" style="display:none"></div>
@@ -17,8 +19,8 @@
       <input id="partySearch" placeholder="98765..." oninput="searchParty(this.value)">
       <div id="partyResults"></div>
       <p class="muted" style="margin:14px 0 6px">— or —</p>
-      <label>Photograph visiting card</label>
-      <input type="file" id="cardFile" accept="image/*" capture="environment" onchange="scanCard()">
+      <label>Photograph or upload visiting card</label>
+      <input type="file" id="cardFile" accept="image/*" onchange="onCardFileSelected(event)">
       <div id="cardPreview" style="margin-top:10px"></div>
       <p class="muted" id="ocrStatus" style="display:none;margin-top:6px"></p>
       <div class="grid cols-2" style="margin-top:10px">
@@ -28,6 +30,18 @@
         <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
       </div>
       <button class="primary" style="margin-top:12px" onclick="createParty()">Use this buyer</button>
+    </div>
+  </div>
+
+  <div class="lightbox" id="cropModal">
+    <div class="crop-box">
+      <p class="muted" style="margin:0 0 10px">Drag the corners to frame just the card, then confirm.</p>
+      <div class="crop-canvas-wrap"><img id="cropImg" style="max-width:100%"></div>
+      <div class="btn-row" style="margin-top:14px;justify-content:center">
+        <button class="primary" onclick="confirmCrop()">Use this crop</button>
+        <button class="ghost" onclick="skipCrop()">Use full photo</button>
+        <button class="ghost" onclick="cancelCrop()">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -146,37 +160,80 @@ function showPartyPicked(){
 function clearParty(){ party = null; document.getElementById('partyPicker').style.display='block'; document.getElementById('partyPicked').style.display='none'; }
 
 let cardImageUrl = '';
+let cropper = null, pendingCardFile = null;
+
+function onCardFileSelected(event){
+  const file = event.target.files[0];
+  if (!file) return;
+  pendingCardFile = file;
+  const img = document.getElementById('cropImg');
+  img.src = URL.createObjectURL(file);
+  document.getElementById('cropModal').classList.add('open');
+  img.onload = () => {
+    if (cropper) cropper.destroy();
+    cropper = new Cropper(img, { viewMode: 1, autoCropArea: 0.9, background: false });
+  };
+}
+function closeCropModal(){
+  document.getElementById('cropModal').classList.remove('open');
+  if (cropper) { cropper.destroy(); cropper = null; }
+}
+function cancelCrop(){
+  closeCropModal();
+  document.getElementById('cardFile').value = '';
+  pendingCardFile = null;
+}
+function confirmCrop(){
+  if (!cropper) return;
+  cropper.getCroppedCanvas({ imageSmoothingQuality: 'high' }).toBlob(blob => {
+    closeCropModal();
+    processCardImage(blob, pendingCardFile.name);
+  }, 'image/jpeg', 0.92);
+}
+function skipCrop(){
+  const file = pendingCardFile;
+  closeCropModal();
+  processCardImage(file, file.name);
+}
+
 // Reads the card entirely in the browser (Tesseract.js, WASM) — works with no
 // server-side setup, unlike the optional Google Vision path (OCR_API_KEY).
 // This keeps working offline too, as long as the browser already cached the
 // Tesseract script + language data from an earlier online visit.
+//
+// Parsing heuristic: OCR text from a business card has no reliable line
+// order (logo text, tagline, address lines all mixed in), so rather than
+// blindly assuming line 0 is the firm and line 1 is the contact, this pulls
+// phone/email out by pattern first, then picks the two longest remaining
+// text lines as firm/contact name guesses — usually the most prominent
+// text on a card, and no longer confused by a phone or email landing first.
 async function readCardWithTesseract(file){
   try {
     const { data: { text } } = await Tesseract.recognize(file, 'eng');
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const phoneMatch = text.match(/(\+?\d[\d\s-]{8,}\d)/);
+    const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const phoneMatches = [...text.matchAll(/(\+?\d[\d\s-]{8,}\d)/g)].map(m => m[1].replace(/\s+/g, ''));
     const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    const isNoise = l => /(@|www\.|\.com|^\+?\d[\d\s-]{7,}\d$)/i.test(l) || l.length < 2;
+    const nameLines = rawLines.filter(l => !isNoise(l)).sort((a, b) => b.length - a.length);
     return {
-      firmName: lines[0] || '', contactPerson: lines[1] || '',
-      phone: phoneMatch ? phoneMatch[1].replace(/\s+/g, '') : '',
-      email: emailMatch ? emailMatch[0] : '',
+      firmName: nameLines[0] || '', contactPerson: nameLines[1] || '',
+      phone: phoneMatches[0] || '', email: emailMatch ? emailMatch[0] : '',
     };
   } catch (e) { console.error('[OCR] Tesseract failed:', e); return { firmName: '', contactPerson: '', phone: '', email: '' }; }
 }
-async function scanCard(){
+async function processCardImage(fileOrBlob, filename){
   const err = document.getElementById('partyErr'); err.style.display='none';
-  const file = document.getElementById('cardFile').files[0];
-  if (!file) return;
-  document.getElementById('cardPreview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:220px;border-radius:8px">`;
+  document.getElementById('cardPreview').innerHTML = `<img src="${URL.createObjectURL(fileOrBlob)}" style="max-width:220px;border-radius:8px">`;
   const status = document.getElementById('ocrStatus');
   status.style.display = 'block'; status.textContent = 'Reading card… (a few seconds)';
   // In-browser OCR always runs; the server-side card upload (for a saved
   // card image + Vision fallback) is skipped gracefully if there's no
   // connection — staff aren't blocked just because the upload can't happen yet.
-  const ocrGuess = await readCardWithTesseract(file);
+  const ocrGuess = await readCardWithTesseract(fileOrBlob);
   let serverGuess = null;
   try {
-    const res = await EXO.apiFetch('/parties/scan-card', { method:'POST', body: (() => { const fd = new FormData(); fd.append('card', file); return fd; })() });
+    const fd = new FormData(); fd.append('card', fileOrBlob, filename || 'card.jpg');
+    const res = await EXO.apiFetch('/parties/scan-card', { method:'POST', body: fd });
     cardImageUrl = res.cardImageUrl;
     serverGuess = res.guess;
   } catch (e) {
@@ -189,6 +246,10 @@ async function scanCard(){
   document.getElementById('phone').value = guess.phone || '';
   document.getElementById('email').value = guess.email || '';
   status.style.display = 'none';
+  if (!guess.firmName && !guess.phone) {
+    status.style.display = 'block';
+    status.textContent = "Couldn't read the card clearly — please fill the details in manually below.";
+  }
 }
 async function createParty(){
   const err = document.getElementById('partyErr'); err.style.display='none';

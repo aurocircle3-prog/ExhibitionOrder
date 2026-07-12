@@ -26,7 +26,7 @@
 
     <h4>Users</h4>
     <div class="table-scroll"><table>
-      <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th></tr></thead>
+      <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
       <tbody id="detailUsers"></tbody>
     </table></div>
 
@@ -96,7 +96,8 @@ async function openDetail(id){
     <tr>
       <td>${u.name}</td><td>${u.role}</td><td>${u.loginId}</td><td>${u.phone || '—'}</td>
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">No users</td></tr>';
+      <td><button class="ghost small" onclick="resetUserPassword('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Reset password</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
 
   document.getElementById('detailOrderFields').textContent = (tenant.orderFields || []).length
     ? tenant.orderFields.map(f => f.label || f.key).join(', ')
@@ -116,6 +117,15 @@ async function openDetail(id){
   document.getElementById('detailCard').scrollIntoView({ behavior: 'smooth' });
 }
 function closeDetail(){ document.getElementById('detailCard').style.display = 'none'; }
+async function resetUserPassword(tenantId, userId, name){
+  const pw = prompt(`New password for ${name} (min 6 characters):`);
+  if (pw === null) return;
+  if (pw.length < 6) { alert('Password must be at least 6 characters'); return; }
+  try {
+    await platformFetch(`/tenants/${tenantId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword: pw }) });
+    alert(`Password updated for ${name}.`);
+  } catch (e) { alert(e.message); }
+}
 
 load();
 </script>

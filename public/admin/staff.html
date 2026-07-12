@@ -35,10 +35,20 @@ async function load(){
       <td>${s.name}</td><td>${s.loginId}</td><td>${s.phone||'—'}</td>
       <td>${s.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
+        <button class="ghost small" onclick="resetPassword('${s.id}','${s.name.replace(/'/g,"\\'")}')">Reset password</button>
         <button class="ghost small" onclick="toggle('${s.id}', ${!s.active})">${s.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="remove('${s.id}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No staff yet</td></tr>';
+}
+async function resetPassword(id, name){
+  const pw = prompt(`New password for ${name} (min 6 characters):`);
+  if (pw === null) return; // cancelled
+  if (pw.length < 6) { alert('Password must be at least 6 characters'); return; }
+  try {
+    await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
+    alert(`Password updated for ${name}.`);
+  } catch(e) { alert(e.message); }
 }
 async function addStaff(){
   const err = document.getElementById('err'); err.style.display='none';
