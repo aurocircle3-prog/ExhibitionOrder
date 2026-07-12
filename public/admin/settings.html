@@ -7,6 +7,7 @@
   <div class="tabs">
     <button class="tab-btn" data-tab="company" onclick="switchTab('company')">Company</button>
     <button class="tab-btn" data-tab="orderform" onclick="switchTab('orderform')">Order Form</button>
+    <button class="tab-btn" data-tab="orderdetails" onclick="switchTab('orderdetails')">Order Details Fields</button>
     <button class="tab-btn" data-tab="layout" onclick="switchTab('layout')">Order View Layout</button>
     <button class="tab-btn" data-tab="exhibitions" onclick="switchTab('exhibitions')">Exhibitions</button>
   </div>
@@ -35,6 +36,16 @@
       </table></div>
       <p class="muted" style="margin-top:8px">"Show total" adds up that field's value × quantity across the whole order (e.g. total weight) — only makes sense for number fields.</p>
       <button class="primary" onclick="saveOrderFields()">Save order form</button>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-orderdetails">
+    <div class="card">
+      <h3 style="margin-top:0">Order Details Fields <span class="muted">— asked once per order (not per item), e.g. Delivery Date, PO Number</span></h3>
+      <div id="customFieldRows"></div>
+      <button class="ghost" style="margin-top:10px" onclick="addCustomField()">+ Add field</button>
+      <div class="error" id="cfErr"></div>
+      <button class="primary" style="margin-top:14px" onclick="saveCustomFields()">Save order details fields</button>
     </div>
   </div>
 
@@ -81,6 +92,9 @@ async function load(){
   document.getElementById('slugShow').textContent = me.tenant.slug;
   document.getElementById('showImages').checked = me.tenant.orderShowImages !== false;
   await loadOrderFields(me.tenant.orderFields || []);
+  customFields = (me.tenant.orderCustomFields || []).map(f => ({ ...f }));
+  renderCustomFields();
+  orderFieldDefs = me.tenant.orderCustomFields || [];
   columns = (me.tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || cid() }));
   renderColumns();
   loadExhibitions();
@@ -130,7 +144,48 @@ async function saveOrderFields(){
   catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Save failed — see error above', 'error'); }
 }
 
-// ── Order View Layout (column builder) ──
+// ── Order Details Fields (order-level, not per-item) ──
+let customFields = [];
+let orderFieldDefs = []; // same list, kept for the column builder's dropdown
+function addCustomField(){
+  customFields.push({ label: '', type: 'text', decimals: 2 });
+  renderCustomFields();
+}
+function removeCustomFieldAt(i){ customFields.splice(i, 1); renderCustomFields(); }
+function updateCustomFieldAt(i, key, value){ customFields[i][key] = value; if (key === 'type') renderCustomFields(); }
+function renderCustomFields(){
+  document.getElementById('customFieldRows').innerHTML = customFields.map((f, i) => `
+    <div class="grid cols-3" style="margin-top:${i===0?0:10}px;align-items:end">
+      <div><label>Field name</label><input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateCustomFieldAt(${i},'label',this.value)"></div>
+      <div>
+        <label>Type</label>
+        <select onchange="updateCustomFieldAt(${i},'type',this.value)">
+          <option value="text" ${f.type==='text'?'selected':''}>Text</option>
+          <option value="number" ${f.type==='number'?'selected':''}>Number</option>
+        </select>
+      </div>
+      ${f.type === 'number'
+        ? `<div><label>Decimal places</label><input type="number" min="0" max="6" value="${f.decimals ?? 2}" oninput="updateCustomFieldAt(${i},'decimals',this.value)"></div>`
+        : `<div><button class="danger small" onclick="removeCustomFieldAt(${i})">Remove</button></div>`}
+      ${f.type === 'number' ? `<div style="grid-column:1/-1"><button class="danger small" onclick="removeCustomFieldAt(${i})">Remove</button></div>` : ''}
+    </div>`).join('') || '<p class="muted">No order details fields yet.</p>';
+}
+async function saveCustomFields(){
+  const err = document.getElementById('cfErr'); err.style.display = 'none';
+  if (customFields.some(f => !f.label.trim())) {
+    err.textContent = 'Every field needs a name';
+    err.style.display = 'block';
+    EXO.toast('Save failed — see error above', 'error');
+    return;
+  }
+  try {
+    const res = await EXO.apiFetch('/companies/order-custom-fields', { method: 'PUT', body: JSON.stringify({ fields: customFields }) });
+    orderFieldDefs = res.fields;
+    EXO.toast('Order details fields saved');
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; EXO.toast('Save failed — see error above', 'error'); }
+}
+
+
 let columns = [];
 let availableFields = [];
 function cid(){ return 'c' + Math.random().toString(36).slice(2); }
@@ -177,6 +232,7 @@ function renderColumns(){
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
+            <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
             <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
             <option value="serial" ${c.type==='serial'?'selected':''}>Sr. No.</option>
           </select>
@@ -188,12 +244,17 @@ function renderColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
           <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${fieldOptions || '<option value="">— add fields to your Order Form first —</option>'}</select>
+        </div>` : ''}
+      ${c.type === 'orderfield' ? `
+        <div style="margin-top:10px">
+          <label>Which order details field <span class="muted">— one value per order; shown the same in every row</span></label>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${orderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields in the Order Details Fields tab first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'formula' ? `
         <div style="margin-top:10px">
@@ -218,8 +279,8 @@ async function saveColumns(){
       EXO.toast('Save failed — see error above', 'error');
       return;
     }
-    if (c.type === 'field' && !c.fieldKey) {
-      err.textContent = 'Every Field column needs a field selected';
+    if ((c.type === 'field' || c.type === 'orderfield') && !c.fieldKey) {
+      err.textContent = `Every ${c.type === 'field' ? 'Field' : 'Order detail'} column needs a field selected`;
       err.style.display = 'block';
       EXO.toast('Save failed — see error above', 'error');
       return;

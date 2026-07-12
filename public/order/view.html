@@ -50,9 +50,8 @@ async function load(){
     const { order, company } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Exhibition Order');
 
-    const { headerCells, rows } = (order.columnsSnapshot && order.columnsSnapshot.length)
-      ? renderDynamicTable(order)
-      : renderLegacyTable(order);
+    const isDynamic = !!(order.columnsSnapshot && order.columnsSnapshot.length);
+    const { headerCells, rows } = isDynamic ? renderDynamicTable(order) : renderLegacyTable(order);
 
     const extraFields = order.orderFieldsSnapshot || [];
     const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
@@ -65,7 +64,7 @@ async function load(){
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
         <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
-        <div class="table-scroll"><table class="dynamic-order-table">
+        <div class="table-scroll"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
@@ -114,7 +113,7 @@ function renderDynamicTable(order){
   const extraFields = order.orderFieldsSnapshot || [];
   const unitFor = key => extraFields.find(f => f.key === key)?.unit || '';
   const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
-  const widthStyle = w => `style="width:${w}ch;max-width:${w}ch;white-space:normal;word-break:break-word"`;
+  const widthStyle = w => `style="width:${w}ch"`;
 
   const headerCells = order.columnsSnapshot.map(col => `<th ${widthStyle(col.width)}>${col.label}</th>`).join('');
 
@@ -129,6 +128,7 @@ function renderDynamicTable(order){
           </div>` : ''}</td>`;
       }
       if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], unitFor(col.fieldKey))}</td>`;
+      if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;
       if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
       if (col.type === 'formula') {
         try {

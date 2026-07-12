@@ -60,6 +60,7 @@
   <div class="card">
     <h3 style="margin-top:0">3. Cart <span class="muted" id="cartTotal"></span></h3>
     <div id="cartRows"><p class="muted">No items scanned yet</p></div>
+    <div id="orderDetailFields"></div>
     <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
     <textarea id="remark" rows="2"></textarea>
     <button class="primary" style="margin-top:14px" onclick="submitOrder()">Create order</button>
@@ -103,11 +104,29 @@ async function refreshOfflineCache(){
       EXO.apiFetch('/items'), EXO.apiFetch('/parties'), EXO.apiFetch('/me'),
     ]);
     orderFields = me.tenant?.orderFields || [];
+    if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
+      orderCustomFields = me.tenant?.orderCustomFields || [];
+      renderOrderDetailFields();
+    }
     await ExoOffline.cacheItems(tenantSlug, items);
     await ExoOffline.cacheParties(tenantSlug, parties);
     renderCart();
     await updateSyncBanner();
   } catch (e) { /* offline already — cache just won't refresh this pass */ }
+}
+
+// ── Order Details fields — asked once per order, not per item ──
+let orderCustomFields = [];
+let orderDetailValues = {};
+function renderOrderDetailFields(){
+  const box = document.getElementById('orderDetailFields');
+  if (!orderCustomFields.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<label style="margin-top:14px">Order details</label>` + orderCustomFields.map(f => `
+    <div style="margin-top:6px">
+      <label class="muted" style="font-weight:400">${f.label}</label>
+      <input type="${f.type==='number'?'number':'text'}" ${f.type==='number'?`step="${1/Math.pow(10, f.decimals ?? 2)}"`:''}
+        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value">
+    </div>`).join('');
 }
 
 async function updateSyncBanner(){
@@ -332,7 +351,7 @@ async function submitOrder(){
   const err = document.getElementById('scanErr'); err.style.display='none';
   if (!party) { err.textContent = 'Pick or create a buyer first'; err.style.display='block'; return; }
   if (!cart.length) { err.textContent = 'Scan at least one item'; err.style.display='block'; return; }
-  const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim() };
+  const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim(), customFields: orderDetailValues };
   try {
     lastOrder = await EXO.apiFetch('/orders', { method:'POST', body: JSON.stringify(body) });
     document.getElementById('shareCard').style.display = 'block';
@@ -357,6 +376,7 @@ function copyLink(){ document.getElementById('shareUrl').select(); document.exec
 function newOrder(){
   cart = []; renderCart(); clearParty();
   document.getElementById('remark').value='';
+  orderDetailValues = {}; renderOrderDetailFields();
   document.getElementById('shareCard').style.display='none';
   document.getElementById('queuedCard').style.display='none';
   document.getElementById('scanCode').focus();

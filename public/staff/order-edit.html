@@ -16,6 +16,7 @@
     <input id="scanCode" placeholder="Scan or type item code, then Enter" onkeydown="if(event.key==='Enter')lookupItem()">
 
     <div id="cartRows" style="margin-top:14px"></div>
+    <div id="orderDetailFields"></div>
 
     <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
     <textarea id="remark" rows="2"></textarea>
@@ -35,7 +36,7 @@
 const currentUser = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 
-let order = null, cart = [], orderFields = [];
+let order = null, cart = [], orderFields = [], orderCustomFields = [], orderDetailValues = {};
 const orderId = new URLSearchParams(location.search).get('id');
 
 function showBlocked(msg){
@@ -49,6 +50,7 @@ async function load(){
   try {
     const me = await EXO.apiFetch('/me');
     orderFields = me.tenant?.orderFields || [];
+    orderCustomFields = me.tenant?.orderCustomFields || [];
     order = await EXO.apiFetch('/orders/' + orderId);
   } catch (e) { return showBlocked(e.message); }
   if (order.status !== 'pending') return showBlocked('Only pending orders can be edited — this order is ' + order.status + '.');
@@ -56,14 +58,26 @@ async function load(){
   // Existing order lines already carry their own saved extra/comment values —
   // edit those in place rather than re-pulling fresh item master defaults.
   cart = order.items.map(i => ({ itemId: i.itemId, label: i.label, code: i.scannerCode, qty: i.qty, extra: { ...(i.extra || {}) }, comment: i.comment || '' }));
+  orderDetailValues = { ...(order.customFields || {}) };
   document.getElementById('orderNo').textContent = '· ' + order.orderNo;
   document.getElementById('partyName').textContent = order.partyName;
   document.getElementById('partyPhone').textContent = order.partyPhone;
   document.getElementById('remark').value = order.remark || '';
   renderCart();
+  renderOrderDetailFields();
   document.getElementById('loadingCard').style.display = 'none';
   document.getElementById('editCard').style.display = 'block';
   document.getElementById('scanCode').focus();
+}
+function renderOrderDetailFields(){
+  const box = document.getElementById('orderDetailFields');
+  if (!orderCustomFields.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<label style="margin-top:14px">Order details</label>` + orderCustomFields.map(f => `
+    <div style="margin-top:6px">
+      <label class="muted" style="font-weight:400">${f.label}</label>
+      <input type="${f.type==='number'?'number':'text'}" ${f.type==='number'?`step="${1/Math.pow(10, f.decimals ?? 2)}"`:''}
+        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value">
+    </div>`).join('');
 }
 
 async function lookupItem(){
@@ -119,6 +133,7 @@ async function saveOrder(){
       body: JSON.stringify({
         items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })),
         remark: document.getElementById('remark').value.trim(),
+        customFields: orderDetailValues,
       }),
     });
     location.href = '/staff/orders.html';

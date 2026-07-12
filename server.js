@@ -73,6 +73,10 @@ const tenantSchema = new mongoose.Schema({
   // 'images' | 'field' | 'formula' | 'serial'. Empty array = fall back to
   // the legacy fixed layout (images + orderFields + qty) for tenants who
   // haven't configured this yet, so existing orders keep rendering the same.
+  // Order-level fields — entered ONCE per order (e.g. "Delivery Date",
+  // "PO Number"), unlike item fields which are per line item. Each is
+  // {key, label, type: 'text'|'number', decimals}.
+  orderCustomFields: { type: [mongoose.Schema.Types.Mixed], default: [] },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -135,6 +139,10 @@ const orderSchema = new mongoose.Schema({
   // means the tenant hadn't configured custom columns yet at that time, so
   // the view page falls back to the legacy fixed layout for this order.
   columnsSnapshot: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Order-level field values (e.g. Delivery Date, PO Number) — one value
+  // per order, not per line item. Unlike orderFieldsSnapshot/fieldTotals,
+  // this isn't "frozen" at creation; it's just data, edited like remark.
+  customFields: { type: mongoose.Schema.Types.Mixed, default: {} },
   showImages: { type: Boolean, default: true },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   shareToken: { type: String, unique: true, sparse: true },
@@ -691,6 +699,47 @@ app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin')
   res.json({ ok: true, orderFields, orderShowImages });
 });
 
+// Order-level custom fields (Delivery Date, PO Number, etc.) — asked once
+// per order while taking it, not per item. Kept deliberately simple next to
+// Item Master fields: just a key/label/type, no scanner keys or options.
+app.put('/api/companies/order-custom-fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const list = Array.isArray(req.body.fields) ? req.body.fields : [];
+  const seen = new Set();
+  const fields = [];
+  for (const raw of list) {
+    const label = String(raw?.label || '').trim().slice(0, 60);
+    if (!label) return res.status(400).json({ error: 'Every order field needs a name' });
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `field_${fields.length}`;
+    if (seen.has(key)) return res.status(400).json({ error: `Two fields produced the same key ("${label}") — use distinct names` });
+    seen.add(key);
+    const type = raw.type === 'number' ? 'number' : 'text';
+    const decimals = type === 'number' ? Math.min(Math.max(Number(raw.decimals) || 0, 0), 6) : undefined;
+    fields.push({ key, label, type, ...(decimals !== undefined ? { decimals } : {}) });
+  }
+  await TenantDB.update({ id: req.tenant.id }, { orderCustomFields: fields });
+  res.json({ ok: true, fields });
+});
+
+// Shared by order create + edit — normalizes order-level custom field
+// values against the tenant's defined fields, same defensive pattern as
+// normalizeFieldValues: unknown keys are dropped, numbers are coerced and
+// rounded to the field's configured decimals.
+function normalizeCustomFields(defs, raw) {
+  const out = {};
+  const byKey = {}; defs.forEach(f => { byKey[f.key] = f; });
+  for (const [key, val] of Object.entries(raw || {})) {
+    const def = byKey[key];
+    if (!def) continue;
+    if (def.type === 'number' && val !== '' && val !== null && val !== undefined) {
+      const n = Number(val);
+      out[key] = isNaN(n) ? '' : Number(n.toFixed(def.decimals ?? 2));
+    } else {
+      out[key] = String(val ?? '').slice(0, 500);
+    }
+  }
+  return out;
+}
+
 // The buyer-facing order link's layout — an ordered list of columns, each
 // independently typed (photos / a specific field / a computed formula /
 // row number) with its own header text and width. Formulas are validated
@@ -716,10 +765,12 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
   const orderFields = req.tenant.orderFields || [];
   const allowedFieldKeys = new Set(orderFields.map(f => f.key));
   const allowedFormulaNames = new Set([...allowedFieldKeys, 'qty']);
+  const orderCustomFields = req.tenant.orderCustomFields || [];
+  const allowedOrderFieldKeys = new Set(orderCustomFields.map(f => f.key));
 
   const columns = [];
   for (const raw of list) {
-    if (!raw || !['images', 'field', 'formula', 'serial', 'remark'].includes(raw.type)) {
+    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield'].includes(raw.type)) {
       return res.status(400).json({ error: 'Each column needs a valid type' });
     }
     const width = Number(raw.width);
@@ -731,6 +782,11 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
     if (raw.type === 'field') {
       if (!allowedFieldKeys.has(raw.fieldKey)) return res.status(400).json({ error: `"${raw.fieldKey}" isn't a field on your Order Form — add it there first` });
       const f = orderFields.find(x => x.key === raw.fieldKey);
+      col.fieldKey = raw.fieldKey;
+      col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+    } else if (raw.type === 'orderfield') {
+      if (!allowedOrderFieldKeys.has(raw.fieldKey)) return res.status(400).json({ error: `"${raw.fieldKey}" isn't one of your Order Details fields — add it there first` });
+      const f = orderCustomFields.find(x => x.key === raw.fieldKey);
       col.fieldKey = raw.fieldKey;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
     } else if (raw.type === 'formula') {
@@ -1276,7 +1332,7 @@ async function nextOrderNo(tenant) {
 }
 
 app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const { partyId, exhibitionId, items, remark } = req.body;
+  const { partyId, exhibitionId, items, remark, customFields } = req.body;
   if (!partyId || !Array.isArray(items) || !items.length)
     return res.status(400).json({ error: 'partyId and at least one item are required' });
   const party = await PartyDB.findOne({ id: partyId, tenantId: req.tenant.id });
@@ -1296,6 +1352,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     items: lineItems, remark: remark || '', status: 'pending',
     orderFieldsSnapshot: orderFields, fieldTotals,
     columnsSnapshot: req.tenant.orderViewColumns || [],
+    customFields: normalizeCustomFields(req.tenant.orderCustomFields || [], customFields),
     showImages: req.tenant.orderShowImages !== false,
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };
@@ -1342,7 +1399,7 @@ app.put('/api/orders/:id', resolveTenant, auth, requireRole('admin', 'staff'), a
     return res.status(403).json({ error: 'You can only edit your own orders' });
   if (order.status !== 'pending') return res.status(400).json({ error: 'Only pending orders can be edited' });
 
-  const { items, remark, exhibitionId } = req.body;
+  const { items, remark, exhibitionId, customFields } = req.body;
   const updates = {};
   if (items !== undefined) {
     if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'At least one item is required' });
@@ -1353,6 +1410,7 @@ app.put('/api/orders/:id', resolveTenant, auth, requireRole('admin', 'staff'), a
   }
   if (remark !== undefined) updates.remark = remark;
   if (exhibitionId !== undefined) updates.exhibitionId = exhibitionId;
+  if (customFields !== undefined) updates.customFields = normalizeCustomFields(req.tenant.orderCustomFields || [], customFields);
 
   await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, updates);
   logAudit(req, 'order.update', 'order', req.params.id, { orderNo: order.orderNo, itemCount: updates.items?.length });
