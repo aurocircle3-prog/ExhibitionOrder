@@ -309,6 +309,20 @@ async function importBulkImages(){
 
 (async function init(){
   await loadFields(); await loadItems(); renderExistingPhotos();
-  switchTab(localStorage.getItem('exo_itemmaster_tab') || 'fields');
+
+  // Field management (add/edit/delete/reorder) is platform-admin granted,
+  // default-deny, same model as the rest of Settings — AuroCircle sets up
+  // the field structure based on what the client asked for; the client only
+  // sees the Fields tab at all if that's been explicitly opened up for them.
+  try {
+    const me = await EXO.apiFetch('/me');
+    if (me.tenant?.settingsPermissions?.itemMasterFields !== true) {
+      document.querySelector('.tab-btn[data-tab="fields"]').style.display = 'none';
+    }
+  } catch (e) { /* if this fails, default tab selection below still works */ }
+
+  const savedTab = localStorage.getItem('exo_itemmaster_tab') || 'fields';
+  const savedBtn = document.querySelector(`.tab-btn[data-tab="${savedTab}"]`);
+  switchTab(savedBtn && savedBtn.style.display !== 'none' ? savedTab : document.querySelector('.tab-btn:not([style*="none"])').dataset.tab);
 })();
 </script>

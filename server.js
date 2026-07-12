@@ -82,18 +82,20 @@ const tenantSchema = new mongoose.Schema({
   // this feature keep working exactly as before with no cap).
   maxStaff: { type: Number, default: null },
   // Which of the company's own Settings sections its admin is allowed to
-  // edit themselves — platform-admin controlled. Default true everywhere so
-  // existing companies see no change unless AuroCircle explicitly locks
-  // something. Company admins can always VIEW their settings; this only
-  // gates editing.
+  // configure themselves — platform-admin controlled, default-DENY. AuroCircle
+  // does all setup based on what the client asks for; a company admin sees
+  // (and can edit) a section only once explicitly granted. This is the
+  // opposite of a typical "opt-out" permissions model on purpose — settings
+  // access here is opt-in per company, per section.
   settingsPermissions: {
     type: {
-      companyName: { type: Boolean, default: true },
-      orderForm: { type: Boolean, default: true },
-      orderDetailsFields: { type: Boolean, default: true },
-      orderViewLayout: { type: Boolean, default: true },
+      companyName: { type: Boolean, default: false },
+      orderForm: { type: Boolean, default: false },
+      orderDetailsFields: { type: Boolean, default: false },
+      orderViewLayout: { type: Boolean, default: false },
+      itemMasterFields: { type: Boolean, default: false },
     },
-    default: () => ({ companyName: true, orderForm: true, orderDetailsFields: true, orderViewLayout: true }),
+    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false }),
   },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
   createdAt: { type: String, default: () => new Date().toISOString() },
@@ -609,6 +611,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   const tenant = {
     id: uuid(), name: companyName, slug, plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
+    settingsPermissions: { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false },
   };
   await TenantDB.create(tenant);
 
@@ -646,7 +649,7 @@ app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) =>
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  const allowedKeys = ['companyName', 'orderForm', 'orderDetailsFields', 'orderViewLayout'];
+  const allowedKeys = ['companyName', 'orderForm', 'orderDetailsFields', 'orderViewLayout', 'itemMasterFields'];
   const settingsPermissions = { ...tenant.settingsPermissions };
   for (const key of allowedKeys) {
     if (req.body[key] !== undefined) settingsPermissions[key] = !!req.body[key];
@@ -775,12 +778,13 @@ app.get('/api/me', resolveTenant, auth, async (req, res) => {
   res.json({ ...safeUser, tenant: req.tenant });
 });
 
-// Blocks a company admin from editing a settings section the platform admin
-// has locked. Not just a UI nicety — this is the actual enforcement point;
-// the settings UI hiding/disabling inputs is just a courtesy on top of this.
+// Blocks a company admin from editing a settings section unless the
+// platform admin has explicitly granted it — default-deny. Not just a UI
+// nicety: this is the actual enforcement point; the settings UI hiding
+// sections entirely is a courtesy on top of this.
 function requireSettingPermission(key) {
   return (req, res, next) => {
-    if (req.tenant.settingsPermissions?.[key] === false) {
+    if (req.tenant.settingsPermissions?.[key] !== true) {
       return res.status(403).json({ error: 'This setting is managed by AuroCircle for your account — contact us to change it.' });
     }
     next();
@@ -950,7 +954,7 @@ app.get('/api/fields', resolveTenant, auth, async (req, res) => {
   res.json(fields);
 });
 
-app.post('/api/fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.post('/api/fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
   const { label, type, options, decimals, unit } = req.body;
   if (!label || !label.trim()) return res.status(400).json({ error: 'Field label is required' });
   if (RESERVED_FIELD_LABELS.includes(label.trim().toLowerCase()))
@@ -970,7 +974,7 @@ app.post('/api/fields', resolveTenant, auth, requireRole('admin'), async (req, r
   res.json(field);
 });
 
-app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
   const field = await FieldDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!field) return res.status(404).json({ error: 'Field not found' });
   const updates = {};
@@ -985,7 +989,7 @@ app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), async (req
 });
 
 // Swaps this field's order with its neighbor — used by the ↑/↓ buttons in the field builder
-app.put('/api/fields/:id/move', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.put('/api/fields/:id/move', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
   const list = await FieldDefDB.find({ tenantId: req.tenant.id, active: true }); // sorted by order
   const idx = list.findIndex(f => f.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Field not found' });
@@ -1003,7 +1007,7 @@ app.put('/api/fields/:id/move', resolveTenant, auth, requireRole('admin'), async
 
 // Soft-delete — keeps historical items readable even after a field is removed from the builder.
 // The two built-in fields (Item Code, Image Code) can never be deleted.
-app.delete('/api/fields/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.delete('/api/fields/:id', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
   const field = await FieldDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!field) return res.status(404).json({ error: 'Field not found' });
   if (field.fixed) return res.status(400).json({ error: `"${field.label}" is a built-in field and can't be deleted` });

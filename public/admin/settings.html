@@ -104,13 +104,14 @@ async function load(){
   renderColumns();
   loadExhibitions();
 
-  // Platform-admin-controlled — locked sections are hidden entirely, not
-  // just disabled, so a company admin never sees settings they can't touch.
+  // Default-deny, platform-admin-granted — a company admin sees a settings
+  // section only once AuroCircle has explicitly allowed it for them.
+  // Hidden entirely, not just disabled, so there's nothing to notice was ever there.
   const perms = me.tenant.settingsPermissions || {};
-  applyLock('company', perms.companyName === false);
-  applyLock('orderform', perms.orderForm === false);
-  applyLock('orderdetails', perms.orderDetailsFields === false);
-  applyLock('layout', perms.orderViewLayout === false);
+  applyLock('company', perms.companyName !== true);
+  applyLock('orderform', perms.orderForm !== true);
+  applyLock('orderdetails', perms.orderDetailsFields !== true);
+  applyLock('layout', perms.orderViewLayout !== true);
 
   // Land on the previously-open tab only if it's still visible; otherwise
   // fall back to the first visible one (Exhibitions is never locked, so

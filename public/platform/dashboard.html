@@ -45,34 +45,46 @@
     </div>
     <p class="muted" id="detailSlug"></p>
 
-    <h4>Users</h4>
-    <div class="table-scroll"><table>
-      <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
-      <tbody id="detailUsers"></tbody>
-    </table></div>
-
-    <h4>Staff limit</h4>
-    <div class="grid cols-2">
-      <div><label>Max staff <span class="muted">(blank = unlimited)</span> — currently <span id="staffUsage"></span></label><input id="maxStaffInput" type="number" min="0"></div>
-      <div><label>&nbsp;</label><button class="primary" onclick="saveMaxStaff()">Save limit</button></div>
+    <div class="tabs">
+      <button class="tab-btn" data-dtab="users" onclick="switchDetailTab('users')">Users</button>
+      <button class="tab-btn" data-dtab="access" onclick="switchDetailTab('access')">Access &amp; Limits</button>
+      <button class="tab-btn" data-dtab="config" onclick="switchDetailTab('config')">Configuration</button>
+      <button class="tab-btn" data-dtab="orders" onclick="switchDetailTab('orders')">Recent Orders</button>
     </div>
 
-    <h4>What this company's admin can edit themselves</h4>
-    <p class="muted" style="margin-top:-6px">Turn off anything you want to manage for them instead — they'll see it locked with a note to contact you.</p>
-    <div id="permissionRows"></div>
-    <button class="primary" style="margin-top:10px" onclick="savePermissions()">Save permissions</button>
+    <div class="tab-panel" id="dtab-users">
+      <div class="table-scroll"><table>
+        <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
+        <tbody id="detailUsers"></tbody>
+      </table></div>
+    </div>
 
-    <h4>Order Form fields</h4>
-    <p id="detailOrderFields" class="muted"></p>
+    <div class="tab-panel" id="dtab-access">
+      <h4 style="margin-top:0">Staff limit</h4>
+      <div class="grid cols-2">
+        <div><label>Max staff <span class="muted">(blank = unlimited)</span> — currently <span id="staffUsage"></span></label><input id="maxStaffInput" type="number" min="0"></div>
+        <div><label>&nbsp;</label><button class="primary" onclick="saveMaxStaff()">Save limit</button></div>
+      </div>
 
-    <h4>Item Master fields (<span id="fieldCount"></span>)</h4>
-    <p id="detailFields" class="muted"></p>
+      <h4>What this company's admin can configure themselves</h4>
+      <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by AuroCircle based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
+      <div id="permissionRows"></div>
+      <button class="primary" style="margin-top:10px" onclick="savePermissions()">Save permissions</button>
+    </div>
 
-    <h4>Recent orders</h4>
-    <div class="table-scroll"><table>
-      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Status</th><th>Date</th></tr></thead>
-      <tbody id="detailOrders"></tbody>
-    </table></div>
+    <div class="tab-panel" id="dtab-config">
+      <h4 style="margin-top:0">Order Form fields</h4>
+      <p id="detailOrderFields" class="muted"></p>
+      <h4>Item Master fields (<span id="fieldCount"></span>)</h4>
+      <p id="detailFields" class="muted"></p>
+    </div>
+
+    <div class="tab-panel" id="dtab-orders">
+      <div class="table-scroll"><table>
+        <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Status</th><th>Date</th></tr></thead>
+        <tbody id="detailOrders"></tbody>
+      </table></div>
+    </div>
   </div>
 </div>
 <script>
@@ -150,7 +162,11 @@ async function saveMaxStaff(){
     openDetail(lastTenantId);
   } catch (e) { alert(e.message); }
 }
-const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout' };
+const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout', itemMasterFields: 'Item Master fields (add/edit/delete)' };
+function switchDetailTab(name){
+  document.querySelectorAll('#detailCard .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.dtab === name));
+  document.querySelectorAll('#detailCard .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'dtab-' + name));
+}
 async function savePermissions(){
   const body = {};
   Object.keys(PERMISSION_LABELS).forEach(key => { body[key] = document.getElementById('perm_' + key).checked; });
@@ -184,7 +200,7 @@ async function openDetail(id){
   const perms = tenant.settingsPermissions || {};
   document.getElementById('permissionRows').innerHTML = Object.entries(PERMISSION_LABELS).map(([key, label]) => `
     <label style="display:flex;align-items:center;gap:8px;margin-top:6px">
-      <input type="checkbox" id="perm_${key}" style="width:auto" ${perms[key] !== false ? 'checked' : ''}> <span>${label}</span>
+      <input type="checkbox" id="perm_${key}" style="width:auto" ${perms[key] === true ? 'checked' : ''}> <span>${label}</span>
     </label>`).join('');
 
   document.getElementById('detailOrderFields').textContent = (tenant.orderFields || []).length
@@ -202,6 +218,7 @@ async function openDetail(id){
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
 
   document.getElementById('detailCard').style.display = 'block';
+  switchDetailTab('users');
   document.getElementById('detailCard').scrollIntoView({ behavior: 'smooth' });
 }
 function closeDetail(){ document.getElementById('detailCard').style.display = 'none'; }
