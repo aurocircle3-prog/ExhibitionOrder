@@ -1,56 +1,11 @@
-<title>Set up your company — Exhibition Order</title>
+<title>Get started — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <div class="topbar"><div class="brand">🎪 Exhibition Order</div><nav><a href="/login.html">Login</a></nav></div>
 <div class="wrap" style="max-width:480px">
-  <div class="card">
-    <h2 style="margin-top:0">Set up your company</h2>
-    <p class="muted">This creates your company account and your admin login. Staff and buyer logins come later.</p>
-    <div class="error" id="err"></div>
-    <label>Company name</label>
-    <input id="companyName" placeholder="Kaashvi Jewels">
-    <label>Company link <span class="muted">(yourname.orders.is)</span></label>
-    <input id="slug" placeholder="kaashvi" oninput="checkSlug()">
-    <div class="muted" id="slugMsg" style="margin-top:4px"></div>
-    <label>Your name (admin)</label>
-    <input id="adminName" placeholder="Sanjay Jain">
-    <label>Email</label>
-    <input id="email" type="email" placeholder="admin@kaashvi.com">
-    <label>WhatsApp / phone</label>
-    <input id="phone" placeholder="+91 90290 06090">
-    <label>Password</label>
-    <input id="password" type="password" placeholder="At least 6 characters">
-    <button class="primary" style="width:100%;margin-top:18px" onclick="register()">Create company</button>
+  <div class="card" style="text-align:center">
+    <h2 style="margin-top:0">New companies are set up directly</h2>
+    <p class="muted">Self-signup isn't available — to get your company set up on Exhibition Order, reach out to us and we'll create your account and send you a link to set your password.</p>
+    <a class="primary" style="display:inline-block;margin-top:10px;text-decoration:none;padding:10px 20px;border-radius:8px" href="https://wa.me/919029006090" target="_blank">Contact us on WhatsApp</a>
   </div>
 </div>
-<script src="/app.js"></script>
-<script>
-let slugTimer;
-function checkSlug(){
-  clearTimeout(slugTimer);
-  const slug = document.getElementById('slug').value.trim();
-  const msg = document.getElementById('slugMsg');
-  if (!slug) { msg.textContent = ''; return; }
-  slugTimer = setTimeout(async () => {
-    const r = await fetch('/api/companies/check-slug?slug=' + encodeURIComponent(slug)).then(r=>r.json());
-    msg.textContent = r.available ? `✓ ${r.slug}.orders.is is available` : (r.error || 'That name is taken');
-    msg.style.color = r.available ? '#1a8f4c' : '#c0392b';
-  }, 400);
-}
-async function register(){
-  const err = document.getElementById('err'); err.style.display='none';
-  try {
-    const body = {
-      companyName: document.getElementById('companyName').value.trim(),
-      slug: document.getElementById('slug').value.trim(),
-      adminName: document.getElementById('adminName').value.trim(),
-      email: document.getElementById('email').value.trim(),
-      phone: document.getElementById('phone').value.trim(),
-      password: document.getElementById('password').value,
-    };
-    const data = await EXO.apiFetch('/companies/register', { method:'POST', body: JSON.stringify(body) });
-    EXO.saveSession(data);
-    location.href = '/admin/dashboard.html';
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
-}
-</script>

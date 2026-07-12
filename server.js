@@ -77,6 +77,24 @@ const tenantSchema = new mongoose.Schema({
   // "PO Number"), unlike item fields which are per line item. Each is
   // {key, label, type: 'text'|'number', decimals}.
   orderCustomFields: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Staff seat limit — set only by the platform admin (AuroCircle), not the
+  // company's own admin. null/0 means unlimited (existing companies before
+  // this feature keep working exactly as before with no cap).
+  maxStaff: { type: Number, default: null },
+  // Which of the company's own Settings sections its admin is allowed to
+  // edit themselves — platform-admin controlled. Default true everywhere so
+  // existing companies see no change unless AuroCircle explicitly locks
+  // something. Company admins can always VIEW their settings; this only
+  // gates editing.
+  settingsPermissions: {
+    type: {
+      companyName: { type: Boolean, default: true },
+      orderForm: { type: Boolean, default: true },
+      orderDetailsFields: { type: Boolean, default: true },
+      orderViewLayout: { type: Boolean, default: true },
+    },
+    default: () => ({ companyName: true, orderForm: true, orderDetailsFields: true, orderViewLayout: true }),
+  },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -164,6 +182,18 @@ const auditLogSchema = new mongoose.Schema({
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// One-time link a newly-created company admin uses to set their own
+// password — the platform admin never sets or sees a company's password
+// directly. Deliberately its own tiny collection rather than a field on
+// User, since it has its own lifecycle (expires, single-use) unrelated to
+// the account itself.
+const passwordSetupTokenSchema = new mongoose.Schema({
+  id: String, token: { type: String, unique: true, sparse: true },
+  userId: String, tenantId: String,
+  used: { type: Boolean, default: false },
+  expiresAt: String, createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
 // Images are owned by Image Code, not by any one item — this is the single
 // source of truth. Every item sharing an Image Code gets the same photos
 // automatically; item.images stays a denormalized copy (kept in sync by
@@ -201,6 +231,7 @@ const Party      = mongoose.model('Party', partySchema);
 const Order      = mongoose.model('Order', orderSchema);
 const Exhibition = mongoose.model('Exhibition', exhibitionSchema);
 const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
+const PasswordSetupToken = mongoose.model('PasswordSetupToken', passwordSetupTokenSchema);
 const ImageSet    = mongoose.model('ImageSet', imageSetSchema);
 const PlatformAdmin = mongoose.model('PlatformAdmin', platformAdminSchema);
 
@@ -220,7 +251,7 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], auditlogs: [], imagesets: [], platformadmins: [] }).write();
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
     log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
@@ -257,6 +288,7 @@ const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
+const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
 const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
 const PlatformAdminDB = makeCollectionOps(PlatformAdmin, 'platformadmins');
 
@@ -559,17 +591,25 @@ app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platform
   res.json({ ok: true });
 });
 
-app.post('/api/companies/register', async (req, res) => {
-  const { companyName, slug: rawSlug, adminName, email, password, phone } = req.body;
-  if (!companyName || !rawSlug || !adminName || !email || !password)
-    return res.status(400).json({ error: 'All fields are required' });
+// Companies are created here, not through a public form. The admin account
+// is created with no usable password — only a one-time setup link, valid 7
+// days, that the new admin uses to set their own password. AuroCircle never
+// sets or sees it. (No email service is wired up yet — the link is returned
+// directly to the platform admin to share manually; hook up real sending
+// later by replacing that one response field with an actual email call.)
+app.post('/api/platform/tenants', platformAuth, async (req, res) => {
+  const { companyName, slug: rawSlug, adminName, email, maxStaff } = req.body;
+  if (!companyName || !rawSlug || !adminName || !email)
+    return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
   const slug = normalizeSlug(rawSlug);
-  const err = validateSlug(slug);
-  if (err) return res.status(400).json({ error: err });
+  const slugErr = validateSlug(slug);
+  if (slugErr) return res.status(400).json({ error: slugErr });
   if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
-  const tenant = { id: uuid(), name: companyName, slug, plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString() };
+  const tenant = {
+    id: uuid(), name: companyName, slug, plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
+    maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
+  };
   await TenantDB.create(tenant);
 
   for (let i = 0; i < FIXED_FIELDS.length; i++) {
@@ -577,15 +617,70 @@ app.post('/api/companies/register', async (req, res) => {
   }
 
   const admin = {
-    id: uuid(), tenantId: tenant.id, role: 'admin', loginId: email.toLowerCase(),
-    password: bcrypt.hashSync(password, 10), name: adminName, phone: phone || '', email,
-    active: true, createdAt: new Date().toISOString(),
+    id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
+    password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
+    name: adminName, phone: '', email, active: true, createdAt: new Date().toISOString(),
   };
   await UserDB.create(admin);
 
-  const token = jwt.sign({ id: admin.id, tenantId: tenant.id, role: admin.role, loginId: admin.loginId, name: admin.name }, JWT_SECRET, { expiresIn: '7d' });
-  const { password: _pw, ...safeAdmin } = admin;
-  res.json({ token, user: safeAdmin, tenant });
+  const setupToken = uuid();
+  await PasswordSetupTokenDB.create({
+    id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
+  });
+  const baseUrl = (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000') ? process.env.APP_URL : `${req.protocol}://${req.get('host')}`;
+
+  log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email }, 'Platform admin created a company');
+  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}` });
+});
+
+app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) => {
+  const maxStaff = req.body.maxStaff === '' || req.body.maxStaff === null ? null : Number(req.body.maxStaff);
+  if (maxStaff !== null && (!Number.isFinite(maxStaff) || maxStaff < 0)) return res.status(400).json({ error: 'Invalid staff limit' });
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  await TenantDB.update({ id: tenant.id }, { maxStaff });
+  res.json({ ok: true, maxStaff });
+});
+
+app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const allowedKeys = ['companyName', 'orderForm', 'orderDetailsFields', 'orderViewLayout'];
+  const settingsPermissions = { ...tenant.settingsPermissions };
+  for (const key of allowedKeys) {
+    if (req.body[key] !== undefined) settingsPermissions[key] = !!req.body[key];
+  }
+  await TenantDB.update({ id: tenant.id }, { settingsPermissions });
+  res.json({ ok: true, settingsPermissions });
+});
+
+// ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
+app.get('/api/auth/setup-token/:token', async (req, res) => {
+  const entry = await PasswordSetupTokenDB.findOne({ token: req.params.token });
+  if (!entry || entry.used || new Date(entry.expiresAt) < new Date()) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
+  const user = await UserDB.findOne({ id: entry.userId });
+  const tenant = await TenantDB.findOne({ id: entry.tenantId });
+  if (!user || !tenant) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
+  res.json({ name: user.name, companyName: tenant.name, companySlug: tenant.slug });
+});
+app.post('/api/auth/set-password', async (req, res) => {
+  const { token, password } = req.body;
+  if (!password || password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const entry = await PasswordSetupTokenDB.findOne({ token });
+  if (!entry || entry.used || new Date(entry.expiresAt) < new Date()) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
+  await UserDB.update({ id: entry.userId }, { password: bcrypt.hashSync(password, 10) });
+  await PasswordSetupTokenDB.update({ id: entry.id }, { used: true });
+  log.info({ userId: entry.userId, tenantId: entry.tenantId }, 'Password set via setup link');
+  res.json({ ok: true });
+});
+
+// Company self-registration is intentionally disabled — see
+// POST /api/platform/tenants below. Kept as a named route (rather than
+// removed outright) so the old public form gives a clear message instead
+// of a generic 404.
+app.post('/api/companies/register', async (req, res) => {
+  res.status(403).json({ error: 'New companies are set up by AuroCircle directly — get in touch to get started.' });
 });
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
@@ -628,6 +723,12 @@ app.post('/api/staff', resolveTenant, auth, requireRole('admin'), async (req, re
   const { name, phone, email, password } = req.body;
   if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (req.tenant.maxStaff != null) {
+    const activeCount = await UserDB.count({ tenantId: req.tenant.id, role: 'staff', active: true });
+    if (activeCount >= req.tenant.maxStaff) {
+      return res.status(400).json({ error: `Staff limit reached (${req.tenant.maxStaff}). Contact AuroCircle to increase it.` });
+    }
+  }
   const loginId = (email || phone || name).toLowerCase();
   if (await UserDB.findOne({ tenantId: req.tenant.id, loginId }))
     return res.status(400).json({ error: 'That login ID is already in use' });
@@ -674,7 +775,19 @@ app.get('/api/me', resolveTenant, auth, async (req, res) => {
   res.json({ ...safeUser, tenant: req.tenant });
 });
 
-app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+// Blocks a company admin from editing a settings section the platform admin
+// has locked. Not just a UI nicety — this is the actual enforcement point;
+// the settings UI hiding/disabling inputs is just a courtesy on top of this.
+function requireSettingPermission(key) {
+  return (req, res, next) => {
+    if (req.tenant.settingsPermissions?.[key] === false) {
+      return res.status(403).json({ error: 'This setting is managed by AuroCircle for your account — contact us to change it.' });
+    }
+    next();
+  };
+}
+
+app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), requireSettingPermission('companyName'), async (req, res) => {
   const updates = {};
   ['name'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
   await TenantDB.update({ id: req.tenant.id }, updates);
@@ -685,7 +798,7 @@ app.put('/api/companies/settings', resolveTenant, auth, requireRole('admin'), as
 // Which item fields show up per line on the order link, and which get summed
 // into a total — validated against the tenant's real fields so a stale/typo'd
 // key can't sneak in.
-app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderForm'), async (req, res) => {
   const list = Array.isArray(req.body.orderFields) ? req.body.orderFields : [];
   const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
   const byKey = {}; fieldDefs.forEach(f => { byKey[f.key] = f; });
@@ -704,7 +817,7 @@ app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin')
 // Order-level custom fields (Delivery Date, PO Number, etc.) — asked once
 // per order while taking it, not per item. Kept deliberately simple next to
 // Item Master fields: just a key/label/type, no scanner keys or options.
-app.put('/api/companies/order-custom-fields', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.put('/api/companies/order-custom-fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderDetailsFields'), async (req, res) => {
   const list = Array.isArray(req.body.fields) ? req.body.fields : [];
   const seen = new Set();
   const fields = [];
@@ -762,7 +875,7 @@ function validateFormula(expr, allowedNames) {
   return { ok: true };
 }
 
-app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderViewLayout'), async (req, res) => {
   const list = Array.isArray(req.body.columns) ? req.body.columns : [];
   const orderFields = req.tenant.orderFields || [];
   const allowedFieldKeys = new Set(orderFields.map(f => f.key));

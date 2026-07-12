@@ -4,7 +4,7 @@
 <div id="nav"></div>
 <div class="wrap">
   <div class="card">
-    <h3 style="margin-top:0">Staff accounts</h3>
+    <h3 style="margin-top:0">Staff accounts <span class="muted" id="usage"></span></h3>
     <p class="muted">Created internally by the admin — staff cannot self-register.</p>
     <div class="error" id="err"></div>
     <div class="table-scroll"><table>
@@ -29,7 +29,10 @@ EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('staff');
 
 async function load(){
-  const staff = await EXO.apiFetch('/staff');
+  const [staff, me] = await Promise.all([EXO.apiFetch('/staff'), EXO.apiFetch('/me')]);
+  const activeCount = staff.filter(s => s.active).length;
+  const max = me.tenant?.maxStaff;
+  document.getElementById('usage').textContent = `— ${activeCount} / ${max ?? '∞'} used`;
   document.getElementById('rows').innerHTML = staff.map(s => `
     <tr>
       <td>${s.name}</td><td>${s.loginId}</td><td>${s.phone||'—'}</td>
@@ -47,7 +50,7 @@ async function resetPassword(id, name){
   if (pw.length < 6) { alert('Password must be at least 6 characters'); return; }
   try {
     await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
-    alert(`Password updated for ${name}.`);
+    EXO.toast(`Password updated for ${name}`);
   } catch(e) { alert(e.message); }
 }
 async function addStaff(){
@@ -61,8 +64,9 @@ async function addStaff(){
     };
     await EXO.apiFetch('/staff', { method:'POST', body: JSON.stringify(body) });
     document.getElementById('name').value = document.getElementById('phone').value = document.getElementById('email').value = document.getElementById('password').value = '';
+    EXO.toast('Staff account created');
     load();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Could not add staff — see error above', 'error'); }
 }
 async function toggle(id, active){ await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }
 async function remove(id){ if (!confirm('Delete this staff account?')) return; await EXO.apiFetch('/staff/'+id, { method:'DELETE' }); load(); }

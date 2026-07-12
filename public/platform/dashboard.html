@@ -17,6 +17,27 @@
     </table></div>
   </div>
 
+  <div class="card">
+    <h3 style="margin-top:0">Create a new company</h3>
+    <p class="muted" style="margin-top:-6px">Self-signup is disabled — this is the only way a company gets set up. The admin sets their own password via a one-time link (shown below after creating).</p>
+    <div class="error" id="createErr"></div>
+    <div class="grid cols-2">
+      <div><label>Company name</label><input id="newCompanyName" placeholder="Kaashvi Jewels"></div>
+      <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
+      <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
+      <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
+      <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
+    </div>
+    <button class="primary" style="margin-top:14px" onclick="createCompany()">Create company</button>
+  </div>
+
+  <div class="card" id="setupLinkCard" style="display:none">
+    <h3 style="margin-top:0">Company created ✅</h3>
+    <p class="muted">Share this one-time link with <b id="newAdminNameShow"></b> so they can set their own password. Valid for 7 days.</p>
+    <input id="setupLinkBox" readonly onclick="this.select()">
+    <button class="ghost" style="margin-top:10px" onclick="copySetupLink()">Copy link</button>
+  </div>
+
   <div class="card" id="detailCard" style="display:none">
     <div style="display:flex;justify-content:space-between;align-items:center">
       <h3 style="margin:0" id="detailTitle"></h3>
@@ -29,6 +50,17 @@
       <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
       <tbody id="detailUsers"></tbody>
     </table></div>
+
+    <h4>Staff limit</h4>
+    <div class="grid cols-2">
+      <div><label>Max staff <span class="muted">(blank = unlimited)</span> — currently <span id="staffUsage"></span></label><input id="maxStaffInput" type="number" min="0"></div>
+      <div><label>&nbsp;</label><button class="primary" onclick="saveMaxStaff()">Save limit</button></div>
+    </div>
+
+    <h4>What this company's admin can edit themselves</h4>
+    <p class="muted" style="margin-top:-6px">Turn off anything you want to manage for them instead — they'll see it locked with a note to contact you.</p>
+    <div id="permissionRows"></div>
+    <button class="primary" style="margin-top:10px" onclick="savePermissions()">Save permissions</button>
 
     <h4>Order Form fields</h4>
     <p id="detailOrderFields" class="muted"></p>
@@ -83,7 +115,53 @@ function renderList(){
     </tr>`).join('') || '<tr><td colspan="8" class="muted">No companies yet</td></tr>';
 }
 
+let lastTenantId = null;
+async function createCompany(){
+  const err = document.getElementById('createErr'); err.style.display = 'none';
+  const body = {
+    companyName: document.getElementById('newCompanyName').value.trim(),
+    slug: document.getElementById('newSlug').value.trim(),
+    adminName: document.getElementById('newAdminName').value.trim(),
+    email: document.getElementById('newAdminEmail').value.trim(),
+    maxStaff: document.getElementById('newMaxStaff').value,
+  };
+  if (!body.companyName || !body.slug || !body.adminName || !body.email) {
+    err.textContent = 'Company name, link, admin name, and email are all required';
+    err.style.display = 'block';
+    return;
+  }
+  try {
+    const res = await platformFetch('/tenants', { method: 'POST', body: JSON.stringify(body) });
+    document.getElementById('newAdminNameShow').textContent = res.admin.name;
+    document.getElementById('setupLinkBox').value = res.setupLink;
+    document.getElementById('setupLinkCard').style.display = 'block';
+    document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
+    ['newCompanyName','newSlug','newAdminName','newAdminEmail','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
+    load();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+function copySetupLink(){ document.getElementById('setupLinkBox').select(); document.execCommand('copy'); }
+
+async function saveMaxStaff(){
+  const val = document.getElementById('maxStaffInput').value;
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/max-staff`, { method: 'PUT', body: JSON.stringify({ maxStaff: val === '' ? null : val }) });
+    alert('Staff limit saved.');
+    openDetail(lastTenantId);
+  } catch (e) { alert(e.message); }
+}
+const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout' };
+async function savePermissions(){
+  const body = {};
+  Object.keys(PERMISSION_LABELS).forEach(key => { body[key] = document.getElementById('perm_' + key).checked; });
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/permissions`, { method: 'PUT', body: JSON.stringify(body) });
+    alert('Permissions saved.');
+  } catch (e) { alert(e.message); }
+}
+
 async function openDetail(id){
+  lastTenantId = id;
   let detail;
   try { detail = await platformFetch('/tenants/' + id); }
   catch (e) { alert(e.message); return; }
@@ -98,6 +176,16 @@ async function openDetail(id){
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
       <td><button class="ghost small" onclick="resetUserPassword('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Reset password</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
+
+  const staffCount = users.filter(u => u.role === 'staff' && u.active !== false).length;
+  document.getElementById('staffUsage').textContent = `${staffCount} / ${tenant.maxStaff ?? '∞'}`;
+  document.getElementById('maxStaffInput').value = tenant.maxStaff ?? '';
+
+  const perms = tenant.settingsPermissions || {};
+  document.getElementById('permissionRows').innerHTML = Object.entries(PERMISSION_LABELS).map(([key, label]) => `
+    <label style="display:flex;align-items:center;gap:8px;margin-top:6px">
+      <input type="checkbox" id="perm_${key}" style="width:auto" ${perms[key] !== false ? 'checked' : ''}> <span>${label}</span>
+    </label>`).join('');
 
   document.getElementById('detailOrderFields').textContent = (tenant.orderFields || []).length
     ? tenant.orderFields.map(f => f.label || f.key).join(', ')
