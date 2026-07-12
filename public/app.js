@@ -73,7 +73,25 @@
     return navBar([{ key: 'orders', href: '/client/orders.html', label: 'My Orders' }], active);
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav };
+  // Save actions across the app used to just silently succeed or fail with
+  // no visible confirmation — easy to walk away unsure whether it actually
+  // saved. This gives every page one consistent, unmissable way to say so.
+  let toastTimer = null;
+  function toast(message, type = 'success') {
+    let el = document.getElementById('exo-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'exo-toast';
+      document.body.appendChild(el);
+    }
+    el.className = 'exo-toast ' + type;
+    el.textContent = message;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

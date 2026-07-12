@@ -719,7 +719,7 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
 
   const columns = [];
   for (const raw of list) {
-    if (!raw || !['images', 'field', 'formula', 'serial'].includes(raw.type)) {
+    if (!raw || !['images', 'field', 'formula', 'serial', 'remark'].includes(raw.type)) {
       return res.status(400).json({ error: 'Each column needs a valid type' });
     }
     const width = Number(raw.width);
@@ -742,6 +742,8 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
     } else if (raw.type === 'images') {
       col.label = (raw.label || 'Photo').trim().slice(0, 60) || 'Photo';
+    } else if (raw.type === 'remark') {
+      col.label = (raw.label || 'Remark').trim().slice(0, 60) || 'Remark';
     } else { // serial
       col.label = (raw.label || 'Sr. No.').trim().slice(0, 60) || 'Sr. No.';
     }
@@ -1373,7 +1375,14 @@ app.get('/api/orders/public/:token', async (req, res) => {
   const order = await OrderDB.findOne({ shareToken: req.params.token });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   const tenant = await TenantDB.findOne({ id: order.tenantId });
-  res.json({ order, company: { name: tenant?.name, logoUrl: tenant?.logoUrl } });
+  // Order View Layout is live, not frozen at order-creation time — unlike
+  // orderFieldsSnapshot (which preserves what was actually collected on the
+  // order and must stay historically accurate), the column layout is pure
+  // display config. Changing it in Settings should apply to every order's
+  // shared link immediately, old and new — that's the whole point of it
+  // being a "layout", not a record of what happened.
+  const columns = (tenant?.orderViewColumns && tenant.orderViewColumns.length) ? tenant.orderViewColumns : (order.columnsSnapshot || []);
+  res.json({ order: { ...order, columnsSnapshot: columns }, company: { name: tenant?.name, logoUrl: tenant?.logoUrl } });
 });
 
 // ── EXHIBITIONS (optional grouping — one company can run several events) ─────

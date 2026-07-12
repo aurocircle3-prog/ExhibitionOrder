@@ -83,11 +83,12 @@ async function load(){
 function renderLegacyTable(order){
   const extraFields = order.orderFieldsSnapshot || [];
   const showImages = order.showImages !== false;
+  const hasRemarks = order.items.some(i => i.comment);
   const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
 
   const headerCells = (showImages ? '<th>Photo</th>' : '') + '<th>Item</th>'
     + extraFields.map(f => `<th>${f.label}</th>`).join('')
-    + '<th>Qty</th>';
+    + (hasRemarks ? '<th>Remark</th>' : '') + '<th>Qty</th>';
 
   const rows = order.items.map(i => {
     const imgs = i.images || (i.image ? [i.image] : []);
@@ -98,7 +99,8 @@ function renderLegacyTable(order){
           </div>` : ''}</td>`
       : '';
     const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit)}</td>`).join('');
-    return `<tr>${photoCell}<td>${i.label}</td>${extraCells}<td>${i.qty}</td></tr>`;
+    const remarkCell = hasRemarks ? `<td>${i.comment || ''}</td>` : '';
+    return `<tr>${photoCell}<td>${i.label}</td>${extraCells}${remarkCell}<td>${i.qty}</td></tr>`;
   }).join('');
 
   return { headerCells, rows };
@@ -127,6 +129,7 @@ function renderDynamicTable(order){
           </div>` : ''}</td>`;
       }
       if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], unitFor(col.fieldKey))}</td>`;
+      if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
       if (col.type === 'formula') {
         try {
           const scope = { qty: Number(item.qty) || 0 };
