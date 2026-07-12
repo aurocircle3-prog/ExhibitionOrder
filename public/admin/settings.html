@@ -1,6 +1,7 @@
 <title>Settings — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <div id="nav"></div>
 <div class="wrap">
   <div class="card">
@@ -27,6 +28,15 @@
   </div>
 
   <div class="card">
+    <h3 style="margin-top:0">Order View Layout <span class="muted">— build the table buyers see on the shared order link, column by column</span></h3>
+    <p class="muted" style="margin-top:-4px">Leave this empty to use the simple default layout (photos, your Order Form fields, then quantity). Add columns here for full control over what's shown, in what order, and how wide.</p>
+    <div id="columnRows"></div>
+    <button class="ghost" style="margin-top:10px" onclick="addColumn()">+ Add column</button>
+    <div class="error" id="colErr"></div>
+    <button class="primary" style="margin-top:14px" onclick="saveColumns()">Save layout</button>
+  </div>
+
+  <div class="card">
     <h3 style="margin-top:0">Exhibitions <span class="muted">— optional, group items/orders by event</span></h3>
     <div class="table-scroll"><table>
       <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th></th></tr></thead>
@@ -49,8 +59,107 @@ async function load(){
   document.getElementById('name').value = me.tenant.name || '';
   document.getElementById('slugShow').textContent = me.tenant.slug;
   document.getElementById('showImages').checked = me.tenant.orderShowImages !== false;
-  loadOrderFields(me.tenant.orderFields || []);
+  await loadOrderFields(me.tenant.orderFields || []);
+  columns = (me.tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || cid() }));
+  renderColumns();
   loadExhibitions();
+}
+
+// ── Order View Layout (column builder) ──
+let columns = [];
+let availableFields = []; // populated by loadOrderFields below — Field/Formula columns can only use fields actually on the Order Form
+function cid(){ return 'c' + Math.random().toString(36).slice(2); }
+
+function addColumn(){
+  columns.push({ _id: cid(), _isNew: true, type: 'field', fieldKey: availableFields[0]?.key || '', label: '', width: 12, formula: '' });
+  renderColumns();
+}
+function removeColumn(id){ columns = columns.filter(c => c._id !== id); renderColumns(); }
+function moveColumn(id, dir){
+  const i = columns.findIndex(c => c._id === id);
+  const j = i + dir;
+  if (j < 0 || j >= columns.length) return;
+  [columns[i], columns[j]] = [columns[j], columns[i]];
+  renderColumns();
+}
+function updateColumn(id, key, value){
+  const col = columns.find(c => c._id === id);
+  if (col) col[key] = value;
+  if (key === 'type') renderColumns(); // switching type changes which inputs show
+}
+function validateFormulaClient(expr){
+  if (!expr.trim()) return 'Formula is required';
+  try {
+    const allowed = new Set([...availableFields.map(f => f.key), 'qty']);
+    const used = new Set();
+    math.parse(expr).traverse(n => { if (n.isSymbolNode) used.add(n.name); });
+    const unknown = [...used].filter(n => !allowed.has(n));
+    if (unknown.length) return `Unknown field(s): ${unknown.join(', ')}`;
+    return '';
+  } catch (e) { return 'Invalid formula syntax'; }
+}
+function renderColumns(){
+  const fieldOptions = availableFields.map(f => `<option value="${f.key}">${f.label}</option>`).join('');
+  document.getElementById('columnRows').innerHTML = columns.map((c, i) => {
+    const formulaError = c.type === 'formula' ? validateFormulaClient(c.formula || '') : '';
+    return `
+    <div class="card" style="background:var(--bg,#f7f7f8);padding:12px;margin-top:${i===0?0:10}px">
+      <div class="grid cols-3">
+        <div>
+          <label>Column type</label>
+          <select onchange="updateColumn('${c._id}','type',this.value)">
+            <option value="field" ${c.type==='field'?'selected':''}>Field</option>
+            <option value="images" ${c.type==='images'?'selected':''}>Images</option>
+            <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
+            <option value="serial" ${c.type==='serial'?'selected':''}>Sr. No.</option>
+          </select>
+        </div>
+        <div>
+          <label>Heading</label>
+          <input placeholder="${c.type==='images'?'Photo':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
+        </div>
+        <div>
+          <label>Width (characters)</label>
+          <input type="number" min="3" max="80" value="${c.width||12}" oninput="updateColumn('${c._id}','width',this.value)">
+        </div>
+      </div>
+      ${c.type === 'field' ? `
+        <div style="margin-top:10px">
+          <label>Which field</label>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${fieldOptions || '<option value="">— add fields to your Order Form first —</option>'}</select>
+        </div>` : ''}
+      ${c.type === 'formula' ? `
+        <div style="margin-top:10px">
+          <label>Formula <span class="muted">— use field names and qty, e.g. <code>price * qty</code>. Available: ${availableFields.map(f=>f.key).concat('qty').join(', ') || '(add fields to your Order Form first)'}</span></label>
+          <input placeholder="price * qty" value="${c.formula||''}" oninput="updateColumn('${c._id}','formula',this.value)">
+          ${formulaError ? `<p class="muted" style="color:var(--danger,#c0392b);margin-top:4px">${formulaError}</p>` : ''}
+        </div>` : ''}
+      <div class="btn-row" style="margin-top:10px">
+        <button class="ghost small" onclick="moveColumn('${c._id}',-1)" ${i===0?'disabled':''}>↑ Move up</button>
+        <button class="ghost small" onclick="moveColumn('${c._id}',1)" ${i===columns.length-1?'disabled':''}>↓ Move down</button>
+        <button class="danger small" onclick="removeColumn('${c._id}')">Remove column</button>
+      </div>
+    </div>`;
+  }).join('') || '<p class="muted">No custom columns yet — using the default layout.</p>';
+}
+async function saveColumns(){
+  const err = document.getElementById('colErr'); err.style.display = 'none';
+  for (const c of columns) {
+    if (c.type === 'formula' && validateFormulaClient(c.formula || '')) {
+      err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`;
+      err.style.display = 'block';
+      return;
+    }
+    if (c.type === 'field' && !c.fieldKey) {
+      err.textContent = 'Every Field column needs a field selected';
+      err.style.display = 'block';
+      return;
+    }
+  }
+  const payload = columns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
+  try {
+    await EXO.apiFetch('/companies/order-view-columns', { method: 'PUT', body: JSON.stringify({ columns: payload }) });
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 async function loadOrderFields(saved){
   const fields = await EXO.apiFetch('/fields');
@@ -62,6 +171,9 @@ async function loadOrderFields(saved){
       <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
       <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
     </tr>`).join('');
+  // Column builder can only reference fields actually on the Order Form —
+  // those are the only ones with a value collected per order line.
+  availableFields = saved.map(f => ({ key: f.key, label: f.label }));
 }
 async function saveOrderFields(){
   const err = document.getElementById('err'); err.style.display='none';

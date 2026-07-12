@@ -11,6 +11,7 @@ const https      = require('https');
 const XLSX       = require('xlsx');
 const pinoHttp   = require('pino-http');
 const log        = require('./logger');
+const math       = require('mathjs');
 
 const app = express();
 const PORT       = process.env.PORT       || 3000;
@@ -67,6 +68,12 @@ const tenantSchema = new mongoose.Schema({
   // had a race window: two staff submitting at the same instant could both
   // read the same count and get the same order number.
   orderSeq: { type: Number, default: 1000 },
+  // Fully custom layout for the public/buyer-facing order link — an ordered
+  // list of {id, type, label, width, fieldKey?, formula?}. type is one of
+  // 'images' | 'field' | 'formula' | 'serial'. Empty array = fall back to
+  // the legacy fixed layout (images + orderFields + qty) for tenants who
+  // haven't configured this yet, so existing orders keep rendering the same.
+  orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -123,6 +130,11 @@ const orderSchema = new mongoose.Schema({
   // still renders correctly even if the admin changes the config later.
   orderFieldsSnapshot: { type: [{ key: String, label: String, unit: String, showTotal: Boolean }], default: [] },
   fieldTotals: { type: mongoose.Schema.Types.Mixed, default: {} },
+  // Snapshot of the tenant's Order View column layout at the time this order
+  // was placed — same reasoning as orderFieldsSnapshot above. Empty array
+  // means the tenant hadn't configured custom columns yet at that time, so
+  // the view page falls back to the legacy fixed layout for this order.
+  columnsSnapshot: { type: [mongoose.Schema.Types.Mixed], default: [] },
   showImages: { type: Boolean, default: true },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   shareToken: { type: String, unique: true, sparse: true },
@@ -679,6 +691,67 @@ app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin')
   res.json({ ok: true, orderFields, orderShowImages });
 });
 
+// The buyer-facing order link's layout — an ordered list of columns, each
+// independently typed (photos / a specific field / a computed formula /
+// row number) with its own header text and width. Formulas are validated
+// here with mathjs's parser (never eval/Function — that would let an admin
+// account run arbitrary JS in every visitor's browser and on this server),
+// checked for valid syntax and that every variable name it references is
+// actually a real Order Form field (or "qty") — a formula referencing a
+// typo'd or deleted field would just silently show blank to every buyer
+// otherwise.
+function validateFormula(expr, allowedNames) {
+  let parsed;
+  try { parsed = math.parse(expr); }
+  catch (e) { return { ok: false, error: `Invalid formula: ${e.message}` }; }
+  const used = new Set();
+  parsed.traverse(node => { if (node.isSymbolNode) used.add(node.name); });
+  const unknown = [...used].filter(n => !allowedNames.has(n));
+  if (unknown.length) return { ok: false, error: `Formula uses unknown field(s): ${unknown.join(', ')}` };
+  return { ok: true };
+}
+
+app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const list = Array.isArray(req.body.columns) ? req.body.columns : [];
+  const orderFields = req.tenant.orderFields || [];
+  const allowedFieldKeys = new Set(orderFields.map(f => f.key));
+  const allowedFormulaNames = new Set([...allowedFieldKeys, 'qty']);
+
+  const columns = [];
+  for (const raw of list) {
+    if (!raw || !['images', 'field', 'formula', 'serial'].includes(raw.type)) {
+      return res.status(400).json({ error: 'Each column needs a valid type' });
+    }
+    const width = Number(raw.width);
+    if (!Number.isFinite(width) || width < 3 || width > 80) {
+      return res.status(400).json({ error: 'Column width must be between 3 and 80 characters' });
+    }
+    const col = { id: raw.id || uuid(), type: raw.type, width };
+
+    if (raw.type === 'field') {
+      if (!allowedFieldKeys.has(raw.fieldKey)) return res.status(400).json({ error: `"${raw.fieldKey}" isn't a field on your Order Form — add it there first` });
+      const f = orderFields.find(x => x.key === raw.fieldKey);
+      col.fieldKey = raw.fieldKey;
+      col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+    } else if (raw.type === 'formula') {
+      const formula = String(raw.formula || '').trim();
+      if (!formula) return res.status(400).json({ error: 'Formula column needs a formula' });
+      const check = validateFormula(formula, allowedFormulaNames);
+      if (!check.ok) return res.status(400).json({ error: check.error });
+      col.formula = formula;
+      col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+    } else if (raw.type === 'images') {
+      col.label = (raw.label || 'Photo').trim().slice(0, 60) || 'Photo';
+    } else { // serial
+      col.label = (raw.label || 'Sr. No.').trim().slice(0, 60) || 'Sr. No.';
+    }
+    columns.push(col);
+  }
+
+  await TenantDB.update({ id: req.tenant.id }, { orderViewColumns: columns });
+  res.json({ ok: true, columns });
+});
+
 app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req, res) => {
   const uploader = makeUploader(`exo/${req.tenant.id}/logo`, path.join('logos', req.tenant.id));
   uploader.single('logo')(req, res, async err => {
@@ -1220,6 +1293,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
     staffId: req.user.id, staffName: req.user.name,
     items: lineItems, remark: remark || '', status: 'pending',
     orderFieldsSnapshot: orderFields, fieldTotals,
+    columnsSnapshot: req.tenant.orderViewColumns || [],
     showImages: req.tenant.orderShowImages !== false,
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };

@@ -1,6 +1,7 @@
 <title>Order — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <div class="topbar"><div class="brand" id="companyName">🎪 Exhibition Order</div></div>
 <div class="wrap" id="content">
   <p class="muted">Loading order…</p>
@@ -48,29 +49,13 @@ async function load(){
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
     const { order, company } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Exhibition Order');
+
+    const { headerCells, rows } = (order.columnsSnapshot && order.columnsSnapshot.length)
+      ? renderDynamicTable(order)
+      : renderLegacyTable(order);
+
     const extraFields = order.orderFieldsSnapshot || [];
-    const showImages = order.showImages !== false;
     const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
-
-    // Everything on the order comes from the tenant's own Item Master fields
-    // (Settings > Order Form) — there's no built-in "price" concept; if a
-    // business wants to show amounts, they add a Number field for it like any other.
-    const headerCells = (showImages ? '<th>Photo</th>' : '') + '<th>Item</th>'
-      + extraFields.map(f => `<th>${f.label}</th>`).join('')
-      + '<th>Qty</th>';
-
-    const rows = order.items.map(i => {
-      const imgs = i.images || (i.image ? [i.image] : []); // fall back for orders placed before this change
-      const photoCell = showImages
-        ? `<td>${imgs.length ? `
-            <div class="order-thumbs">
-              ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
-            </div>` : ''}</td>`
-        : '';
-      const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit)}</td>`).join('');
-      return `<tr>${photoCell}<td>${i.label}</td>${extraCells}<td>${i.qty}</td></tr>`;
-    }).join('');
-
     const fieldTotalRows = Object.entries(order.fieldTotals || {}).map(([key, val]) => {
       const f = extraFields.find(x => x.key === key);
       return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${fmt(val, f?.unit)}</span></div>`;
@@ -80,7 +65,7 @@ async function load(){
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
         <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
-        <div class="table-scroll"><table>
+        <div class="table-scroll"><table class="dynamic-order-table">
           <thead><tr>${headerCells}</tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
@@ -91,6 +76,72 @@ async function load(){
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
   }
+}
+
+// Original fixed layout — still used for any order placed before the
+// tenant configured a custom Order View Layout (or if they never do).
+function renderLegacyTable(order){
+  const extraFields = order.orderFieldsSnapshot || [];
+  const showImages = order.showImages !== false;
+  const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
+
+  const headerCells = (showImages ? '<th>Photo</th>' : '') + '<th>Item</th>'
+    + extraFields.map(f => `<th>${f.label}</th>`).join('')
+    + '<th>Qty</th>';
+
+  const rows = order.items.map(i => {
+    const imgs = i.images || (i.image ? [i.image] : []);
+    const photoCell = showImages
+      ? `<td>${imgs.length ? `
+          <div class="order-thumbs">
+            ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
+          </div>` : ''}</td>`
+      : '';
+    const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit)}</td>`).join('');
+    return `<tr>${photoCell}<td>${i.label}</td>${extraCells}<td>${i.qty}</td></tr>`;
+  }).join('');
+
+  return { headerCells, rows };
+}
+
+// Custom column layout, built in Settings > Order View Layout. Each column
+// has its own width in characters — applied as CSS `ch` units, which makes
+// "wrap to the next line past this width" free: the browser already does
+// that for any text wider than a fixed-character-width cell.
+function renderDynamicTable(order){
+  const extraFields = order.orderFieldsSnapshot || [];
+  const unitFor = key => extraFields.find(f => f.key === key)?.unit || '';
+  const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
+  const widthStyle = w => `style="width:${w}ch;max-width:${w}ch;white-space:normal;word-break:break-word"`;
+
+  const headerCells = order.columnsSnapshot.map(col => `<th ${widthStyle(col.width)}>${col.label}</th>`).join('');
+
+  const rows = order.items.map((item, rowIndex) => {
+    const cells = order.columnsSnapshot.map(col => {
+      if (col.type === 'serial') return `<td ${widthStyle(col.width)}>${rowIndex + 1}</td>`;
+      if (col.type === 'images') {
+        const imgs = item.images || (item.image ? [item.image] : []);
+        return `<td ${widthStyle(col.width)}>${imgs.length ? `
+          <div class="order-thumbs">
+            ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
+          </div>` : ''}</td>`;
+      }
+      if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], unitFor(col.fieldKey))}</td>`;
+      if (col.type === 'formula') {
+        try {
+          const scope = { qty: Number(item.qty) || 0 };
+          extraFields.forEach(f => { scope[f.key] = Number(item.extra?.[f.key]) || 0; });
+          const result = math.evaluate(col.formula, scope);
+          const display = typeof result === 'number' ? (Number.isInteger(result) ? result : result.toFixed(2)) : String(result);
+          return `<td ${widthStyle(col.width)}>${display}</td>`;
+        } catch (e) { return `<td ${widthStyle(col.width)}>—</td>`; }
+      }
+      return `<td ${widthStyle(col.width)}></td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+
+  return { headerCells, rows };
 }
 load();
 </script>
