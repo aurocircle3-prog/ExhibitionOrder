@@ -689,11 +689,13 @@ app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin')
   const list = Array.isArray(req.body.orderFields) ? req.body.orderFields : [];
   const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
   const byKey = {}; fieldDefs.forEach(f => { byKey[f.key] = f; });
-  // Label/unit are pulled fresh from the real field def rather than trusting
-  // the client, so they can't drift out of sync with the field builder.
+  // Label/unit/type are pulled fresh from the real field def rather than
+  // trusting the client, so they can't drift out of sync with the field
+  // builder — type matters here specifically so formulas (below) can offer
+  // only numeric fields, not text ones that can't meaningfully be multiplied.
   const orderFields = list
     .filter(f => f && byKey[f.key])
-    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', showTotal: !!f.showTotal }));
+    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', type: byKey[f.key].type, showTotal: !!f.showTotal }));
   const orderShowImages = req.body.showImages !== undefined ? !!req.body.showImages : true;
   await TenantDB.update({ id: req.tenant.id }, { orderFields, orderShowImages });
   res.json({ ok: true, orderFields, orderShowImages });
@@ -764,7 +766,14 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
   const list = Array.isArray(req.body.columns) ? req.body.columns : [];
   const orderFields = req.tenant.orderFields || [];
   const allowedFieldKeys = new Set(orderFields.map(f => f.key));
-  const allowedFormulaNames = new Set([...allowedFieldKeys, 'qty']);
+  // Formulas can only meaningfully use numeric fields — a text field like
+  // "Category" can't be multiplied. Looked up fresh from FieldDefDB rather
+  // than trusting orderFields[].type, which older saved configs won't have
+  // yet — this way it's correct immediately, not just after an admin
+  // re-saves their Order Form.
+  const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
+  const typeByKey = {}; fieldDefs.forEach(f => { typeByKey[f.key] = f.type; });
+  const allowedFormulaNames = new Set([...orderFields.filter(f => typeByKey[f.key] === 'number').map(f => f.key), 'qty']);
   const orderCustomFields = req.tenant.orderCustomFields || [];
   const allowedOrderFieldKeys = new Set(orderCustomFields.map(f => f.key));
 
