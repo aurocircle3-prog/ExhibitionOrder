@@ -1559,8 +1559,34 @@ process.on('unhandledRejection', (reason) => {
   log.error({ err: reason }, 'Unhandled promise rejection');
 });
 
-connectDB().then(() => {
+// Free Render tiers don't include Shell access, so `node db/seed-platform-admin.js`
+// isn't runnable there. This gives the same result through something free
+// tiers do support: Environment variables. Set PLATFORM_ADMIN_EMAIL and
+// PLATFORM_ADMIN_PASSWORD in Render's Environment tab, redeploy, and the
+// account is created (or its password updated) automatically on boot — no
+// Shell, no HTTP endpoint (so it can't be triggered by an unauthenticated
+// request; only someone who already has full control of the Render service's
+// env vars can use this, the same trust level Shell access would have had).
+async function ensurePlatformAdminFromEnv() {
+  const email = (process.env.PLATFORM_ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = process.env.PLATFORM_ADMIN_PASSWORD;
+  if (!email || !password) return;
+  if (password.length < 8) { log.warn('PLATFORM_ADMIN_PASSWORD is too short (8+ chars) — skipped auto-provisioning'); return; }
+  const name = process.env.PLATFORM_ADMIN_NAME || 'Platform Admin';
+  const hashed = bcrypt.hashSync(password, 10);
+  const existing = await PlatformAdminDB.findOne({ email });
+  if (existing) {
+    await PlatformAdminDB.update({ id: existing.id }, { password: hashed, name });
+    log.info({ email }, 'Platform admin auto-provisioned from env vars (updated)');
+  } else {
+    await PlatformAdminDB.create({ id: uuid(), email, password: hashed, name, createdAt: new Date().toISOString() });
+    log.info({ email }, 'Platform admin auto-provisioned from env vars (created)');
+  }
+}
+
+connectDB().then(async () => {
   initR2();
+  await ensurePlatformAdminFromEnv();
   app.listen(PORT, () => log.info({ port: PORT }, 'Exhibition Order SaaS running'));
 }).catch(err => {
   log.fatal({ err }, 'Failed to connect to database');
