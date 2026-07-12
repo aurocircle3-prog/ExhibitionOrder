@@ -1,0 +1,121 @@
+<title>Platform Admin — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div class="wrap">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0">Companies <span class="muted" id="tenantCount"></span></h3>
+      <div>
+        <span class="muted" id="whoami"></span>
+        <button class="ghost small" onclick="logout()">Log out</button>
+      </div>
+    </div>
+    <input id="search" placeholder="Filter by name or slug…" style="margin-top:12px" oninput="renderList()">
+    <div class="table-scroll" style="margin-top:10px"><table>
+      <thead><tr><th>Company</th><th>Slug</th><th>Plan</th><th>Users</th><th>Items</th><th>Orders</th><th>Buyers</th><th>Created</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card" id="detailCard" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0" id="detailTitle"></h3>
+      <button class="ghost small" onclick="closeDetail()">✕ Close</button>
+    </div>
+    <p class="muted" id="detailSlug"></p>
+
+    <h4>Users</h4>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th></tr></thead>
+      <tbody id="detailUsers"></tbody>
+    </table></div>
+
+    <h4>Order Form fields</h4>
+    <p id="detailOrderFields" class="muted"></p>
+
+    <h4>Item Master fields (<span id="fieldCount"></span>)</h4>
+    <p id="detailFields" class="muted"></p>
+
+    <h4>Recent orders</h4>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Status</th><th>Date</th></tr></thead>
+      <tbody id="detailOrders"></tbody>
+    </table></div>
+  </div>
+</div>
+<script>
+const token = localStorage.getItem('exo_platform_token');
+if (!token) location.href = '/platform/login.html';
+const admin = JSON.parse(localStorage.getItem('exo_platform_admin') || '{}');
+document.getElementById('whoami').textContent = admin.name ? `${admin.name} (${admin.email})` : '';
+
+async function platformFetch(path, opts = {}) {
+  const res = await fetch('/api/platform' + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, ...(opts.headers || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { logout(); throw new Error('Session expired'); }
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+function logout(){ localStorage.removeItem('exo_platform_token'); localStorage.removeItem('exo_platform_admin'); location.href = '/platform/login.html'; }
+
+let tenants = [];
+async function load(){
+  try { tenants = await platformFetch('/tenants'); renderList(); }
+  catch (e) { alert(e.message); }
+}
+function renderList(){
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const filtered = q ? tenants.filter(t => t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q)) : tenants;
+  document.getElementById('tenantCount').textContent = `— ${filtered.length} of ${tenants.length}`;
+  document.getElementById('rows').innerHTML = filtered.map(t => `
+    <tr style="cursor:pointer" onclick="openDetail('${t.id}')">
+      <td><b>${t.name}</b></td>
+      <td>${t.slug}</td>
+      <td>${t.plan}</td>
+      <td>${t.userCount}</td>
+      <td>${t.itemCount}</td>
+      <td>${t.orderCount}</td>
+      <td>${t.partyCount}</td>
+      <td>${new Date(t.createdAt).toLocaleDateString()}</td>
+    </tr>`).join('') || '<tr><td colspan="8" class="muted">No companies yet</td></tr>';
+}
+
+async function openDetail(id){
+  let detail;
+  try { detail = await platformFetch('/tenants/' + id); }
+  catch (e) { alert(e.message); return; }
+  const { tenant, users, fieldDefs, counts, recentOrders } = detail;
+
+  document.getElementById('detailTitle').textContent = tenant.name;
+  document.getElementById('detailSlug').textContent = `/${tenant.slug} — plan: ${tenant.plan} — created ${new Date(tenant.createdAt).toLocaleString()} — ${counts.itemCount} items, ${counts.orderCount} orders, ${counts.partyCount} buyers, ${counts.exhibitionCount} exhibitions`;
+
+  document.getElementById('detailUsers').innerHTML = users.map(u => `
+    <tr>
+      <td>${u.name}</td><td>${u.role}</td><td>${u.loginId}</td><td>${u.phone || '—'}</td>
+      <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No users</td></tr>';
+
+  document.getElementById('detailOrderFields').textContent = (tenant.orderFields || []).length
+    ? tenant.orderFields.map(f => f.label || f.key).join(', ')
+    : 'None configured — orders only show item name and qty.';
+
+  document.getElementById('fieldCount').textContent = fieldDefs.length;
+  document.getElementById('detailFields').textContent = fieldDefs.map(f => f.label).join(', ') || 'None';
+
+  document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
+    <tr>
+      <td>${o.orderNo}</td><td>${o.partyName}</td><td>${o.staffName}</td>
+      <td><span class="badge ${o.status}">${o.status}</span></td>
+      <td>${new Date(o.createdAt).toLocaleDateString()}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
+
+  document.getElementById('detailCard').style.display = 'block';
+  document.getElementById('detailCard').scrollIntoView({ behavior: 'smooth' });
+}
+function closeDetail(){ document.getElementById('detailCard').style.display = 'none'; }
+
+load();
+</script>

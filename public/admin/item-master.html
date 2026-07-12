@@ -82,9 +82,8 @@
       <h3 style="margin-top:0" id="formTitle">Add item</h3>
       <div id="itemForm" class="grid cols-3"></div>
       <div style="margin-top:14px" id="photosSection">
-        <label>Photos <span class="muted">— up to 3, named from the Image Code above (code, code_1, code_2)</span></label>
+        <label>Photos <span class="muted">— shared by Image Code, uploaded via the bulk uploader above</span></label>
         <div id="existingPhotos" style="display:flex;gap:10px;margin-bottom:8px"></div>
-        <input type="file" id="images" multiple accept="image/*">
         <p class="muted" id="photoHint" style="margin-top:4px"></p>
       </div>
       <button class="primary" style="margin-top:14px" onclick="saveItem()">Save item</button>
@@ -243,9 +242,12 @@ function renderExistingPhotos(){
       <button class="danger small" style="position:absolute;top:-8px;right:-8px;padding:2px 6px" onclick="removeImage(event,${i})">✕</button>
     </div>`).join('');
   const remaining = 3 - editingImages.length;
+  const code = document.getElementById('f_imageCode')?.value?.trim();
   document.getElementById('photoHint').textContent = editingId
-    ? (remaining > 0 ? `${remaining} photo slot(s) left` : 'Maximum of 3 photos reached — remove one to add another')
-    : 'Save the item first, then add photos (needs an Image Code).';
+    ? (code
+        ? (remaining > 0 ? `${remaining} photo slot(s) left for Image Code "${code}" — use the Photos uploader above, named ${code}.jpg${remaining > 1 ? `, ${code}_1.jpg` : ''}` : `Maximum of 3 photos reached for Image Code "${code}" — remove one below to add another. Any other item using this code shares these same photos.`)
+        : 'Set an Image Code above, save, then upload photos named after it in the Photos section above.')
+    : 'Save the item first, then upload photos named after its Image Code, using the Photos section above.';
 }
 async function removeImage(ev, index){
   ev.stopPropagation();
@@ -261,17 +263,9 @@ async function saveItem(){
   const values = {};
   fields.forEach(f => { const el = document.getElementById('f_'+f.key); if (el && el.value !== '') values[f.key] = el.value; });
   try {
-    let item;
-    if (editingId) { await EXO.apiFetch('/items/'+editingId, { method:'PUT', body: JSON.stringify({ fields: values }) }); item = { id: editingId }; }
-    else { item = await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values }) }); }
-    const files = document.getElementById('images').files;
-    if (files.length) {
-      const fd = new FormData();
-      for (const f of files) fd.append('images', f);
-      await EXO.apiFetch('/items/'+item.id+'/images', { method:'POST', body: fd });
-    }
+    if (editingId) await EXO.apiFetch('/items/'+editingId, { method:'PUT', body: JSON.stringify({ fields: values }) });
+    else await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values }) });
     resetForm();
-    document.getElementById('images').value = '';
     loadItems();
   } catch(e) { err.textContent = e.message; err.style.display='block'; }
 }

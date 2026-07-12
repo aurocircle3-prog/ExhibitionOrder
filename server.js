@@ -144,6 +144,28 @@ const auditLogSchema = new mongoose.Schema({
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Images are owned by Image Code, not by any one item — this is the single
+// source of truth. Every item sharing an Image Code gets the same photos
+// automatically; item.images stays a denormalized copy (kept in sync by
+// applyImagesForCode below) purely so every other route that already reads
+// item.images directly — order creation, catalog rendering, etc. — doesn't
+// need to change at all.
+// A platform admin is AuroCircle's own account for overseeing every tenant —
+// deliberately a separate model/collection from User. It isn't scoped to any
+// tenantId and must never be reachable through the normal per-tenant login
+// route. Created only via the CLI seed script (db/seed-platform-admin.js),
+// never through a public HTTP endpoint — there's no self-serve signup for
+// an account with visibility into every company's data.
+const platformAdminSchema = new mongoose.Schema({
+  id: String, email: String, password: String, name: String,
+  createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
+const imageSetSchema = new mongoose.Schema({
+  id: String, tenantId: String, imageCode: String,
+  images: [String], updatedAt: { type: String, default: () => new Date().toISOString() },
+});
+
 const exhibitionSchema = new mongoose.Schema({
   id: String, tenantId: String,
   name: String, location: String, startDate: String, endDate: String,
@@ -159,6 +181,8 @@ const Party      = mongoose.model('Party', partySchema);
 const Order      = mongoose.model('Order', orderSchema);
 const Exhibition = mongoose.model('Exhibition', exhibitionSchema);
 const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
+const ImageSet    = mongoose.model('ImageSet', imageSetSchema);
+const PlatformAdmin = mongoose.model('PlatformAdmin', platformAdminSchema);
 
 // ── DB INIT ───────────────────────────────────────────────────────────────────
 let db = null;
@@ -176,7 +200,7 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], auditlogs: [] }).write();
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], auditlogs: [], imagesets: [], platformadmins: [] }).write();
     log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
@@ -213,6 +237,28 @@ const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
+const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
+const PlatformAdminDB = makeCollectionOps(PlatformAdmin, 'platformadmins');
+
+async function findItemsByImageCode(tenantId, imageCode) {
+  const items = await ItemDB.find({ tenantId, active: true });
+  return items.filter(it => String(it.fields?.imageCode || '').trim() === imageCode);
+}
+async function getImagesForCode(tenantId, imageCode) {
+  const set = await ImageSetDB.findOne({ tenantId, imageCode });
+  return set?.images || [];
+}
+// The single write path for "what photos does this Image Code have" —
+// upload, delete, and bulk-import all go through here so every item sharing
+// an Image Code always shows the same photos with no per-item re-upload.
+async function applyImagesForCode(tenantId, imageCode, images) {
+  const existing = await ImageSetDB.findOne({ tenantId, imageCode });
+  if (existing) await ImageSetDB.update({ tenantId, imageCode }, { images, updatedAt: new Date().toISOString() });
+  else await ImageSetDB.create({ id: uuid(), tenantId, imageCode, images, updatedAt: new Date().toISOString() });
+  const items = await findItemsByImageCode(tenantId, imageCode);
+  for (const it of items) await ItemDB.update({ id: it.id }, { images });
+  return images;
+}
 
 // Fire-and-forget audit write — never let a logging failure break the
 // request that triggered it. Call this AFTER the mutation succeeds, with
@@ -305,6 +351,19 @@ function requireRole(...roles) {
   };
 }
 
+// Separate from auth() on purpose — a platform admin token has no tenantId
+// and must never be accepted by a tenant-scoped route, or vice versa.
+function platformAuth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1] || req.query.token;
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (!payload.platformAdmin) return res.status(401).json({ error: 'Not a platform admin token' });
+    req.platformAdmin = payload;
+    next();
+  } catch { res.status(401).json({ error: 'Invalid or expired token' }); }
+}
+
 // ── IMAGE UPLOAD: R2 with local disk fallback ────────────────────────────────
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 function imageFilter(_req, file, cb) {
@@ -388,6 +447,59 @@ app.get('/api/companies/check-slug', async (req, res) => {
   if (err) return res.json({ available: false, slug, error: err });
   const clash = await TenantDB.findOne({ slug });
   res.json({ available: !clash, slug });
+});
+
+// ── PLATFORM ADMIN (super admin) ─────────────────────────────────────────────
+// Entirely separate surface from the per-tenant API above — no resolveTenant,
+// no tenant-scoped auth(). Read-only by design: lets AuroCircle see every
+// company's account details, users, and settings without being able to
+// silently edit a tenant's own data through this surface.
+app.post('/api/platform/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+  const admin = await PlatformAdminDB.findOne({ email: String(email).trim().toLowerCase() });
+  if (!admin || !bcrypt.compareSync(password, admin.password)) {
+    log.warn({ email, ip: req.ip }, 'Failed platform admin login attempt');
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+  const token = jwt.sign({ platformAdmin: true, id: admin.id, email: admin.email, name: admin.name }, JWT_SECRET, { expiresIn: '12h' });
+  log.info({ email: admin.email }, 'Platform admin login');
+  res.json({ token, admin: { id: admin.id, email: admin.email, name: admin.name } });
+});
+
+app.get('/api/platform/tenants', platformAuth, async (req, res) => {
+  const tenants = await TenantDB.find({});
+  const summaries = await Promise.all(tenants.map(async t => {
+    const [userCount, itemCount, orderCount, partyCount] = await Promise.all([
+      UserDB.count({ tenantId: t.id }),
+      ItemDB.count({ tenantId: t.id, active: true }),
+      OrderDB.count({ tenantId: t.id }),
+      PartyDB.count({ tenantId: t.id }),
+    ]);
+    return { id: t.id, name: t.name, slug: t.slug, plan: t.plan, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
+  }));
+  summaries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  res.json(summaries);
+});
+
+app.get('/api/platform/tenants/:id', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const users = await UserDB.find({ tenantId: tenant.id });
+  const safeUsers = users.map(({ password, ...u }) => u);
+  const [itemCount, orderCount, partyCount, exhibitionCount, fieldDefs, orders] = await Promise.all([
+    ItemDB.count({ tenantId: tenant.id, active: true }),
+    OrderDB.count({ tenantId: tenant.id }),
+    PartyDB.count({ tenantId: tenant.id }),
+    ExhibitionDB.count({ tenantId: tenant.id, active: true }),
+    FieldDefDB.find({ tenantId: tenant.id, active: true }),
+    OrderDB.find({ tenantId: tenant.id }),
+  ]);
+  res.json({
+    tenant, users: safeUsers, fieldDefs,
+    counts: { itemCount, orderCount, partyCount, exhibitionCount },
+    recentOrders: orders.slice(0, 10),
+  });
 });
 
 app.post('/api/companies/register', async (req, res) => {
@@ -665,9 +777,11 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   const scannerCode = scannerCodeOf(fields);
   if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode, active: true }))
     return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists` });
+  const imageCode = String(fields.imageCode || '').trim();
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
-    scannerCode, fields, images: [], active: true, createdAt: new Date().toISOString(),
+    scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
+    active: true, createdAt: new Date().toISOString(),
   };
   await ItemDB.create(item);
   res.json(item);
@@ -682,6 +796,11 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     updates.fields = { ...item.fields, ...normalizeFieldValues(fieldDefs, req.body.fields) };
     updates.scannerCode = scannerCodeOf(updates.fields);
+    const oldCode = String(item.fields?.imageCode || '').trim();
+    const newCode = String(updates.fields.imageCode || '').trim();
+    // Image Code changed — this item now belongs to a different (or no)
+    // shared photo set, so swap its images to match rather than keep stale ones.
+    if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, newCode) : [];
   }
   await ItemDB.update({ id: req.params.id }, updates);
   res.json({ ok: true });
@@ -700,12 +819,12 @@ app.post('/api/items/:id/images', resolveTenant, auth, requireRole('admin', 'sta
   if (!item) return res.status(404).json({ error: 'Item not found' });
   const imageCode = String(item.fields?.imageCode || '').trim();
   if (!imageCode) return res.status(400).json({ error: 'Set the Image Code field on this item before uploading photos' });
-  const existingCount = (item.images || []).length;
-  if (existingCount >= 3) return res.status(400).json({ error: 'This item already has the maximum of 3 photos — remove one first' });
+  const existing = await getImagesForCode(req.tenant.id, imageCode);
+  if (existing.length >= 3) return res.status(400).json({ error: 'This Image Code already has the maximum of 3 photos — remove one first' });
 
-  const remaining = 3 - existingCount;
+  const remaining = 3 - existing.length;
   const localDir = path.join('images', req.tenant.id);
-  const uploader = makeItemImageUploader(req.tenant.id, imageCode, existingCount);
+  const uploader = makeItemImageUploader(req.tenant.id, imageCode, existing.length);
   uploader.array('images', remaining)(req, res, async err => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Image too large (max 10MB)' });
@@ -713,19 +832,21 @@ app.post('/api/items/:id/images', resolveTenant, auth, requireRole('admin', 'sta
       return res.status(400).json({ error: err.message });
     }
     const newUrls = req.files.map(f => fileUrl(f, localDir));
-    const images = [...(item.images || []), ...newUrls];
-    await ItemDB.update({ id: item.id }, { images });
+    const images = await applyImagesForCode(req.tenant.id, imageCode, [...existing, ...newUrls]);
     res.json({ ok: true, images });
   });
 });
 
-// Removes one photo (by its position in the images array) to free up a slot
+// Removes one photo (by its position) from the shared Image Code set — this
+// affects every item using that code, since they're the same photos.
 app.delete('/api/items/:id/images/:index', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const item = await ItemDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!item) return res.status(404).json({ error: 'Item not found' });
+  const imageCode = String(item.fields?.imageCode || '').trim();
+  if (!imageCode) return res.status(404).json({ error: 'This item has no Image Code set' });
   const idx = Number(req.params.index);
-  const images = (item.images || []).filter((_, i) => i !== idx);
-  await ItemDB.update({ id: item.id }, { images });
+  const current = await getImagesForCode(req.tenant.id, imageCode);
+  const images = await applyImagesForCode(req.tenant.id, imageCode, current.filter((_, i) => i !== idx));
   res.json({ ok: true, images });
 });
 
@@ -751,8 +872,7 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
     if (!req.files?.length) return res.status(400).json({ error: 'No files uploaded' });
 
     const items = await ItemDB.find({ tenantId: req.tenant.id, active: true });
-    const byCode = {};
-    items.forEach(it => { const code = String(it.fields?.imageCode || '').trim(); if (code) byCode[code] = it; });
+    const codesInUse = new Set(items.map(it => String(it.fields?.imageCode || '').trim()).filter(Boolean));
 
     const groups = {};
     req.files.forEach(file => {
@@ -762,11 +882,10 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
 
     let matched = 0, unmatchedCode = 0, full = 0;
     for (const code of Object.keys(groups)) {
-      const item = byCode[code];
       const candidates = groups[code].sort((a, b) => a.slot - b.slot);
-      if (!item) { unmatchedCode += candidates.length; continue; }
+      if (!codesInUse.has(code)) { unmatchedCode += candidates.length; continue; }
 
-      const images = [...(item.images || [])];
+      const images = await getImagesForCode(req.tenant.id, code);
       for (const c of candidates) {
         if (images.length >= 3) { full++; continue; }
         const filename = `${code}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
@@ -782,7 +901,10 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
         }
         matched++;
       }
-      await ItemDB.update({ id: item.id }, { images });
+      // Cascades to every item sharing this Image Code, not just one —
+      // this was the actual bug: previously only the last-seen item per
+      // code got the photos, silently dropping any others sharing it.
+      await applyImagesForCode(req.tenant.id, code, images);
     }
     res.json({ ok: true, totalFiles: req.files.length, matched, unmatchedCode, full });
   });

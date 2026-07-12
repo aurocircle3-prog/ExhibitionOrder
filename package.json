@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "seed": "node db/seed.js"
+    "seed": "node db/seed.js",
+    "seed:platform-admin": "node db/seed-platform-admin.js"
   },
   "license": "ISC",
   "dependencies": {

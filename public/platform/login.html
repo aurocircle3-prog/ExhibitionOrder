@@ -1,0 +1,33 @@
+<title>Platform Admin — Exhibition Order</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<div class="wrap" style="max-width:400px;margin-top:60px">
+  <div class="card">
+    <h3 style="margin-top:0">Platform Admin</h3>
+    <p class="muted" style="margin-top:-8px">AuroCircle-only — oversight across every company, not a company login.</p>
+    <div class="error" id="err"></div>
+    <label>Email</label>
+    <input id="email" type="email" autofocus onkeydown="if(event.key==='Enter')login()">
+    <label>Password</label>
+    <input id="password" type="password" onkeydown="if(event.key==='Enter')login()">
+    <button class="primary" style="margin-top:14px;width:100%" onclick="login()">Sign in</button>
+  </div>
+</div>
+<script>
+async function login(){
+  const err = document.getElementById('err'); err.style.display='none';
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  try {
+    const res = await fetch('/api/platform/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Login failed');
+    localStorage.setItem('exo_platform_token', data.token);
+    localStorage.setItem('exo_platform_admin', JSON.stringify(data.admin));
+    location.href = '/platform/dashboard.html';
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+</script>
