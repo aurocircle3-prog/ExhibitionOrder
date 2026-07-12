@@ -687,6 +687,11 @@ app.put('/api/platform/tenants/:id/order-fields', platformAuth, async (req, res)
   const result = await saveOrderFieldsForTenant(tenant.id, req.body.orderFields, req.body.showImages);
   res.json({ ok: true, ...result });
 });
+app.get('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  res.json(await getReportsForTenant(tenant.id));
+});
 
 // ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
 app.get('/api/auth/setup-token/:token', async (req, res) => {
@@ -1648,37 +1653,39 @@ app.delete('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), as
 // ── REPORTS ───────────────────────────────────────────────────────────────────
 // Computed in application code (not a DB aggregation pipeline) so the same logic
 // works identically against MongoDB and the lowdb fallback.
-app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const orders = await OrderDB.find({ tenantId: req.tenant.id });
-  const byParty = {};
+// Shared by the tenant-scoped report routes and the platform-admin
+// equivalent below — single-sourced so the numbers can never disagree
+// between what a company admin sees and what the platform admin sees.
+async function getReportsForTenant(tenantId) {
+  const orders = await OrderDB.find({ tenantId });
+  const byParty = {}, byItem = {}, byStaff = {};
   for (const o of orders) {
-    const key = o.partyId;
-    byParty[key] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
-    byParty[key].orderCount += 1;
-  }
-  res.json(Object.values(byParty).sort((a, b) => b.orderCount - a.orderCount));
-});
-
-app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const orders = await OrderDB.find({ tenantId: req.tenant.id });
-  const byItem = {};
-  for (const o of orders) {
+    byParty[o.partyId] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
+    byParty[o.partyId].orderCount += 1;
+    byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0 };
+    byStaff[o.staffId].orderCount += 1;
     for (const line of o.items || []) {
       byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, qty: 0 };
       byItem[line.itemId].qty += line.qty;
     }
   }
-  res.json(Object.values(byItem).sort((a, b) => b.qty - a.qty));
+  return {
+    byParty: Object.values(byParty).sort((a, b) => b.orderCount - a.orderCount),
+    byItem: Object.values(byItem).sort((a, b) => b.qty - a.qty),
+    byStaff: Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount),
+  };
+}
+
+app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  res.json((await getReportsForTenant(req.tenant.id)).byParty);
+});
+
+app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  res.json((await getReportsForTenant(req.tenant.id)).byItem);
 });
 
 app.get('/api/reports/staff-wise', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const orders = await OrderDB.find({ tenantId: req.tenant.id });
-  const byStaff = {};
-  for (const o of orders) {
-    byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0 };
-    byStaff[o.staffId].orderCount += 1;
-  }
-  res.json(Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount));
+  res.json((await getReportsForTenant(req.tenant.id)).byStaff);
 });
 
 // Admin-only view into the audit trail — filter by tenant automatically,

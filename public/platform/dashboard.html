@@ -50,6 +50,7 @@
       <button class="tab-btn" data-dtab="access" onclick="switchDetailTab('access')">Access &amp; Limits</button>
       <button class="tab-btn" data-dtab="config" onclick="switchDetailTab('config')">Configuration</button>
       <button class="tab-btn" data-dtab="orders" onclick="switchDetailTab('orders')">Recent Orders</button>
+      <button class="tab-btn" data-dtab="reports" onclick="switchDetailTab('reports')">Reports</button>
     </div>
 
     <div class="tab-panel" id="dtab-users">
@@ -103,6 +104,15 @@
         <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Status</th><th>Date</th></tr></thead>
         <tbody id="detailOrders"></tbody>
       </table></div>
+    </div>
+
+    <div class="tab-panel" id="dtab-reports">
+      <h4 style="margin-top:0">Party-wise orders</h4>
+      <div class="table-scroll"><table><thead><tr><th>Buyer</th><th>Phone</th><th>Orders</th></tr></thead><tbody id="reportPartyRows"></tbody></table></div>
+      <h4>Item-wise orders</h4>
+      <div class="table-scroll"><table><thead><tr><th>Item</th><th>Scan code</th><th>Qty ordered</th></tr></thead><tbody id="reportItemRows"></tbody></table></div>
+      <h4>Staff-wise orders</h4>
+      <div class="table-scroll"><table><thead><tr><th>Staff</th><th>Orders</th></tr></thead><tbody id="reportStaffRows"></tbody></table></div>
     </div>
   </div>
 </div>
@@ -235,6 +245,12 @@ async function openDetail(id){
       <td><span class="badge ${o.status}">${o.status}</span></td>
       <td>${new Date(o.createdAt).toLocaleDateString()}</td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
+
+  platformFetch('/tenants/' + id + '/reports').then(({ byParty, byItem, byStaff }) => {
+    document.getElementById('reportPartyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
+    document.getElementById('reportItemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
+    document.getElementById('reportStaffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
+  }).catch(() => {});
 
   document.getElementById('detailCard').style.display = 'block';
   switchDetailTab('users');
