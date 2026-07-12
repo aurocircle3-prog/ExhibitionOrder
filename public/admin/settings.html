@@ -86,14 +86,9 @@ function switchTab(name){
   localStorage.setItem('exo_settings_tab', name);
 }
 
-function applyLock(panelId, locked, label){
-  if (!locked) return;
-  const panel = document.getElementById(panelId);
-  panel.querySelectorAll('input, select, textarea, button').forEach(el => el.disabled = true);
-  const notice = document.createElement('p');
-  notice.style.cssText = 'background:#fff3cd;padding:10px 14px;border-radius:8px;margin-top:12px;font-size:13px;color:#664d03';
-  notice.textContent = `🔒 ${label} is managed by AuroCircle for your account — contact us if you need this changed.`;
-  panel.querySelector('.card').appendChild(notice);
+function applyLock(tabName, locked){
+  const btn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+  if (locked && btn) btn.style.display = 'none';
 }
 
 async function load(){
@@ -109,15 +104,21 @@ async function load(){
   renderColumns();
   loadExhibitions();
 
-  // Platform-admin-controlled — some sections may be locked from editing.
-  // Applied last, after every section has finished rendering its own
-  // inputs/buttons, so nothing dynamically added afterward slips through unlocked.
+  // Platform-admin-controlled — locked sections are hidden entirely, not
+  // just disabled, so a company admin never sees settings they can't touch.
   const perms = me.tenant.settingsPermissions || {};
-  applyLock('tab-company', perms.companyName === false, 'Company settings');
-  applyLock('tab-orderform', perms.orderForm === false, 'Order Form');
-  applyLock('tab-orderdetails', perms.orderDetailsFields === false, 'Order Details Fields');
-  applyLock('tab-layout', perms.orderViewLayout === false, 'Order View Layout');
-  switchTab(localStorage.getItem('exo_settings_tab') || 'company');
+  applyLock('company', perms.companyName === false);
+  applyLock('orderform', perms.orderForm === false);
+  applyLock('orderdetails', perms.orderDetailsFields === false);
+  applyLock('layout', perms.orderViewLayout === false);
+
+  // Land on the previously-open tab only if it's still visible; otherwise
+  // fall back to the first visible one (Exhibitions is never locked, so
+  // there's always at least one to land on).
+  const savedTab = localStorage.getItem('exo_settings_tab') || 'company';
+  const savedBtn = document.querySelector(`.tab-btn[data-tab="${savedTab}"]`);
+  if (savedBtn && savedBtn.style.display !== 'none') switchTab(savedTab);
+  else switchTab(document.querySelector('.tab-btn:not([style*="none"])').dataset.tab);
 }
 
 async function save(){
