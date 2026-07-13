@@ -1,8 +1,9 @@
-<title>Order — Exhibition Order</title>
+<title>Order — Expo Orders</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
-<div class="topbar"><div class="brand" id="companyName">🎪 Exhibition Order</div></div>
+<div class="topbar"><div class="brand" id="companyName"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div></div>
 <div class="wrap" id="content">
   <p class="muted">Loading order…</p>
 </div>
@@ -48,7 +49,7 @@ async function load(){
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
     const { order, company } = res;
-    document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Exhibition Order');
+    document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Expo Orders');
 
     const isDynamic = !!(order.columnsSnapshot && order.columnsSnapshot.length);
     const { headerCells, rows } = isDynamic ? renderDynamicTable(order) : renderLegacyTable(order);

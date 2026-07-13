@@ -1,7 +1,7 @@
 {
-  "name": "exhibition-order-saas",
+  "name": "expo-orders",
   "version": "1.0.0",
-  "description": "Multi-tenant exhibition / store ordering SaaS — dynamic item master, scan-to-cart order taking, shareable order links.",
+  "description": "Multi-tenant exhibition / store ordering SaaS (Expo Orders) — dynamic item master, scan-to-cart order taking, shareable order links.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

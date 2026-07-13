@@ -1,4 +1,4 @@
-# Exhibition Order SaaS
+# Expo Orders
 
 Multi-tenant exhibition / store ordering platform — every company gets its own
 item master with configurable fields, a scan-to-cart order-taking panel for

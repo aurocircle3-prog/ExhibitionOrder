@@ -375,7 +375,7 @@ app.use(pinoHttp({
 }));
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.get('/api/ping', (req, res) => res.send('exhibition-order-saas OK'));
+app.get('/api/ping', (req, res) => res.send('expo-orders OK'));
 
 // Resolves the company (tenant) for every /api/* call from, in priority order:
 // explicit header/query (used by the frontend + during local dev without subdomains),
@@ -1807,7 +1807,7 @@ connectDB().then(async () => {
   initR2();
   await ensurePlatformAdminFromEnv();
   await migrateFixedFields();
-  app.listen(PORT, () => log.info({ port: PORT }, 'Exhibition Order SaaS running'));
+  app.listen(PORT, () => log.info({ port: PORT }, 'Expo Orders running'));
 }).catch(err => {
   log.fatal({ err }, 'Failed to connect to database');
   process.exit(1);
