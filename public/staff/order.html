@@ -27,7 +27,13 @@
       <div class="grid cols-2" style="margin-top:10px">
         <div><label>Firm name</label><input id="firmName"></div>
         <div><label>Contact person</label><input id="contactPerson"></div>
-        <div><label>Phone</label><input id="phone"></div>
+        <div>
+          <label>Phone</label>
+          <div style="display:flex;gap:6px">
+            <input id="phoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
+            <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+          </div>
+        </div>
         <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
       </div>
       <button class="primary" style="margin-top:12px" onclick="createParty()">Use this buyer</button>
@@ -263,7 +269,9 @@ async function processCardImage(fileOrBlob, filename){
   const guess = (ocrGuess.firmName || ocrGuess.phone) ? ocrGuess : (serverGuess || {});
   document.getElementById('firmName').value = guess.firmName || '';
   document.getElementById('contactPerson').value = guess.contactPerson || '';
-  document.getElementById('phone').value = guess.phone || '';
+  const phoneParts = splitPhone(guess.phone);
+  document.getElementById('phoneCC').value = phoneParts.cc;
+  document.getElementById('phone').value = phoneParts.num;
   document.getElementById('email').value = guess.email || '';
   status.style.display = 'none';
   if (!guess.firmName && !guess.phone) {
@@ -271,12 +279,21 @@ async function processCardImage(fileOrBlob, filename){
     status.textContent = "Couldn't read the card clearly — please fill the details in manually below.";
   }
 }
+// Best-effort split of an OCR-detected number into country code + local
+// number — falls back to +91 (the common case here) if there's no more
+// than 10 digits total (already just a local number).
+function splitPhone(raw){
+  const digits = String(raw || '').replace(/[^\d+]/g, '').replace(/^\+/, '');
+  if (digits.length > 10) return { cc: '+' + digits.slice(0, digits.length - 10), num: digits.slice(-10) };
+  return { cc: '+91', num: digits };
+}
 async function createParty(){
   const err = document.getElementById('partyErr'); err.style.display='none';
+  const phoneNum = document.getElementById('phone').value.trim();
   const body = {
     firmName: document.getElementById('firmName').value.trim(),
     contactPerson: document.getElementById('contactPerson').value.trim(),
-    phone: document.getElementById('phone').value.trim(),
+    phone: phoneNum ? document.getElementById('phoneCC').value.trim() + phoneNum : '',
     email: document.getElementById('email').value.trim(),
     cardImageUrl, source: cardImageUrl ? 'scanned' : 'manual',
   };

@@ -17,7 +17,13 @@
     <h3 style="margin-top:0">Add staff</h3>
     <div class="grid cols-3">
       <div><label>Name</label><input id="name"></div>
-      <div><label>Phone</label><input id="phone"></div>
+      <div>
+        <label>Phone</label>
+        <div style="display:flex;gap:6px">
+          <input id="phoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
+          <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+        </div>
+      </div>
       <div><label>Email <span class="muted">(used as login ID)</span></label><input id="email" type="email"></div>
       <div><label>Password</label><input id="password" type="password"></div>
     </div>
@@ -57,9 +63,10 @@ async function resetPassword(id, name){
 async function addStaff(){
   const err = document.getElementById('err'); err.style.display='none';
   try {
+    const phoneNum = document.getElementById('phone').value.trim();
     const body = {
       name: document.getElementById('name').value.trim(),
-      phone: document.getElementById('phone').value.trim(),
+      phone: phoneNum ? document.getElementById('phoneCC').value.trim() + phoneNum : '',
       email: document.getElementById('email').value.trim(),
       password: document.getElementById('password').value,
     };

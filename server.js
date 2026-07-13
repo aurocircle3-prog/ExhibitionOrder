@@ -33,10 +33,11 @@ let s3Client = null;
 let useR2 = false;
 let multerS3 = null;
 let S3PutObjectCommand = null; // used by the bulk image import route, which writes files manually
+let S3ListObjectsCommand = null, S3DeleteObjectsCommand = null; // used only when a company is deleted, to clean up its files
 
 function initR2() {
   if (R2_ACCOUNT_ID && R2_ACCESS_KEY && R2_SECRET_KEY && R2_BUCKET && R2_PUBLIC_URL) {
-    const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+    const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
     multerS3 = require('multer-s3');
     s3Client = new S3Client({
       region: 'auto',
@@ -44,6 +45,8 @@ function initR2() {
       credentials: { accessKeyId: R2_ACCESS_KEY, secretAccessKey: R2_SECRET_KEY },
     });
     S3PutObjectCommand = PutObjectCommand;
+    S3ListObjectsCommand = ListObjectsV2Command;
+    S3DeleteObjectsCommand = DeleteObjectsCommand;
     useR2 = true;
     log.info('Cloudflare R2 image storage enabled');
   } else {
@@ -68,6 +71,10 @@ const tenantSchema = new mongoose.Schema({
   // had a race window: two staff submitting at the same instant could both
   // read the same count and get the same order number.
   orderSeq: { type: Number, default: 1000 },
+  // Platform-admin-only kill switch — an inactive company is fully locked
+  // out (login, API, everything) until reactivated. Not the same as
+  // deleting: data stays intact, this is a pause, not a wipe.
+  active: { type: Boolean, default: true },
   // Fully custom layout for the public/buyer-facing order link — an ordered
   // list of {id, type, label, width, fieldKey?, formula?}. type is one of
   // 'images' | 'field' | 'formula' | 'serial'. Empty array = fall back to
@@ -395,6 +402,7 @@ async function resolveTenant(req, res, next) {
   if (!slug) return res.status(400).json({ error: 'Company not specified. Use the company subdomain, or pass ?tenant=slug / X-Tenant-Slug header.' });
   const tenant = await TenantDB.findOne({ slug: String(slug).toLowerCase() });
   if (!tenant) return res.status(404).json({ error: `No company found for "${slug}"` });
+  if (tenant.active === false) return res.status(403).json({ error: 'This company account is currently inactive. Contact AuroCircle for help.' });
   req.tenant = tenant;
   next();
 }
@@ -546,7 +554,7 @@ app.get('/api/platform/tenants', platformAuth, async (req, res) => {
       OrderDB.count({ tenantId: t.id }),
       PartyDB.count({ tenantId: t.id }),
     ]);
-    return { id: t.id, name: t.name, slug: t.slug, plan: t.plan, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
+    return { id: t.id, name: t.name, slug: t.slug, plan: t.plan, active: t.active !== false, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
   }));
   summaries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   res.json(summaries);
@@ -658,6 +666,82 @@ app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) 
   }
   await TenantDB.update({ id: tenant.id }, { settingsPermissions });
   res.json({ ok: true, settingsPermissions });
+});
+
+app.put('/api/platform/tenants/:id/slug', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const slug = normalizeSlug(req.body.slug || '');
+  const slugErr = validateSlug(slug);
+  if (slugErr) return res.status(400).json({ error: slugErr });
+  const existing = await TenantDB.findOne({ slug });
+  if (existing && existing.id !== tenant.id) return res.status(400).json({ error: 'That company link name is already taken' });
+  await TenantDB.update({ id: tenant.id }, { slug });
+  log.info({ from: tenant.slug, to: slug, platformAdmin: req.platformAdmin.email }, 'Platform admin changed a company slug');
+  res.json({ ok: true, slug });
+});
+
+app.put('/api/platform/tenants/:id/active', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const active = !!req.body.active;
+  await TenantDB.update({ id: tenant.id }, { active });
+  log.info({ tenant: tenant.slug, active, platformAdmin: req.platformAdmin.email }, 'Platform admin changed company active status');
+  res.json({ ok: true, active });
+});
+
+// Irreversible — wipes every record belonging to this tenant across every
+// collection, not just the tenant document itself. Gated behind the calling
+// platform admin re-entering their OWN password (not the company's), on top
+// of already having a valid platform session — a second factor specifically
+// because a stolen/left-open platform session shouldn't be enough on its
+// own to destroy a company's entire data.
+// Cleans up every uploaded file for a tenant — item photos, visiting cards,
+// logos — under whichever storage backend is active. Best-effort: logs and
+// continues on failure rather than blocking the actual data deletion above,
+// since an orphaned file is a much smaller problem than a half-deleted company.
+async function deleteTenantFiles(tenantId) {
+  try {
+    if (useR2 && s3Client) {
+      const prefix = `exo/${tenantId}/`;
+      let continuationToken;
+      do {
+        const list = await s3Client.send(new S3ListObjectsCommand({ Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: continuationToken }));
+        if (list.Contents?.length) {
+          await s3Client.send(new S3DeleteObjectsCommand({ Bucket: R2_BUCKET, Delete: { Objects: list.Contents.map(o => ({ Key: o.Key })) } }));
+        }
+        continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined;
+      } while (continuationToken);
+    } else {
+      for (const dir of ['images', 'cards', 'logos']) {
+        fs.rmSync(path.join(__dirname, 'uploads', dir, tenantId), { recursive: true, force: true });
+      }
+    }
+  } catch (err) {
+    log.error({ err, tenantId }, 'Failed to clean up tenant files during company deletion (data records were still removed)');
+  }
+}
+
+app.delete('/api/platform/tenants/:id', platformAuth, async (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Your platform admin password is required to confirm deletion' });
+  const me = await PlatformAdminDB.findOne({ id: req.platformAdmin.id });
+  if (!me || !bcrypt.compareSync(password, me.password)) return res.status(401).json({ error: 'Incorrect password' });
+
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+
+  const tenantId = tenant.id;
+  await Promise.all([
+    UserDB.remove({ tenantId }), FieldDefDB.remove({ tenantId }), ItemDB.remove({ tenantId }),
+    PartyDB.remove({ tenantId }), OrderDB.remove({ tenantId }), ExhibitionDB.remove({ tenantId }),
+    AuditLogDB.remove({ tenantId }), ImageSetDB.remove({ tenantId }), PasswordSetupTokenDB.remove({ tenantId }),
+  ]);
+  await deleteTenantFiles(tenantId);
+  await TenantDB.remove({ id: tenantId });
+
+  log.warn({ tenant: tenant.slug, tenantId, platformAdmin: req.platformAdmin.email }, 'Platform admin permanently deleted a company and all its data');
+  res.json({ ok: true });
 });
 
 // Platform admin managing a tenant's Item Master fields and Order Form

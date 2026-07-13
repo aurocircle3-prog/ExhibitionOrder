@@ -36,7 +36,13 @@
         <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
         <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
         <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
-        <div><label>Admin mobile <span class="muted">(optional)</span></label><input id="newAdminPhone" type="tel" placeholder="+91 90290 06090"></div>
+        <div>
+          <label>Admin mobile <span class="muted">(optional)</span></label>
+          <div style="display:flex;gap:6px">
+            <input id="newAdminPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
+            <input id="newAdminPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+          </div>
+        </div>
         <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
       </div>
       <button class="primary" style="margin-top:14px" onclick="createCompany()">Create company</button>
@@ -73,7 +79,20 @@
     </div>
 
     <div class="tab-panel" id="dtab-access">
-      <h4 style="margin-top:0">Staff limit</h4>
+      <h4 style="margin-top:0">Company link</h4>
+      <p class="muted" style="margin-top:-6px">Used in login URLs and as the subdomain. Changing this breaks any bookmarked login link using the old one.</p>
+      <div class="grid cols-2">
+        <div><label>Slug</label><input id="slugInput"></div>
+        <div><label>&nbsp;</label><button class="primary" onclick="saveSlug()">Save link</button></div>
+      </div>
+
+      <h4>Status</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="activeToggle" style="width:auto" onchange="toggleActive(this)"> <span>Company is active</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Turning this off immediately blocks all login and access for everyone at this company — a pause, not a delete. Data stays intact.</p>
+
+      <h4>Staff limit</h4>
       <div class="grid cols-2">
         <div><label>Max staff <span class="muted">(blank = unlimited)</span> — currently <span id="staffUsage"></span></label><input id="maxStaffInput" type="number" min="0"></div>
         <div><label>&nbsp;</label><button class="primary" onclick="saveMaxStaff()">Save limit</button></div>
@@ -83,6 +102,10 @@
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by AuroCircle based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
       <button class="primary" style="margin-top:10px" onclick="savePermissions()">Save permissions</button>
+
+      <h4 style="color:#c0392b">Danger zone</h4>
+      <p class="muted" style="margin-top:-6px">Permanently deletes this company and everything in it — items, orders, buyers, staff accounts, uploaded photos. Cannot be undone.</p>
+      <button class="danger" onclick="deleteCompany()">Delete company permanently</button>
     </div>
 
     <div class="tab-panel" id="dtab-config">
@@ -189,7 +212,7 @@ function renderList(){
   document.getElementById('tenantCount').textContent = `— ${filtered.length} of ${tenants.length}`;
   document.getElementById('rows').innerHTML = filtered.map(t => `
     <tr style="cursor:pointer" onclick="openDetail('${t.id}')">
-      <td><b>${t.name}</b></td>
+      <td><b>${t.name}</b> ${t.active === false ? '<span class="badge cancelled">inactive</span>' : ''}</td>
       <td>${t.slug}</td>
       <td>${t.plan}</td>
       <td>${t.userCount}</td>
@@ -208,7 +231,7 @@ async function createCompany(){
     slug: document.getElementById('newSlug').value.trim(),
     adminName: document.getElementById('newAdminName').value.trim(),
     email: document.getElementById('newAdminEmail').value.trim(),
-    phone: document.getElementById('newAdminPhone').value.trim(),
+    phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
     maxStaff: document.getElementById('newMaxStaff').value,
   };
   if (!body.companyName || !body.slug || !body.adminName || !body.email) {
@@ -234,6 +257,40 @@ async function saveMaxStaff(){
     await platformFetch(`/tenants/${lastTenantId}/max-staff`, { method: 'PUT', body: JSON.stringify({ maxStaff: val === '' ? null : val }) });
     EXO.toast('Staff limit saved.');
     openDetail(lastTenantId);
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function saveSlug(){
+  const slug = document.getElementById('slugInput').value.trim();
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/slug`, { method: 'PUT', body: JSON.stringify({ slug }) });
+    EXO.toast('Company link updated.');
+    openDetail(lastTenantId);
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function toggleActive(checkbox){
+  const active = checkbox.checked;
+  const verb = active ? 'reactivate' : 'deactivate';
+  if (!confirm(`Are you sure you want to ${verb} this company? ${active ? '' : 'Everyone there will be immediately locked out of login and the app.'}`)) {
+    checkbox.checked = !active; // revert the click
+    return;
+  }
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/active`, { method: 'PUT', body: JSON.stringify({ active }) });
+    EXO.toast(active ? 'Company reactivated.' : 'Company deactivated — all access is now blocked.');
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); checkbox.checked = !active; }
+}
+async function deleteCompany(){
+  const name = document.getElementById('detailTitle').textContent;
+  if (!confirm(`Permanently delete "${name}" and ALL its data — items, orders, buyers, staff accounts, uploaded photos? This cannot be undone.`)) return;
+  const password = prompt('Enter your platform admin password to confirm:');
+  if (password === null) return;
+  if (!password) { EXO.toast('Password is required to delete a company', 'error'); return; }
+  try {
+    await platformFetch(`/tenants/${lastTenantId}`, { method: 'DELETE', body: JSON.stringify({ password }) });
+    EXO.toast('Company deleted.');
+    closeDetail();
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout', itemMasterFields: 'Item Master fields (add/edit/delete)' };
@@ -267,6 +324,8 @@ async function openDetail(id){
 
   document.getElementById('detailTitle').textContent = tenant.name;
   document.getElementById('detailSlug').textContent = `/${tenant.slug} — plan: ${tenant.plan} — created ${new Date(tenant.createdAt).toLocaleString()} — ${counts.itemCount} items, ${counts.orderCount} orders, ${counts.partyCount} buyers, ${counts.exhibitionCount} exhibitions`;
+  document.getElementById('slugInput').value = tenant.slug;
+  document.getElementById('activeToggle').checked = tenant.active !== false;
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
