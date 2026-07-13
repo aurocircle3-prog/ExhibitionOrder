@@ -121,7 +121,8 @@ const fieldDefSchema = new mongoose.Schema({
   unit: { type: String, default: '' },    // for type=number — display suffix, e.g. "Grams", "Rs.", "Mts"
   order: { type: Number, default: 0 },
   isScannerKey: { type: Boolean, default: false }, // true only for the built-in "itemCode" field
-  fixed: { type: Boolean, default: false }, // built-in field (Item Code / Image Code) — cannot be deleted
+  fixed: { type: Boolean, default: false }, // built-in field (Unique Barcode / Image Code / Item Name) — cannot be deleted
+  required: { type: Boolean, default: false }, // item can't be saved with this field blank (duplicates still allowed unless it's also the scanner key)
   active: { type: Boolean, default: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -343,8 +344,9 @@ function logAudit(req, action, entityType, entityId, changes = null) {
 // Code is always the scan/barcode value, Image Code always drives which
 // photos attach to the item (see makeItemImageUploader below).
 const FIXED_FIELDS = [
-  { key: 'itemCode',  label: 'Item Code',  type: 'text', isScannerKey: true, fixed: true },
-  { key: 'imageCode', label: 'Image Code', type: 'text', isScannerKey: false, fixed: true },
+  { key: 'itemCode',  label: 'Unique Barcode', type: 'text', isScannerKey: true, fixed: true, required: false },
+  { key: 'imageCode', label: 'Image Code',     type: 'text', isScannerKey: false, fixed: true, required: false },
+  { key: 'itemName',  label: 'Item Name',      type: 'text', isScannerKey: false, fixed: true, required: true }, // duplicates allowed, unlike Unique Barcode
 ];
 const RESERVED_FIELD_LABELS = FIXED_FIELDS.map(f => f.label.toLowerCase());
 
@@ -1132,11 +1134,26 @@ app.get('/api/items/scan/:code', resolveTenant, auth, async (req, res) => {
   res.json(item);
 });
 
+// Shared by item create + update — checks every field marked `required` on
+// the tenant's field defs actually has a value. Unlike the scanner-key
+// (Unique Barcode) uniqueness check above, this has nothing to do with
+// duplicates — Item Name is required but duplicate names are fine.
+function validateRequiredFields(fieldDefs, fields) {
+  for (const def of fieldDefs) {
+    if (def.required && !String(fields?.[def.key] ?? '').trim()) {
+      return `${def.label} is required`;
+    }
+  }
+  return null;
+}
+
 app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { fields: rawFields, exhibitionId } = req.body;
   if (!rawFields || typeof rawFields !== 'object') return res.status(400).json({ error: 'fields object is required' });
   const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
   const fields = normalizeFieldValues(fieldDefs, rawFields);
+  const requiredErr = validateRequiredFields(fieldDefs, fields);
+  if (requiredErr) return res.status(400).json({ error: requiredErr });
   const scannerCode = scannerCodeOf(fields);
   if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode, active: true }))
     return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists` });
@@ -1158,6 +1175,8 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
   if (req.body.fields) {
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     updates.fields = { ...item.fields, ...normalizeFieldValues(fieldDefs, req.body.fields) };
+    const requiredErr = validateRequiredFields(fieldDefs, updates.fields);
+    if (requiredErr) return res.status(400).json({ error: requiredErr });
     updates.scannerCode = scannerCodeOf(updates.fields);
     const oldCode = String(item.fields?.imageCode || '').trim().toLowerCase();
     const newCode = String(updates.fields.imageCode || '').trim().toLowerCase();
@@ -1356,6 +1375,7 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         const fields = normalizeFieldValues(fieldDefs, rawFields);
         const scannerCode = scannerField ? String(fields[scannerField.key] || '').trim() : '';
         if (!scannerCode) { skipped++; continue; }
+        if (validateRequiredFields(fieldDefs, fields)) { skipped++; continue; }
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode, active: true });
         if (existing) {
           await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields } });
@@ -1770,9 +1790,33 @@ async function ensurePlatformAdminFromEnv() {
   }
 }
 
+// One-time backfill for companies created before this change: FIXED_FIELDS
+// is only ever seeded at company-creation time, so existing tenants won't
+// pick up a renamed or newly-added fixed field on their own. Idempotent —
+// safe to run on every boot, only touches what's actually missing/stale.
+async function migrateFixedFields() {
+  const tenants = await TenantDB.find({});
+  for (const tenant of tenants) {
+    const existing = await FieldDefDB.find({ tenantId: tenant.id });
+    const byKey = {}; existing.forEach(f => { byKey[f.key] = f; });
+    let maxOrder = existing.reduce((m, f) => Math.max(m, f.order ?? 0), -1);
+    for (const def of FIXED_FIELDS) {
+      const current = byKey[def.key];
+      if (!current) {
+        maxOrder += 1;
+        await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: maxOrder, active: true, options: [], createdAt: new Date().toISOString(), ...def });
+        log.info({ tenant: tenant.slug, field: def.key }, 'Backfilled missing fixed field');
+      } else if (current.label !== def.label || current.required !== !!def.required) {
+        await FieldDefDB.update({ id: current.id }, { label: def.label, required: !!def.required });
+      }
+    }
+  }
+}
+
 connectDB().then(async () => {
   initR2();
   await ensurePlatformAdminFromEnv();
+  await migrateFixedFields();
   app.listen(PORT, () => log.info({ port: PORT }, 'Exhibition Order SaaS running'));
 }).catch(err => {
   log.fatal({ err }, 'Failed to connect to database');

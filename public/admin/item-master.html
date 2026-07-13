@@ -191,7 +191,7 @@ async function deleteField(id){
 function renderItemForm(){
   document.getElementById('itemForm').innerHTML = fields.map(f => `
     <div>
-      <label>${f.label}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
+      <label>${f.label}${f.required?' <span style="color:#c0392b">*</span>':''}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
       ${f.type==='dropdown'
         ? `<select id="f_${f.key}"><option value="">—</option>${(f.options||[]).map(o=>`<option>${o}</option>`).join('')}</select>`
         : `<input id="f_${f.key}" type="${f.type==='number'?'number':f.type==='date'?'date':'text'}" ${f.type==='number'?`step="${f.decimals?1/Math.pow(10,f.decimals):'any'}"`:''}>`}
