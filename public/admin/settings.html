@@ -75,6 +75,7 @@
       </div>
     </div>
   </div>
+  <p class="muted" id="versionTag" style="text-align:center;margin-top:10px;font-size:11px"></p>
 </div>
 <script src="/app.js"></script>
 <script>
@@ -341,4 +342,5 @@ async function addExhibition(){
 async function removeExhibition(id){ await EXO.apiFetch('/exhibitions/'+id, { method:'DELETE' }); loadExhibitions(); EXO.toast('Exhibition removed'); }
 
 load();
+EXO.showVersion('versionTag');
 </script>

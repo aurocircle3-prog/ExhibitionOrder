@@ -16,10 +16,12 @@
     <input id="password" type="password">
     <button class="primary" style="width:100%;margin-top:18px" onclick="login()">Sign in</button>
   </div>
+  <p class="muted" id="versionTag" style="text-align:center;margin-top:14px;font-size:11px"></p>
 </div>
 <script src="/app.js"></script>
 <script>
 document.getElementById('tenant').value = EXO.getTenantSlug();
+EXO.showVersion('versionTag');
 async function login(){
   const err = document.getElementById('err'); err.style.display='none';
   const tenant = document.getElementById('tenant').value.trim();

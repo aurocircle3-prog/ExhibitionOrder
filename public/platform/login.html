@@ -14,8 +14,12 @@
     <input id="password" type="password" onkeydown="if(event.key==='Enter')login()">
     <button class="primary" style="margin-top:14px;width:100%" onclick="login()">Sign in</button>
   </div>
+  <p class="muted" id="versionTag" style="text-align:center;margin-top:14px;font-size:11px"></p>
 </div>
 <script>
+fetch('/api/version').then(r => r.json()).then(({ version, builtAt }) => {
+  document.getElementById('versionTag').textContent = `Expo Orders v${version} · built ${new Date(builtAt).toLocaleString()}`;
+}).catch(() => {});
 async function login(){
   const err = document.getElementById('err'); err.style.display='none';
   const email = document.getElementById('email').value.trim();

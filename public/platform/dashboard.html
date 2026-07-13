@@ -178,6 +178,7 @@
       <div class="table-scroll"><table><thead><tr><th>Staff</th><th>Orders</th></tr></thead><tbody id="reportStaffRows"></tbody></table></div>
     </div>
   </div>
+  <p class="muted" id="versionTag" style="text-align:center;margin-top:10px;font-size:11px"></p>
 </div>
 <script>
 const token = localStorage.getItem('exo_platform_token');
@@ -640,4 +641,5 @@ async function resetUserPassword(tenantId, userId, name){
 
 switchTopTab('companies');
 load();
+EXO.showVersion('versionTag');
 </script>

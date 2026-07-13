@@ -18,6 +18,11 @@ const PORT       = process.env.PORT       || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'exhibition-saas-dev-secret';
 const MONGO_URI  = process.env.MONGO_URI  || '';
 const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
+// Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
+// delivered update — the fast, foolproof way to check "did my last deploy
+// actually go live" is to compare this against when you think you pushed.
+const APP_VERSION  = '1.2.0';
+const BUILD_TIME   = '2026-07-13T18:10:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -383,6 +388,7 @@ app.use(pinoHttp({
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.get('/api/ping', (req, res) => res.send('expo-orders OK'));
+app.get('/api/version', (req, res) => res.json({ version: APP_VERSION, builtAt: BUILD_TIME }));
 
 // Resolves the company (tenant) for every /api/* call from, in priority order:
 // explicit header/query (used by the frontend + during local dev without subdomains),
@@ -1891,7 +1897,7 @@ connectDB().then(async () => {
   initR2();
   await ensurePlatformAdminFromEnv();
   await migrateFixedFields();
-  app.listen(PORT, () => log.info({ port: PORT }, 'Expo Orders running'));
+  app.listen(PORT, () => log.info({ port: PORT, version: APP_VERSION, builtAt: BUILD_TIME }, 'Expo Orders running'));
 }).catch(err => {
   log.fatal({ err }, 'Failed to connect to database');
   process.exit(1);

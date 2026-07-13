@@ -91,7 +91,20 @@
     toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast };
+  // Small, deliberately-boring helper for "did my last deploy actually go
+  // live" — fetches the running server's version/build time and drops it
+  // into whichever element asked for it. Fails silently; a missing version
+  // tag is a cosmetic non-issue, never worth an error to the user.
+  async function showVersion(elId) {
+    try {
+      const res = await fetch('/api/version');
+      const { version, builtAt } = await res.json();
+      const el = document.getElementById(elId);
+      if (el) el.textContent = `Expo Orders v${version} · built ${new Date(builtAt).toLocaleString()}`;
+    } catch {}
+  }
+
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;
