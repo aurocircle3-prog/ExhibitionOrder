@@ -143,7 +143,7 @@ async function loadOrderFields(saved){
     <tr>
       <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
-      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
+      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''} onchange="if(this.checked) document.querySelector('.of-show[data-key=\\'${f.key}\\']').checked = true">` : ''}</td>
     </tr>`).join('');
   // Column builder can only reference fields actually on the Order Form —
   // those are the only ones with a value collected per order line. Type is
@@ -154,10 +154,14 @@ async function loadOrderFields(saved){
 }
 async function saveOrderFields(){
   const err = document.getElementById('err'); err.style.display='none';
-  const orderFields = Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => {
-    const key = el.dataset.key;
+  const keysToShow = new Set([
+    ...Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => el.dataset.key),
+    ...Array.from(document.querySelectorAll('.of-total')).filter(el => el.checked).map(el => el.dataset.key), // showing a total implies showing the field
+  ]);
+  const orderFields = Array.from(keysToShow).map(key => {
+    const showEl = document.querySelector(`.of-show[data-key="${key}"]`);
     const totalEl = document.querySelector(`.of-total[data-key="${key}"]`);
-    return { key, label: el.dataset.label, showTotal: totalEl ? totalEl.checked : false };
+    return { key, label: showEl.dataset.label, showTotal: totalEl ? totalEl.checked : false };
   });
   const showImages = document.getElementById('showImages').checked;
   try {

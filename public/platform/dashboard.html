@@ -1,6 +1,7 @@
 <title>Platform Admin — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <div class="wrap">
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center">
@@ -74,29 +75,57 @@
     </div>
 
     <div class="tab-panel" id="dtab-config">
-      <h4 style="margin-top:0">Item Master fields</h4>
       <div class="error" id="fieldErr"></div>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
-        <tbody id="detailFieldRows"></tbody>
-      </table></div>
-      <div class="grid cols-3" style="margin-top:14px">
-        <div><label>New field label</label><input id="newFieldLabel" placeholder="e.g. Weight"></div>
-        <div><label>Type</label><select id="newFieldType" onchange="toggleNewFieldDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>
-        <div id="newFieldDecimalsWrap" style="display:none"><label>Decimal places</label><input id="newFieldDecimals" type="number" min="0" max="6" value="2"></div>
+      <div class="tabs subtabs">
+        <button class="tab-btn" data-ctab="itemfields" onclick="switchConfigTab('itemfields')">Item Master Fields</button>
+        <button class="tab-btn" data-ctab="orderform" onclick="switchConfigTab('orderform')">Order Form</button>
+        <button class="tab-btn" data-ctab="orderdetails" onclick="switchConfigTab('orderdetails')">Order Details Fields</button>
+        <button class="tab-btn" data-ctab="layout" onclick="switchConfigTab('layout')">Order View Layout</button>
       </div>
-      <div id="newFieldUnitRow" style="display:none"><label>Unit <span class="muted">(e.g. "Grams", "Rs.")</span></label><input id="newFieldUnit" placeholder="e.g. Grams"></div>
-      <button class="primary" style="margin-top:14px" onclick="addDetailField()">Add field</button>
 
-      <h4>Order Form <span class="muted">— which fields appear on the order link sent to buyers</span></h4>
-      <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">
-        <input type="checkbox" id="detailShowImages" style="width:auto"> <span>Show item photos on the order link</span>
-      </label>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
-        <tbody id="detailOrderFieldRows"></tbody>
-      </table></div>
-      <button class="primary" style="margin-top:14px" onclick="saveDetailOrderFields()">Save order form</button>
+      <div class="tab-panel" id="ctab-itemfields">
+        <div class="table-scroll"><table>
+          <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
+          <tbody id="detailFieldRows"></tbody>
+        </table></div>
+        <div class="grid cols-3" style="margin-top:14px">
+          <div><label>New field label</label><input id="newFieldLabel" placeholder="e.g. Weight"></div>
+          <div><label>Type</label><select id="newFieldType" onchange="toggleNewFieldDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>
+          <div id="newFieldDecimalsWrap" style="display:none"><label>Decimal places</label><input id="newFieldDecimals" type="number" min="0" max="6" value="2"></div>
+        </div>
+        <div id="newFieldUnitRow" style="display:none"><label>Unit <span class="muted">(e.g. "Grams", "Rs.")</span></label><input id="newFieldUnit" placeholder="e.g. Grams"></div>
+        <div id="newFieldOptionsRow" style="display:none">
+          <label>Dropdown choices <span class="muted">— separate with commas, e.g. "Red, Blue, Green"</span></label>
+          <input id="newFieldOptions" placeholder="Red, Blue, Green">
+        </div>
+        <button class="primary" style="margin-top:14px" onclick="addDetailField()">Add field</button>
+      </div>
+
+      <div class="tab-panel" id="ctab-orderform">
+        <p class="muted" style="margin-top:0">Which fields appear on the order link sent to buyers.</p>
+        <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">
+          <input type="checkbox" id="detailShowImages" style="width:auto"> <span>Show item photos on the order link</span>
+        </label>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
+          <tbody id="detailOrderFieldRows"></tbody>
+        </table></div>
+        <button class="primary" style="margin-top:14px" onclick="saveDetailOrderFields()">Save order form</button>
+      </div>
+
+      <div class="tab-panel" id="ctab-orderdetails">
+        <p class="muted" style="margin-top:0">Asked once per order (not per item), e.g. Delivery Date, PO Number.</p>
+        <div id="detailCustomFieldRows"></div>
+        <button class="ghost" style="margin-top:10px" onclick="addDetailCustomField()">+ Add field</button>
+        <button class="primary" style="margin-top:14px;display:block" onclick="saveDetailCustomFields()">Save order details fields</button>
+      </div>
+
+      <div class="tab-panel" id="ctab-layout">
+        <p class="muted" style="margin-top:0">The table buyers see on the shared order link, column by column. Leave empty to use the simple default layout (photos, Order Form fields, then quantity).</p>
+        <div id="detailColumnRows"></div>
+        <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
+        <button class="primary" style="margin-top:14px;display:block" onclick="saveDetailColumns()">Save layout</button>
+      </div>
     </div>
 
     <div class="tab-panel" id="dtab-orders">
@@ -193,8 +222,14 @@ async function saveMaxStaff(){
 }
 const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout', itemMasterFields: 'Item Master fields (add/edit/delete)' };
 function switchDetailTab(name){
-  document.querySelectorAll('#detailCard .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.dtab === name));
-  document.querySelectorAll('#detailCard .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'dtab-' + name));
+  document.querySelectorAll('#detailCard .tab-btn[data-dtab]').forEach(b => b.classList.toggle('active', b.dataset.dtab === name));
+  document.querySelectorAll('#detailCard > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'dtab-' + name));
+  if (name === 'config') switchConfigTab(localStorage.getItem('exo_config_subtab') || 'itemfields');
+}
+function switchConfigTab(name){
+  document.querySelectorAll('.tab-btn[data-ctab]').forEach(b => b.classList.toggle('active', b.dataset.ctab === name));
+  document.querySelectorAll('.tab-panel[id^="ctab-"]').forEach(p => p.classList.toggle('active', p.id === 'ctab-' + name));
+  localStorage.setItem('exo_config_subtab', name);
 }
 async function savePermissions(){
   const body = {};
@@ -239,6 +274,12 @@ async function openDetail(id){
   document.getElementById('detailShowImages').checked = tenant.orderShowImages !== false;
   renderDetailOrderFieldRows();
 
+  detailCustomFields = (tenant.orderCustomFields || []).map(f => ({ ...f }));
+  detailOrderFieldDefs = tenant.orderCustomFields || [];
+  renderDetailCustomFields();
+  detailColumns = (tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || dcid() }));
+  renderDetailColumns();
+
   document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
     <tr>
       <td>${o.orderNo}</td><td>${o.partyName}</td><td>${o.staffName}</td>
@@ -262,9 +303,10 @@ function closeDetail(){ document.getElementById('detailCard').style.display = 'n
 // acting on whichever company is currently open, via platformFetch) ──
 let detailFields = [], detailFieldEditingId = null, detailOrderFieldsSaved = [];
 function toggleNewFieldDecimals(){
-  const isNumber = document.getElementById('newFieldType').value === 'number';
-  document.getElementById('newFieldDecimalsWrap').style.display = isNumber ? 'block' : 'none';
-  document.getElementById('newFieldUnitRow').style.display = isNumber ? 'block' : 'none';
+  const type = document.getElementById('newFieldType').value;
+  document.getElementById('newFieldDecimalsWrap').style.display = type === 'number' ? 'block' : 'none';
+  document.getElementById('newFieldUnitRow').style.display = type === 'number' ? 'block' : 'none';
+  document.getElementById('newFieldOptionsRow').style.display = type === 'dropdown' ? 'block' : 'none';
 }
 function fieldTypeLabel(f){
   if (f.type !== 'number') return f.type.charAt(0).toUpperCase() + f.type.slice(1);
@@ -276,7 +318,7 @@ function renderDetailFieldRows(){
       return `<tr class="field-row-edit">
         <td><input id="editDetailLabel" value="${f.label}"></td>
         <td>${fieldTypeLabel(f)}</td>
-        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}</td>
+        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editDetailOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
           <button class="primary small" onclick="saveEditDetailField('${f.id}')">Save</button>
           <button class="ghost small" onclick="cancelEditDetailField()">Cancel</button>
@@ -304,15 +346,18 @@ async function reloadDetailFields(){
   detailOrderFieldsSaved = detail.tenant.orderFields || [];
   renderDetailFieldRows();
   renderDetailOrderFieldRows();
+  renderDetailColumns(); // "Field" column options depend on detailOrderFieldsSaved
 }
 async function saveEditDetailField(id){
   const err = document.getElementById('fieldErr'); err.style.display='none';
   const label = document.getElementById('editDetailLabel').value.trim();
   const decimalsEl = document.getElementById('editDetailDecimals');
   const unitEl = document.getElementById('editDetailUnit');
+  const optionsEl = document.getElementById('editDetailOptions');
   const body = { label };
   if (decimalsEl) body.decimals = Number(decimalsEl.value);
   if (unitEl) body.unit = unitEl.value.trim();
+  if (optionsEl) body.options = optionsEl.value.split(',').map(s => s.trim()).filter(Boolean);
   try {
     await platformFetch(`/tenants/${lastTenantId}/fields/${id}`, { method:'PUT', body: JSON.stringify(body) });
     detailFieldEditingId = null; await reloadDetailFields();
@@ -328,10 +373,12 @@ async function addDetailField(){
   const type = document.getElementById('newFieldType').value;
   const decimals = Number(document.getElementById('newFieldDecimals').value);
   const unit = document.getElementById('newFieldUnit').value.trim();
+  const options = document.getElementById('newFieldOptions').value.split(',').map(s => s.trim()).filter(Boolean);
   if (!label) { err.textContent = 'Field label is required'; err.style.display='block'; return; }
   try {
-    await platformFetch(`/tenants/${lastTenantId}/fields`, { method:'POST', body: JSON.stringify({ label, type, decimals, unit }) });
+    await platformFetch(`/tenants/${lastTenantId}/fields`, { method:'POST', body: JSON.stringify({ label, type, decimals, unit, options }) });
     document.getElementById('newFieldLabel').value = ''; document.getElementById('newFieldUnit').value = '';
+    document.getElementById('newFieldOptions').value = '';
     document.getElementById('newFieldType').value = 'text'; toggleNewFieldDecimals();
     await reloadDetailFields();
   } catch(e){ err.textContent = e.message; err.style.display='block'; }
@@ -350,13 +397,16 @@ function renderDetailOrderFieldRows(){
     <tr>
       <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" class="dof-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
-      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="dof-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
+      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="dof-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''} onchange="if(this.checked) document.querySelector('.dof-show[data-key=\\'${f.key}\\']').checked = true">` : ''}</td>
     </tr>`).join('') || '<tr><td colspan="3" class="muted">Add Item Master fields first</td></tr>';
 }
 async function saveDetailOrderFields(){
   const err = document.getElementById('fieldErr'); err.style.display='none';
-  const orderFields = Array.from(document.querySelectorAll('.dof-show')).filter(el => el.checked).map(el => {
-    const key = el.dataset.key;
+  const keysToShow = new Set([
+    ...Array.from(document.querySelectorAll('.dof-show')).filter(el => el.checked).map(el => el.dataset.key),
+    ...Array.from(document.querySelectorAll('.dof-total')).filter(el => el.checked).map(el => el.dataset.key), // showing a total implies showing the field
+  ]);
+  const orderFields = Array.from(keysToShow).map(key => {
     const totalEl = document.querySelector(`.dof-total[data-key="${key}"]`);
     return { key, showTotal: totalEl ? totalEl.checked : false };
   });
@@ -366,6 +416,135 @@ async function saveDetailOrderFields(){
     alert('Order form saved.');
     await reloadDetailFields();
   } catch(e){ err.textContent = e.message; err.style.display='block'; }
+}
+
+// ── Order Details Fields ──
+let detailCustomFields = [], detailOrderFieldDefs = [];
+function addDetailCustomField(){ detailCustomFields.push({ label: '', type: 'text', decimals: 2 }); renderDetailCustomFields(); }
+function removeDetailCustomFieldAt(i){ detailCustomFields.splice(i, 1); renderDetailCustomFields(); }
+function updateDetailCustomFieldAt(i, key, value){ detailCustomFields[i][key] = value; if (key === 'type') renderDetailCustomFields(); }
+function renderDetailCustomFields(){
+  document.getElementById('detailCustomFieldRows').innerHTML = detailCustomFields.map((f, i) => `
+    <div class="grid cols-3" style="margin-top:${i===0?0:10}px;align-items:end">
+      <div><label>Field name</label><input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
+      <div>
+        <label>Type</label>
+        <select onchange="updateDetailCustomFieldAt(${i},'type',this.value)">
+          <option value="text" ${f.type==='text'?'selected':''}>Text</option>
+          <option value="number" ${f.type==='number'?'selected':''}>Number</option>
+        </select>
+      </div>
+      ${f.type === 'number'
+        ? `<div><label>Decimal places</label><input type="number" min="0" max="6" value="${f.decimals ?? 2}" oninput="updateDetailCustomFieldAt(${i},'decimals',this.value)"></div>`
+        : `<div><button class="danger small" onclick="removeDetailCustomFieldAt(${i})">Remove</button></div>`}
+      ${f.type === 'number' ? `<div style="grid-column:1/-1"><button class="danger small" onclick="removeDetailCustomFieldAt(${i})">Remove</button></div>` : ''}
+    </div>`).join('') || '<p class="muted">No order details fields yet.</p>';
+}
+async function saveDetailCustomFields(){
+  const err = document.getElementById('fieldErr'); err.style.display = 'none';
+  if (detailCustomFields.some(f => !f.label.trim())) { err.textContent = 'Every field needs a name'; err.style.display = 'block'; return; }
+  try {
+    const res = await platformFetch(`/tenants/${lastTenantId}/order-custom-fields`, { method: 'PUT', body: JSON.stringify({ fields: detailCustomFields }) });
+    detailOrderFieldDefs = res.fields;
+    renderDetailColumns(); // "Order detail" column options depend on this
+    alert('Order details fields saved.');
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+
+// ── Order View Layout (column builder) ──
+let detailColumns = [];
+function dcid(){ return 'c' + Math.random().toString(36).slice(2); }
+function addDetailColumn(){
+  detailColumns.push({ _id: dcid(), _isNew: true, type: 'field', fieldKey: detailOrderFieldsSaved[0]?.key || '', label: '', width: 12, formula: '' });
+  renderDetailColumns();
+}
+function removeDetailColumn(id){ detailColumns = detailColumns.filter(c => c._id !== id); renderDetailColumns(); }
+function moveDetailColumn(id, dir){
+  const i = detailColumns.findIndex(c => c._id === id);
+  const j = i + dir;
+  if (j < 0 || j >= detailColumns.length) return;
+  [detailColumns[i], detailColumns[j]] = [detailColumns[j], detailColumns[i]];
+  renderDetailColumns();
+}
+function updateDetailColumn(id, key, value){
+  const col = detailColumns.find(c => c._id === id);
+  if (col) col[key] = value;
+  if (key === 'type') renderDetailColumns();
+}
+function validateDetailFormula(expr){
+  if (!expr.trim()) return 'Formula is required';
+  try {
+    const allowed = new Set([...detailOrderFieldsSaved.filter(f => f.type === 'number').map(f => f.key), 'qty']);
+    const used = new Set();
+    math.parse(expr).traverse(n => { if (n.isSymbolNode) used.add(n.name); });
+    const unknown = [...used].filter(n => !allowed.has(n));
+    if (unknown.length) return `Unknown or non-numeric field(s): ${unknown.join(', ')}`;
+    return '';
+  } catch (e) { return 'Invalid formula syntax'; }
+}
+function renderDetailColumns(){
+  const fieldOptions = detailOrderFieldsSaved.map(f => `<option value="${f.key}">${f.label}</option>`).join('');
+  document.getElementById('detailColumnRows').innerHTML = detailColumns.map((c, i) => {
+    const formulaError = c.type === 'formula' ? validateDetailFormula(c.formula || '') : '';
+    return `
+    <div class="card" style="background:#f7f7f8;padding:12px;margin-top:${i===0?0:10}px">
+      <div class="grid cols-2">
+        <div>
+          <label>Column type</label>
+          <select onchange="updateDetailColumn('${c._id}','type',this.value)">
+            <option value="field" ${c.type==='field'?'selected':''}>Field</option>
+            <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
+            <option value="images" ${c.type==='images'?'selected':''}>Images</option>
+            <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
+            <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
+            <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
+            <option value="serial" ${c.type==='serial'?'selected':''}>Sr. No.</option>
+          </select>
+        </div>
+        <div>
+          <label>Width (characters)</label>
+          <input type="number" min="3" max="80" value="${c.width||12}" oninput="updateDetailColumn('${c._id}','width',this.value)">
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <label>Heading</label>
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(detailOrderFieldsSaved.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
+      </div>
+      ${c.type === 'field' ? `
+        <div style="margin-top:10px">
+          <label>Which field</label>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${fieldOptions || '<option value="">— add fields to the Order Form first —</option>'}</select>
+        </div>` : ''}
+      ${c.type === 'orderfield' ? `
+        <div style="margin-top:10px">
+          <label>Which order details field <span class="muted">— one value per order; shown the same in every row</span></label>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailOrderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>'}</select>
+        </div>` : ''}
+      ${c.type === 'formula' ? `
+        <div style="margin-top:10px">
+          <label>Formula <span class="muted">— field names and qty with + − × / ^ and parentheses, e.g. <code>(price + 50) * qty</code>. Also round(), max(), min(). Available: ${detailOrderFieldsSaved.filter(f=>f.type==='number').map(f=>f.key).concat('qty').join(', ') || '(add a number field to the Order Form first)'}</span></label>
+          <input placeholder="price * qty" value="${c.formula||''}" oninput="updateDetailColumn('${c._id}','formula',this.value)">
+          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
+        </div>` : ''}
+      <div class="btn-row" style="margin-top:10px">
+        <button class="ghost small" onclick="moveDetailColumn('${c._id}',-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="ghost small" onclick="moveDetailColumn('${c._id}',1)" ${i===detailColumns.length-1?'disabled':''}>↓</button>
+        <button class="danger small" onclick="removeDetailColumn('${c._id}')">Remove</button>
+      </div>
+    </div>`;
+  }).join('') || '<p class="muted">No custom columns yet — using the default layout.</p>';
+}
+async function saveDetailColumns(){
+  const err = document.getElementById('fieldErr'); err.style.display = 'none';
+  for (const c of detailColumns) {
+    if (c.type === 'formula' && validateDetailFormula(c.formula || '')) { err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`; err.style.display = 'block'; return; }
+    if ((c.type === 'field' || c.type === 'orderfield') && !c.fieldKey) { err.textContent = `Every ${c.type === 'field' ? 'Field' : 'Order detail'} column needs a field selected`; err.style.display = 'block'; return; }
+  }
+  const payload = detailColumns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/order-view-columns`, { method: 'PUT', body: JSON.stringify({ columns: payload }) });
+    alert('Order view layout saved.');
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 async function resetUserPassword(tenantId, userId, name){
   const pw = prompt(`New password for ${name} (min 6 characters):`);

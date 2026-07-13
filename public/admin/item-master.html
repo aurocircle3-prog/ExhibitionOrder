@@ -26,6 +26,10 @@
       <div class="grid cols-3" id="newUnitRow" style="display:none">
         <div><label>Unit <span class="muted">(shown after the value, e.g. "Grams", "Rs.", "Mts")</span></label><input id="newUnit" placeholder="e.g. Grams"></div>
       </div>
+      <div id="newOptionsRow" style="display:none">
+        <label>Dropdown choices <span class="muted">— separate with commas, e.g. "Red, Blue, Green"</span></label>
+        <input id="newOptions" placeholder="Red, Blue, Green">
+      </div>
       <button class="primary" style="margin-top:14px" onclick="addField()">Add field</button>
     </div>
   </div>
@@ -105,9 +109,10 @@ function switchTab(name){
 
 // ---------- Fields ----------
 function toggleNewDecimals(){
-  const isNumber = document.getElementById('newType').value === 'number';
-  document.getElementById('newDecimalsWrap').style.display = isNumber ? 'block' : 'none';
-  document.getElementById('newUnitRow').style.display = isNumber ? 'grid' : 'none';
+  const type = document.getElementById('newType').value;
+  document.getElementById('newDecimalsWrap').style.display = type === 'number' ? 'block' : 'none';
+  document.getElementById('newUnitRow').style.display = type === 'number' ? 'grid' : 'none';
+  document.getElementById('newOptionsRow').style.display = type === 'dropdown' ? 'block' : 'none';
 }
 async function loadFields(){
   fields = await EXO.apiFetch('/fields');
@@ -124,7 +129,7 @@ function renderFieldRows(){
       return `<tr class="field-row-edit">
         <td><input id="editLabel" value="${f.label}"></td>
         <td>${typeLabel(f)}</td>
-        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}</td>
+        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
           <button class="primary small" onclick="saveEditField('${f.id}')">Save</button>
           <button class="ghost small" onclick="cancelEditField()">Cancel</button>
@@ -151,9 +156,11 @@ async function saveEditField(id){
   const label = document.getElementById('editLabel').value.trim();
   const decimalsEl = document.getElementById('editDecimals');
   const unitEl = document.getElementById('editUnit');
+  const optionsEl = document.getElementById('editOptions');
   const body = { label };
   if (decimalsEl) body.decimals = Number(decimalsEl.value);
   if (unitEl) body.unit = unitEl.value.trim();
+  if (optionsEl) body.options = optionsEl.value.split(',').map(s => s.trim()).filter(Boolean);
   try { await EXO.apiFetch('/fields/'+id, { method:'PUT', body: JSON.stringify(body) }); editingFieldId = null; loadFields(); }
   catch(e){ err.textContent = e.message; err.style.display='block'; }
 }
@@ -167,10 +174,11 @@ async function addField(){
   const type = document.getElementById('newType').value;
   const decimals = Number(document.getElementById('newDecimals').value);
   const unit = document.getElementById('newUnit').value.trim();
+  const options = document.getElementById('newOptions').value.split(',').map(s => s.trim()).filter(Boolean);
   if (!label) return;
   try {
-    await EXO.apiFetch('/fields', { method:'POST', body: JSON.stringify({ label, type, decimals, unit }) });
-    document.getElementById('newLabel').value = ''; document.getElementById('newUnit').value = ''; document.getElementById('newType').value = 'text'; toggleNewDecimals();
+    await EXO.apiFetch('/fields', { method:'POST', body: JSON.stringify({ label, type, decimals, unit, options }) });
+    document.getElementById('newLabel').value = ''; document.getElementById('newUnit').value = ''; document.getElementById('newOptions').value = ''; document.getElementById('newType').value = 'text'; toggleNewDecimals();
     loadFields();
   } catch(e){ err.textContent = e.message; err.style.display='block'; }
 }

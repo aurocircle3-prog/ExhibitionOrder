@@ -692,6 +692,16 @@ app.get('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   res.json(await getReportsForTenant(tenant.id));
 });
+app.put('/api/platform/tenants/:id/order-custom-fields', platformAuth, async (req, res) => {
+  try { res.json({ ok: true, fields: await saveOrderCustomFieldsForTenant(req.params.id, req.body.fields) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/order-view-columns', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(tenant, req.body.columns) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
 
 // ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
 app.get('/api/auth/setup-token/:token', async (req, res) => {
@@ -845,22 +855,26 @@ app.put('/api/companies/order-fields', resolveTenant, auth, requireRole('admin')
 // Order-level custom fields (Delivery Date, PO Number, etc.) — asked once
 // per order while taking it, not per item. Kept deliberately simple next to
 // Item Master fields: just a key/label/type, no scanner keys or options.
-app.put('/api/companies/order-custom-fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderDetailsFields'), async (req, res) => {
-  const list = Array.isArray(req.body.fields) ? req.body.fields : [];
+async function saveOrderCustomFieldsForTenant(tenantId, list) {
   const seen = new Set();
   const fields = [];
-  for (const raw of list) {
+  for (const raw of (Array.isArray(list) ? list : [])) {
     const label = String(raw?.label || '').trim().slice(0, 60);
-    if (!label) return res.status(400).json({ error: 'Every order field needs a name' });
+    if (!label) throw Object.assign(new Error('Every order field needs a name'), { status: 400 });
     const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `field_${fields.length}`;
-    if (seen.has(key)) return res.status(400).json({ error: `Two fields produced the same key ("${label}") — use distinct names` });
+    if (seen.has(key)) throw Object.assign(new Error(`Two fields produced the same key ("${label}") — use distinct names`), { status: 400 });
     seen.add(key);
     const type = raw.type === 'number' ? 'number' : 'text';
     const decimals = type === 'number' ? Math.min(Math.max(Number(raw.decimals) || 0, 0), 6) : undefined;
     fields.push({ key, label, type, ...(decimals !== undefined ? { decimals } : {}) });
   }
-  await TenantDB.update({ id: req.tenant.id }, { orderCustomFields: fields });
-  res.json({ ok: true, fields });
+  await TenantDB.update({ id: tenantId }, { orderCustomFields: fields });
+  return fields;
+}
+
+app.put('/api/companies/order-custom-fields', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderDetailsFields'), async (req, res) => {
+  try { res.json({ ok: true, fields: await saveOrderCustomFieldsForTenant(req.tenant.id, req.body.fields) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Shared by order create + edit — normalizes order-level custom field
@@ -903,47 +917,45 @@ function validateFormula(expr, allowedNames) {
   return { ok: true };
 }
 
-app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderViewLayout'), async (req, res) => {
-  const list = Array.isArray(req.body.columns) ? req.body.columns : [];
-  const orderFields = req.tenant.orderFields || [];
+async function saveOrderViewColumnsForTenant(tenant, list) {
+  const orderFields = tenant.orderFields || [];
   const allowedFieldKeys = new Set(orderFields.map(f => f.key));
   // Formulas can only meaningfully use numeric fields — a text field like
   // "Category" can't be multiplied. Looked up fresh from FieldDefDB rather
   // than trusting orderFields[].type, which older saved configs won't have
-  // yet — this way it's correct immediately, not just after an admin
-  // re-saves their Order Form.
-  const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
+  // yet — this way it's correct immediately, not just after a re-save.
+  const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const typeByKey = {}; fieldDefs.forEach(f => { typeByKey[f.key] = f.type; });
   const allowedFormulaNames = new Set([...orderFields.filter(f => typeByKey[f.key] === 'number').map(f => f.key), 'qty']);
-  const orderCustomFields = req.tenant.orderCustomFields || [];
+  const orderCustomFields = tenant.orderCustomFields || [];
   const allowedOrderFieldKeys = new Set(orderCustomFields.map(f => f.key));
 
   const columns = [];
-  for (const raw of list) {
+  for (const raw of (Array.isArray(list) ? list : [])) {
     if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield', 'itemcode'].includes(raw.type)) {
-      return res.status(400).json({ error: 'Each column needs a valid type' });
+      throw Object.assign(new Error('Each column needs a valid type'), { status: 400 });
     }
     const width = Number(raw.width);
     if (!Number.isFinite(width) || width < 3 || width > 80) {
-      return res.status(400).json({ error: 'Column width must be between 3 and 80 characters' });
+      throw Object.assign(new Error('Column width must be between 3 and 80 characters'), { status: 400 });
     }
     const col = { id: raw.id || uuid(), type: raw.type, width };
 
     if (raw.type === 'field') {
-      if (!allowedFieldKeys.has(raw.fieldKey)) return res.status(400).json({ error: `"${raw.fieldKey}" isn't a field on your Order Form — add it there first` });
+      if (!allowedFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't a field on the Order Form — add it there first`), { status: 400 });
       const f = orderFields.find(x => x.key === raw.fieldKey);
       col.fieldKey = raw.fieldKey;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
     } else if (raw.type === 'orderfield') {
-      if (!allowedOrderFieldKeys.has(raw.fieldKey)) return res.status(400).json({ error: `"${raw.fieldKey}" isn't one of your Order Details fields — add it there first` });
+      if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
       const f = orderCustomFields.find(x => x.key === raw.fieldKey);
       col.fieldKey = raw.fieldKey;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
     } else if (raw.type === 'formula') {
       const formula = String(raw.formula || '').trim();
-      if (!formula) return res.status(400).json({ error: 'Formula column needs a formula' });
+      if (!formula) throw Object.assign(new Error('Formula column needs a formula'), { status: 400 });
       const check = validateFormula(formula, allowedFormulaNames);
-      if (!check.ok) return res.status(400).json({ error: check.error });
+      if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
       col.formula = formula;
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
     } else if (raw.type === 'images') {
@@ -958,8 +970,13 @@ app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('a
     columns.push(col);
   }
 
-  await TenantDB.update({ id: req.tenant.id }, { orderViewColumns: columns });
-  res.json({ ok: true, columns });
+  await TenantDB.update({ id: tenant.id }, { orderViewColumns: columns });
+  return columns;
+}
+
+app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderViewLayout'), async (req, res) => {
+  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(req.tenant, req.body.columns) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req, res) => {
