@@ -12,7 +12,9 @@ a{color:var(--brand);text-decoration:none}
 .grid{display:grid;gap:16px}
 .grid.cols-2{grid-template-columns:1fr 1fr}
 .grid.cols-3{grid-template-columns:repeat(3,1fr)}
-@media (max-width:700px){.grid.cols-2,.grid.cols-3{grid-template-columns:1fr}}
+.grid.cols-4{grid-template-columns:repeat(4,1fr)}
+@media (max-width:700px){.grid.cols-2,.grid.cols-3{grid-template-columns:1fr}.grid.cols-4{grid-template-columns:1fr 1fr}}
+@media (max-width:480px){.grid.cols-4{grid-template-columns:1fr}}
 label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:600}
 input,select,textarea{width:100%;padding:10px 13px;border:1px solid var(--line);border-radius:10px;font-size:14px;font-family:inherit;background:#fff}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand)}

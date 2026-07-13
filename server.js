@@ -750,22 +750,12 @@ app.post('/api/auth/login', resolveTenant, async (req, res) => {
 });
 
 // Client self-signup — exhibition buyers create their own login within a company
+// Buyer self-registration is disabled — not a feature currently offered.
+// Buyers view their orders via the shared order link instead; no account
+// needed for that. Kept as a named route rather than removed outright so
+// the old form gives a clear message instead of a generic 404.
 app.post('/api/auth/register-client', resolveTenant, async (req, res) => {
-  const { name, phone, email, password } = req.body;
-  if (!name || !phone || !password) return res.status(400).json({ error: 'Name, phone and password are required' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-  const loginId = (email || phone).toLowerCase();
-  if (await UserDB.findOne({ tenantId: req.tenant.id, loginId }))
-    return res.status(400).json({ error: 'An account already exists for that email/phone with this company' });
-  const client = {
-    id: uuid(), tenantId: req.tenant.id, role: 'client', loginId,
-    password: bcrypt.hashSync(password, 10), name, phone, email: email || '',
-    active: true, createdAt: new Date().toISOString(),
-  };
-  await UserDB.create(client);
-  const token = jwt.sign({ id: client.id, tenantId: req.tenant.id, role: client.role, loginId: client.loginId, name: client.name }, JWT_SECRET, { expiresIn: '7d' });
-  const { password: _pw, ...safeClient } = client;
-  res.json({ token, user: safeClient, tenant: req.tenant });
+  res.status(403).json({ error: "Buyer accounts aren't available right now — use the order link your exhibitor sent you instead." });
 });
 
 // Staff accounts are never self-signed-up — the admin creates them internally

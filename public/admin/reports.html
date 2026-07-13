@@ -3,23 +3,44 @@
 <link rel="stylesheet" href="/style.css">
 <div id="nav"></div>
 <div class="wrap">
-  <div class="card">
-    <h3 style="margin-top:0">Party-wise orders</h3>
-    <div class="table-scroll"><table><thead><tr><th>Buyer</th><th>Phone</th><th>Orders</th></tr></thead><tbody id="partyRows"></tbody></table></div>
+  <div class="tabs">
+    <button class="tab-btn" data-tab="party" onclick="switchTab('party')">Party-wise</button>
+    <button class="tab-btn" data-tab="item" onclick="switchTab('item')">Item-wise</button>
+    <button class="tab-btn" data-tab="staff" onclick="switchTab('staff')">Staff-wise</button>
   </div>
-  <div class="card">
-    <h3 style="margin-top:0">Item-wise orders</h3>
-    <div class="table-scroll"><table><thead><tr><th>Item</th><th>Scan code</th><th>Qty ordered</th></tr></thead><tbody id="itemRows"></tbody></table></div>
+
+  <div class="tab-panel" id="tab-party">
+    <div class="card">
+      <h3 style="margin-top:0">Party-wise orders</h3>
+      <div class="table-scroll"><table><thead><tr><th>Buyer</th><th>Phone</th><th>Orders</th></tr></thead><tbody id="partyRows"><tr><td colspan="3" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
   </div>
-  <div class="card">
-    <h3 style="margin-top:0">Staff-wise orders</h3>
-    <div class="table-scroll"><table><thead><tr><th>Staff</th><th>Orders</th></tr></thead><tbody id="staffRows"></tbody></table></div>
+
+  <div class="tab-panel" id="tab-item">
+    <div class="card">
+      <h3 style="margin-top:0">Item-wise orders</h3>
+      <div class="table-scroll"><table><thead><tr><th>Item</th><th>Scan code</th><th>Qty ordered</th></tr></thead><tbody id="itemRows"><tr><td colspan="3" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-staff">
+    <div class="card">
+      <h3 style="margin-top:0">Staff-wise orders</h3>
+      <div class="table-scroll"><table><thead><tr><th>Staff</th><th>Orders</th></tr></thead><tbody id="staffRows"><tr><td colspan="2" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
   </div>
 </div>
 <script src="/app.js"></script>
 <script>
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('reports');
+
+function switchTab(name){
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  localStorage.setItem('exo_reports_tab', name);
+}
+
 (async function(){
   const [byParty, byItem, byStaff] = await Promise.all([
     EXO.apiFetch('/reports/party-wise'), EXO.apiFetch('/reports/item-wise'), EXO.apiFetch('/reports/staff-wise')
@@ -27,5 +48,6 @@ document.getElementById('nav').innerHTML = EXO.adminNav('reports');
   document.getElementById('partyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
   document.getElementById('itemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
   document.getElementById('staffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
+  switchTab(localStorage.getItem('exo_reports_tab') || 'party');
 })();
 </script>

@@ -16,7 +16,7 @@
       <div class="error" id="fieldErr"></div>
       <div class="table-scroll"><table>
         <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
-        <tbody id="fieldRows"></tbody>
+        <tbody id="fieldRows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
       </table></div>
       <div class="grid cols-3" style="margin-top:14px">
         <div><label>New field label</label><input id="newLabel" placeholder="e.g. Weight"></div>
@@ -39,7 +39,7 @@
     <div class="card">
       <h3 style="margin-top:0">Item data <span class="muted">— add or update many items at once via Excel</span></h3>
       <div class="error" id="bulkErr"></div>
-      <p class="muted" id="bulkMsg" style="display:none;color:#1a8f4c;background:#e6f7ed;padding:10px 14px;border-radius:8px"></p>
+      <p class="muted" id="bulkMsg" style="display:none;color:var(--ok);background:#e1f2ea;padding:10px 14px;border-radius:8px"></p>
       <div class="grid cols-3">
         <div>
           <label>1. Get the template</label>
@@ -61,7 +61,7 @@
     <div class="card">
       <h3 style="margin-top:0">Photos <span class="muted">— upload many photos at once, auto-matched to items by Image Code</span></h3>
       <div class="error" id="bulkImgErr"></div>
-      <p class="muted" id="bulkImgMsg" style="display:none;color:#1a8f4c;background:#e6f7ed;padding:10px 14px;border-radius:8px"></p>
+      <p class="muted" id="bulkImgMsg" style="display:none;color:var(--ok);background:#e1f2ea;padding:10px 14px;border-radius:8px"></p>
       <label>Select photo files — name each one after the item's Image Code (e.g. <code>1.jpg</code>, <code>1_1.jpg</code>, <code>1_2.jpg</code> for image code "1")</label>
       <input type="file" id="bulkImages" multiple accept="image/*">
       <button class="primary" style="margin-top:12px" onclick="importBulkImages()">Upload &amp; match photos</button>
@@ -77,7 +77,7 @@
       <div class="table-scroll">
         <table>
           <thead id="itemsHead"></thead>
-          <tbody id="itemsBody"></tbody>
+          <tbody id="itemsBody"><tr><td class="muted">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>

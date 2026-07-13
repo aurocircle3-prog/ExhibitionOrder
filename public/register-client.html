@@ -1,41 +1,10 @@
-<title>Buyer sign up — Exhibition Order</title>
+<title>Buyer accounts — Exhibition Order</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <div class="topbar"><div class="brand">🎪 Exhibition Order</div><nav><a href="/login.html">Login</a></nav></div>
-<div class="wrap" style="max-width:420px">
-  <div class="card">
-    <h2 style="margin-top:0">Create a buyer account</h2>
-    <div class="error" id="err"></div>
-    <label>Company link <span class="muted">(the exhibitor you're ordering from)</span></label>
-    <input id="tenant" placeholder="kaashvi">
-    <label>Your name</label>
-    <input id="name">
-    <label>Phone</label>
-    <input id="phone">
-    <label>Email <span class="muted">(optional)</span></label>
-    <input id="email" type="email">
-    <label>Password</label>
-    <input id="password" type="password">
-    <button class="primary" style="width:100%;margin-top:18px" onclick="register()">Create account</button>
+<div class="wrap" style="max-width:480px">
+  <div class="card" style="text-align:center">
+    <h2 style="margin-top:0">Buyer accounts aren't available yet</h2>
+    <p class="muted">You don't need one to see your order — the exhibitor sends a direct link with every order that shows photos, items, and totals. Check WhatsApp for that link.</p>
   </div>
 </div>
-<script src="/app.js"></script>
-<script>
-document.getElementById('tenant').value = EXO.getTenantSlug();
-async function register(){
-  const err = document.getElementById('err'); err.style.display='none';
-  const tenant = document.getElementById('tenant').value.trim();
-  if (tenant) localStorage.setItem('exo_tenant', tenant);
-  try {
-    const body = {
-      name: document.getElementById('name').value.trim(),
-      phone: document.getElementById('phone').value.trim(),
-      email: document.getElementById('email').value.trim(),
-      password: document.getElementById('password').value,
-    };
-    const data = await EXO.apiFetch('/auth/register-client', { method:'POST', body: JSON.stringify(body) });
-    EXO.saveSession(data);
-    location.href = '/client/orders.html';
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
-}
-</script>

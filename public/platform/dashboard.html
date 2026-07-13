@@ -2,6 +2,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
+<script src="/app.js"></script>
 <div class="wrap">
   <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:10px">
     <span class="muted" id="whoami"></span>
@@ -19,7 +20,7 @@
       <input id="search" placeholder="Filter by name or slug…" style="margin-top:12px" oninput="renderList()">
       <div class="table-scroll" style="margin-top:10px"><table>
         <thead><tr><th>Company</th><th>Slug</th><th>Plan</th><th>Users</th><th>Items</th><th>Orders</th><th>Buyers</th><th>Created</th></tr></thead>
-        <tbody id="rows"></tbody>
+        <tbody id="rows"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
       </table></div>
     </div>
   </div>
@@ -175,7 +176,7 @@ function logout(){ localStorage.removeItem('exo_platform_token'); localStorage.r
 let tenants = [];
 async function load(){
   try { tenants = await platformFetch('/tenants'); renderList(); }
-  catch (e) { alert(e.message); }
+  catch (e) { EXO.toast(e.message, 'error'); }
 }
 function switchTopTab(name){
   document.querySelectorAll('#topTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.ttab === name));
@@ -230,9 +231,9 @@ async function saveMaxStaff(){
   const val = document.getElementById('maxStaffInput').value;
   try {
     await platformFetch(`/tenants/${lastTenantId}/max-staff`, { method: 'PUT', body: JSON.stringify({ maxStaff: val === '' ? null : val }) });
-    alert('Staff limit saved.');
+    EXO.toast('Staff limit saved.');
     openDetail(lastTenantId);
-  } catch (e) { alert(e.message); }
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout', itemMasterFields: 'Item Master fields (add/edit/delete)' };
 function switchDetailTab(name){
@@ -250,15 +251,15 @@ async function savePermissions(){
   Object.keys(PERMISSION_LABELS).forEach(key => { body[key] = document.getElementById('perm_' + key).checked; });
   try {
     await platformFetch(`/tenants/${lastTenantId}/permissions`, { method: 'PUT', body: JSON.stringify(body) });
-    alert('Permissions saved.');
-  } catch (e) { alert(e.message); }
+    EXO.toast('Permissions saved.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
 async function openDetail(id){
   lastTenantId = id;
   let detail;
   try { detail = await platformFetch('/tenants/' + id); }
-  catch (e) { alert(e.message); return; }
+  catch (e) { EXO.toast(e.message, 'error'); return; }
   document.getElementById('topTabs').style.display = 'none';
   document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.remove('active'));
   const { tenant, users, fieldDefs, counts, recentOrders } = detail;
@@ -434,7 +435,7 @@ async function saveDetailOrderFields(){
   const showImages = document.getElementById('detailShowImages').checked;
   try {
     await platformFetch(`/tenants/${lastTenantId}/order-fields`, { method:'PUT', body: JSON.stringify({ orderFields, showImages }) });
-    alert('Order form saved.');
+    EXO.toast('Order form saved.');
     await reloadDetailFields();
   } catch(e){ err.textContent = e.message; err.style.display='block'; }
 }
@@ -468,7 +469,7 @@ async function saveDetailCustomFields(){
     const res = await platformFetch(`/tenants/${lastTenantId}/order-custom-fields`, { method: 'PUT', body: JSON.stringify({ fields: detailCustomFields }) });
     detailOrderFieldDefs = res.fields;
     renderDetailColumns(); // "Order detail" column options depend on this
-    alert('Order details fields saved.');
+    EXO.toast('Order details fields saved.');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 
@@ -564,17 +565,17 @@ async function saveDetailColumns(){
   const payload = detailColumns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
   try {
     await platformFetch(`/tenants/${lastTenantId}/order-view-columns`, { method: 'PUT', body: JSON.stringify({ columns: payload }) });
-    alert('Order view layout saved.');
+    EXO.toast('Order view layout saved.');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 async function resetUserPassword(tenantId, userId, name){
   const pw = prompt(`New password for ${name} (min 6 characters):`);
   if (pw === null) return;
-  if (pw.length < 6) { alert('Password must be at least 6 characters'); return; }
+  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
   try {
     await platformFetch(`/tenants/${tenantId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword: pw }) });
-    alert(`Password updated for ${name}.`);
-  } catch (e) { alert(e.message); }
+    EXO.toast(`Password updated for ${name}.`);
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
 switchTopTab('companies');

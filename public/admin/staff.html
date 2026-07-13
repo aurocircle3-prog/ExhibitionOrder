@@ -9,7 +9,7 @@
     <div class="error" id="err"></div>
     <div class="table-scroll"><table>
       <thead><tr><th>Name</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
-      <tbody id="rows"></tbody>
+      <tbody id="rows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
     </table></div>
   </div>
   <div class="card">
@@ -47,11 +47,11 @@ async function load(){
 async function resetPassword(id, name){
   const pw = prompt(`New password for ${name} (min 6 characters):`);
   if (pw === null) return; // cancelled
-  if (pw.length < 6) { alert('Password must be at least 6 characters'); return; }
+  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
   try {
     await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
     EXO.toast(`Password updated for ${name}`);
-  } catch(e) { alert(e.message); }
+  } catch(e) { EXO.toast(e.message, 'error'); }
 }
 async function addStaff(){
   const err = document.getElementById('err'); err.style.display='none';
