@@ -3,46 +3,54 @@
 <link rel="stylesheet" href="/style.css">
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <div class="wrap">
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <h3 style="margin:0">Companies <span class="muted" id="tenantCount"></span></h3>
-      <div>
-        <span class="muted" id="whoami"></span>
-        <button class="ghost small" onclick="logout()">Log out</button>
+  <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:10px">
+    <span class="muted" id="whoami"></span>
+    <button class="ghost small" onclick="logout()">Log out</button>
+  </div>
+
+  <div class="tabs" id="topTabs">
+    <button class="tab-btn" data-ttab="companies" onclick="switchTopTab('companies')">Companies</button>
+    <button class="tab-btn" data-ttab="create" onclick="switchTopTab('create')">Create Company</button>
+  </div>
+
+  <div class="tab-panel" id="ttab-companies">
+    <div class="card">
+      <h3 style="margin-top:0">Companies <span class="muted" id="tenantCount"></span></h3>
+      <input id="search" placeholder="Filter by name or slug…" style="margin-top:12px" oninput="renderList()">
+      <div class="table-scroll" style="margin-top:10px"><table>
+        <thead><tr><th>Company</th><th>Slug</th><th>Plan</th><th>Users</th><th>Items</th><th>Orders</th><th>Buyers</th><th>Created</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="ttab-create">
+    <div class="card">
+      <h3 style="margin-top:0">Create a new company</h3>
+      <p class="muted" style="margin-top:-6px">Self-signup is disabled — this is the only way a company gets set up. The admin sets their own password via a one-time link (shown below after creating).</p>
+      <div class="error" id="createErr"></div>
+      <div class="grid cols-2">
+        <div><label>Company name</label><input id="newCompanyName" placeholder="Kaashvi Jewels"></div>
+        <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
+        <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
+        <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
+        <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
       </div>
+      <button class="primary" style="margin-top:14px" onclick="createCompany()">Create company</button>
     </div>
-    <input id="search" placeholder="Filter by name or slug…" style="margin-top:12px" oninput="renderList()">
-    <div class="table-scroll" style="margin-top:10px"><table>
-      <thead><tr><th>Company</th><th>Slug</th><th>Plan</th><th>Users</th><th>Items</th><th>Orders</th><th>Buyers</th><th>Created</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table></div>
-  </div>
 
-  <div class="card">
-    <h3 style="margin-top:0">Create a new company</h3>
-    <p class="muted" style="margin-top:-6px">Self-signup is disabled — this is the only way a company gets set up. The admin sets their own password via a one-time link (shown below after creating).</p>
-    <div class="error" id="createErr"></div>
-    <div class="grid cols-2">
-      <div><label>Company name</label><input id="newCompanyName" placeholder="Kaashvi Jewels"></div>
-      <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
-      <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
-      <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
-      <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
+    <div class="card" id="setupLinkCard" style="display:none">
+      <h3 style="margin-top:0">Company created ✅</h3>
+      <p class="muted">Share this one-time link with <b id="newAdminNameShow"></b> so they can set their own password. Valid for 7 days.</p>
+      <input id="setupLinkBox" readonly onclick="this.select()">
+      <button class="ghost" style="margin-top:10px" onclick="copySetupLink()">Copy link</button>
     </div>
-    <button class="primary" style="margin-top:14px" onclick="createCompany()">Create company</button>
-  </div>
-
-  <div class="card" id="setupLinkCard" style="display:none">
-    <h3 style="margin-top:0">Company created ✅</h3>
-    <p class="muted">Share this one-time link with <b id="newAdminNameShow"></b> so they can set their own password. Valid for 7 days.</p>
-    <input id="setupLinkBox" readonly onclick="this.select()">
-    <button class="ghost" style="margin-top:10px" onclick="copySetupLink()">Copy link</button>
   </div>
 
   <div class="card" id="detailCard" style="display:none">
     <div style="display:flex;justify-content:space-between;align-items:center">
       <h3 style="margin:0" id="detailTitle"></h3>
-      <button class="ghost small" onclick="closeDetail()">✕ Close</button>
+      <button class="ghost small" onclick="closeDetail()">← Back to Companies</button>
     </div>
     <p class="muted" id="detailSlug"></p>
 
@@ -168,6 +176,10 @@ async function load(){
   try { tenants = await platformFetch('/tenants'); renderList(); }
   catch (e) { alert(e.message); }
 }
+function switchTopTab(name){
+  document.querySelectorAll('#topTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.ttab === name));
+  document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'ttab-' + name));
+}
 function renderList(){
   const q = document.getElementById('search').value.trim().toLowerCase();
   const filtered = q ? tenants.filter(t => t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q)) : tenants;
@@ -245,6 +257,8 @@ async function openDetail(id){
   let detail;
   try { detail = await platformFetch('/tenants/' + id); }
   catch (e) { alert(e.message); return; }
+  document.getElementById('topTabs').style.display = 'none';
+  document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.remove('active'));
   const { tenant, users, fieldDefs, counts, recentOrders } = detail;
 
   document.getElementById('detailTitle').textContent = tenant.name;
@@ -297,7 +311,12 @@ async function openDetail(id){
   switchDetailTab('users');
   document.getElementById('detailCard').scrollIntoView({ behavior: 'smooth' });
 }
-function closeDetail(){ document.getElementById('detailCard').style.display = 'none'; }
+function closeDetail(){
+  document.getElementById('detailCard').style.display = 'none';
+  document.getElementById('topTabs').style.display = 'flex';
+  switchTopTab('companies');
+  load(); // counts (items/orders/etc) may have changed while viewing the company
+}
 
 // ── Item Master fields (mirrors admin/item-master.html's Fields tab, but
 // acting on whichever company is currently open, via platformFetch) ──
@@ -556,5 +575,6 @@ async function resetUserPassword(tenantId, userId, name){
   } catch (e) { alert(e.message); }
 }
 
+switchTopTab('companies');
 load();
 </script>
