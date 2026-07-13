@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.2.0';
-const BUILD_TIME   = '2026-07-13T18:10:00Z';
+const APP_VERSION  = '1.2.1';
+const BUILD_TIME   = '2026-07-13T18:22:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1893,10 +1893,29 @@ async function migrateFixedFields() {
   }
 }
 
+// Companies created before settingsPermissions defaulted to deny (see the
+// tenant schema comment) still have their old default-OPEN values sitting
+// in the database — flipping the schema default only affects NEW documents,
+// it doesn't retroactively touch ones already written. A missing
+// itemMasterFields key is a reliable signal a tenant predates this model
+// entirely (that key didn't exist before), so those get reset to fully
+// closed — matching what every tenant created since would have gotten.
+async function migrateSettingsPermissionsDefault() {
+  const tenants = await TenantDB.find({});
+  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false };
+  for (const tenant of tenants) {
+    if (tenant.settingsPermissions?.itemMasterFields === undefined) {
+      await TenantDB.update({ id: tenant.id }, { settingsPermissions: closed });
+      log.info({ tenant: tenant.slug }, 'Migrated pre-default-deny company to closed settings permissions');
+    }
+  }
+}
+
 connectDB().then(async () => {
   initR2();
   await ensurePlatformAdminFromEnv();
   await migrateFixedFields();
+  await migrateSettingsPermissionsDefault();
   app.listen(PORT, () => log.info({ port: PORT, version: APP_VERSION, builtAt: BUILD_TIME }, 'Expo Orders running'));
 }).catch(err => {
   log.fatal({ err }, 'Failed to connect to database');
