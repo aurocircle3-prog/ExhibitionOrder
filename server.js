@@ -602,7 +602,7 @@ app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platform
 // directly to the platform admin to share manually; hook up real sending
 // later by replacing that one response field with an actual email call.)
 app.post('/api/platform/tenants', platformAuth, async (req, res) => {
-  const { companyName, slug: rawSlug, adminName, email, maxStaff } = req.body;
+  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff } = req.body;
   if (!companyName || !rawSlug || !adminName || !email)
     return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
   const slug = normalizeSlug(rawSlug);
@@ -624,7 +624,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   const admin = {
     id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
     password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
-    name: adminName, phone: '', email, active: true, createdAt: new Date().toISOString(),
+    name: adminName, phone: phone || '', email, active: true, createdAt: new Date().toISOString(),
   };
   await UserDB.create(admin);
 

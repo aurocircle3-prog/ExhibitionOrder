@@ -34,6 +34,7 @@
         <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
         <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
         <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
+        <div><label>Admin mobile <span class="muted">(optional)</span></label><input id="newAdminPhone" type="tel" placeholder="+91 90290 06090"></div>
         <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
       </div>
       <button class="primary" style="margin-top:14px" onclick="createCompany()">Create company</button>
@@ -205,6 +206,7 @@ async function createCompany(){
     slug: document.getElementById('newSlug').value.trim(),
     adminName: document.getElementById('newAdminName').value.trim(),
     email: document.getElementById('newAdminEmail').value.trim(),
+    phone: document.getElementById('newAdminPhone').value.trim(),
     maxStaff: document.getElementById('newMaxStaff').value,
   };
   if (!body.companyName || !body.slug || !body.adminName || !body.email) {
@@ -218,7 +220,7 @@ async function createCompany(){
     document.getElementById('setupLinkBox').value = res.setupLink;
     document.getElementById('setupLinkCard').style.display = 'block';
     document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
-    ['newCompanyName','newSlug','newAdminName','newAdminEmail','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
+    ['newCompanyName','newSlug','newAdminName','newAdminEmail','newAdminPhone','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
     load();
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
