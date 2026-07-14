@@ -26,6 +26,7 @@
 <div id="nav"></div>
 <div class="wrap">
   <div class="card" id="syncBanner" style="display:none"></div>
+  <div class="card" id="draftBanner" style="display:none"></div>
 
   <div class="lightbox" id="pendingModal">
     <div class="crop-box" style="max-width:600px;text-align:left;max-height:80vh;display:flex;flex-direction:column">
@@ -130,7 +131,7 @@
     <div class="card">
       <div id="orderDetailFields"></div>
       <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
-      <textarea id="remark" rows="2"></textarea>
+      <textarea id="remark" rows="2" oninput="saveDraft()"></textarea>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, submitOrder)">Create order</button>
     </div>
   </div>
@@ -142,6 +143,60 @@ const currentUser = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
 let party = null, cart = [], lastOrder = null, orderFields = [];
 const tenantSlug = EXO.getTenantSlug();
+
+// ── Draft auto-save ──────────────────────────────────────────────────────
+// Scanned items previously only existed in memory — closing the tab, the
+// app crashing, or the phone dying before tapping "Create order" meant
+// everything scanned was gone with no way to recover it. This saves a
+// snapshot after every change so an interrupted order can be resumed,
+// scoped to this tenant + this staff login so a shared device at a booth
+// doesn't mix up two different people's in-progress orders.
+const draftKey = `exo_draft_${tenantSlug}_${currentUser.id}`;
+// Guards against an incidental renderCart() call during initial page load
+// (e.g. from refreshOfflineCache(), which runs on every load regardless of
+// whether there's a draft) wiping a draft that hasn't been reviewed yet —
+// saveDraft() is a no-op until checkForDraft() has run and either found
+// nothing, or the person has explicitly resumed or discarded what it found.
+let draftGuardReady = false;
+function saveDraft(){
+  if (!draftGuardReady) return;
+  if (!party && !cart.length) { localStorage.removeItem(draftKey); return; }
+  const remark = document.getElementById('remark')?.value || '';
+  localStorage.setItem(draftKey, JSON.stringify({ party, cart, orderDetailValues, remark, savedAt: Date.now() }));
+}
+function clearDraft(){ localStorage.removeItem(draftKey); }
+function checkForDraft(){
+  let draft;
+  try { draft = JSON.parse(localStorage.getItem(draftKey)); } catch { draftGuardReady = true; return; }
+  if (!draft || (!draft.party && !draft.cart?.length)) { draftGuardReady = true; return; }
+  const itemCount = (draft.cart || []).reduce((s, c) => s + c.qty, 0);
+  const banner = document.getElementById('draftBanner');
+  const when = new Date(draft.savedAt).toLocaleTimeString();
+  banner.innerHTML = `<p style="margin:0">📝 You have an unfinished order from ${when}${draft.party ? ' for <b>' + draft.party.firmName + '</b>' : ''}${itemCount ? ` (${itemCount} item${itemCount===1?'':'s'})` : ''}.
+    <button class="primary small" onclick="resumeDraft()">Resume it</button>
+    <button class="ghost small" onclick="discardDraft()">Discard</button></p>`;
+  banner.style.display = 'block';
+  // draftGuardReady stays false here on purpose — left alone until the
+  // person explicitly resumes or discards, so nothing can wipe it meanwhile.
+}
+function resumeDraft(){
+  let draft;
+  try { draft = JSON.parse(localStorage.getItem(draftKey)); } catch { return; }
+  if (!draft) return;
+  party = draft.party; cart = draft.cart || []; orderDetailValues = draft.orderDetailValues || {};
+  draftGuardReady = true;
+  if (party) showPartyPicked(); else switchOrderTab('buyer');
+  document.getElementById('remark').value = draft.remark || '';
+  renderCart();
+  renderOrderDetailFields();
+  document.getElementById('draftBanner').style.display = 'none';
+  EXO.toast('Draft restored');
+}
+function discardDraft(){
+  clearDraft();
+  draftGuardReady = true;
+  document.getElementById('draftBanner').style.display = 'none';
+}
 
 function isNetworkFailure(e){
   const m = (e && e.message || '').toLowerCase();
@@ -177,7 +232,7 @@ function renderOrderDetailFields(){
     <div style="margin-top:6px">
       <label class="muted" style="font-weight:400">${f.label}</label>
       <input type="${f.type==='number'?'number':'text'}" ${f.type==='number'?`step="${1/Math.pow(10, f.decimals ?? 2)}"`:''}
-        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value">
+        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value;saveDraft()">
     </div>`).join('');
 }
 
@@ -235,9 +290,10 @@ window.addEventListener('offline', updateSyncBanner);
 setInterval(() => { if (navigator.onLine) refreshOfflineCache(); trySync(); }, 20000); // periodic refresh + retry — 'online' doesn't always fire on flaky wifi
 
 (async function(){
+  switchOrderTab('buyer');
+  checkForDraft();
   await refreshOfflineCache();
   await updateSyncBanner();
-  switchOrderTab('buyer');
 })();
 
 async function searchParty(q){
@@ -430,7 +486,7 @@ function renderCart(){
   const itemCount = cart.reduce((s,c)=>s+c.qty,0);
   document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
   document.getElementById('cartCountBadge').textContent = cart.length ? `(${itemCount})` : '';
-  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; return; }
+  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; saveDraft(); return; }
   const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
     <tr>
@@ -445,6 +501,7 @@ function renderCart(){
       <thead><tr><th>Item</th>${fieldCols}<th>Comment</th><th>Qty</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
+  saveDraft();
 }
 
 async function submitOrder(){
@@ -479,6 +536,7 @@ function clearForm(){
   cart = []; renderCart(); clearParty();
   document.getElementById('remark').value='';
   orderDetailValues = {}; renderOrderDetailFields();
+  clearDraft();
 }
 function newOrder(){
   clearForm();
