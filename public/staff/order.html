@@ -5,6 +5,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.css">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.js"></script>
 <div id="nav"></div>
 <div class="wrap">
@@ -449,25 +450,53 @@ function newOrder(){
   document.getElementById('scanCode').focus();
 }
 
-// Progressive enhancement — native camera barcode scanning where the browser supports it
-if ('BarcodeDetector' in window) {
+// Camera barcode scanning — uses ZXing (decodes via canvas, not a native
+// browser API) specifically because Safari and every iOS browser (all
+// WebKit under the hood) never implemented the native BarcodeDetector API,
+// and Apple broke it further behind their experimental flag as of iOS 18.
+// getUserMedia itself IS supported on iOS Safari, so gating on that instead
+// of BarcodeDetector is what actually makes this show up on iPhone.
+if (navigator.mediaDevices?.getUserMedia) {
   document.getElementById('cameraBtn').style.display = 'inline-block';
 }
 async function cameraScan(){
+  const err = document.getElementById('scanErr'); err.style.display = 'none';
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:999;background:#000';
+  const video = document.createElement('video');
+  video.style.cssText = 'width:100%;height:100%;object-fit:cover';
+  video.setAttribute('playsinline', ''); // required so iOS Safari plays inline instead of forcing fullscreen
+  video.setAttribute('muted', '');
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕ Close';
+  closeBtn.className = 'ghost';
+  closeBtn.style.cssText = 'position:absolute;top:16px;right:16px;z-index:1000';
+  overlay.appendChild(video); overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+
+  let controls = null;
+  const stop = () => { controls?.stop(); overlay.remove(); };
+  closeBtn.onclick = stop;
+
   try {
-    const detector = new BarcodeDetector();
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    const video = document.createElement('video'); video.srcObject = stream; video.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:999;background:#000';
-    document.body.appendChild(video); await video.play();
-    const iv = setInterval(async () => {
-      const codes = await detector.detect(video).catch(() => []);
-      if (codes.length) {
-        clearInterval(iv); stream.getTracks().forEach(t => t.stop()); video.remove();
-        document.getElementById('scanCode').value = codes[0].rawValue;
-        lookupItem();
+    const codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+    controls = await codeReader.decodeFromConstraints(
+      { video: { facingMode: 'environment' } },
+      video,
+      (result, decodeErr, ctrl) => {
+        controls = ctrl;
+        if (result) {
+          stop();
+          document.getElementById('scanCode').value = result.getText();
+          lookupItem();
+        }
+        // decodeErr fires continuously between frames with no code in view — expected, not a real error
       }
-    }, 400);
-    video.onclick = () => { clearInterval(iv); stream.getTracks().forEach(t => t.stop()); video.remove(); };
-  } catch (e) { document.getElementById('scanErr').textContent = 'Camera scan unavailable: ' + e.message; document.getElementById('scanErr').style.display='block'; }
+    );
+  } catch (e) {
+    overlay.remove();
+    err.textContent = 'Camera scan unavailable: ' + e.message;
+    err.style.display = 'block';
+  }
 }
 </script>
