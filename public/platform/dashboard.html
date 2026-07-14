@@ -115,6 +115,7 @@
         <button class="tab-btn" data-ctab="orderform" onclick="switchConfigTab('orderform')">Order Form</button>
         <button class="tab-btn" data-ctab="orderdetails" onclick="switchConfigTab('orderdetails')">Order Details Fields</button>
         <button class="tab-btn" data-ctab="layout" onclick="switchConfigTab('layout')">Order View Layout</button>
+        <button class="tab-btn" data-ctab="footer" onclick="switchConfigTab('footer')">Order Footer</button>
       </div>
 
       <div class="tab-panel" id="ctab-itemfields">
@@ -160,6 +161,20 @@
         <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
         <button class="primary" style="margin-top:14px;display:block" onclick="saveDetailColumns()">Save layout</button>
       </div>
+
+      <div class="tab-panel" id="ctab-footer">
+        <p class="muted" style="margin-top:0">Company details shown at the bottom of the shared order link. Each field is independent — fill in what's available, and use the checkbox to choose what actually gets published.</p>
+        <label>Logo</label>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+          <img id="detailLogoPreview" style="height:44px;max-width:120px;object-fit:contain;display:none;border-radius:6px;border:1px solid var(--line)">
+          <input type="file" id="detailLogoFile" accept="image/*" onchange="uploadDetailLogo()">
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400">
+          <input type="checkbox" id="detail_show_logo" style="width:auto"> <span class="muted" style="font-weight:400">Show logo on order link</span>
+        </label>
+        <div id="detailFooterFieldRows" style="margin-top:14px"></div>
+        <button class="primary" style="margin-top:14px" onclick="saveDetailFooter()">Save footer</button>
+      </div>
     </div>
 
     <div class="tab-panel" id="dtab-orders">
@@ -182,6 +197,16 @@
 </div>
 <script>
 const token = localStorage.getItem('exo_platform_token');
+const FOOTER_FIELD_DEFS = [
+  { key: 'address', label: 'Address', type: 'textarea' },
+  { key: 'gstNumber', label: 'GST Number', type: 'text' },
+  { key: 'whatsappNumber', label: 'WhatsApp number', type: 'phone' },
+  { key: 'instagram', label: 'Instagram', type: 'text', placeholder: '@yourhandle or full URL' },
+  { key: 'facebook', label: 'Facebook', type: 'text', placeholder: 'page name or full URL' },
+  { key: 'twitter', label: 'Twitter / X', type: 'text', placeholder: '@yourhandle or full URL' },
+  { key: 'youtube', label: 'YouTube', type: 'text', placeholder: 'channel name or full URL' },
+  { key: 'website', label: 'Website', type: 'text', placeholder: 'yourcompany.com' },
+];
 if (!token) location.href = '/platform/login.html';
 const admin = JSON.parse(localStorage.getItem('exo_platform_admin') || '{}');
 document.getElementById('whoami').textContent = admin.name ? `${admin.name} (${admin.email})` : '';
@@ -294,7 +319,7 @@ async function deleteCompany(){
     closeDetail();
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
-const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout', itemMasterFields: 'Item Master fields (add/edit/delete)' };
+const PERMISSION_LABELS = { companyName: 'Company name', orderForm: 'Order Form fields', orderDetailsFields: 'Order Details Fields', orderViewLayout: 'Order View Layout', itemMasterFields: 'Item Master fields (add/edit/delete)', orderFooter: 'Order Footer (logo, contact, social)' };
 function switchDetailTab(name){
   document.querySelectorAll('#detailCard .tab-btn[data-dtab]').forEach(b => b.classList.toggle('active', b.dataset.dtab === name));
   document.querySelectorAll('#detailCard > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'dtab-' + name));
@@ -357,6 +382,7 @@ async function openDetail(id){
   renderDetailCustomFields();
   detailColumns = (tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || dcid() }));
   renderDetailColumns();
+  loadDetailFooter(tenant);
 
   document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
     <tr>
@@ -629,6 +655,73 @@ async function saveDetailColumns(){
     EXO.toast('Order view layout saved.');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
+
+// ── Order Footer ──
+function loadDetailFooter(tenant){
+  const f = tenant.footer || { show: {} };
+  document.getElementById('detail_show_logo').checked = !!f.show?.logo;
+  if (tenant.logoUrl) {
+    document.getElementById('detailLogoPreview').src = tenant.logoUrl;
+    document.getElementById('detailLogoPreview').style.display = 'inline-block';
+  } else {
+    document.getElementById('detailLogoPreview').style.display = 'none';
+  }
+  document.getElementById('detailFooterFieldRows').innerHTML = FOOTER_FIELD_DEFS.map(def => {
+    const val = f[def.key] || '';
+    let inputHtml;
+    if (def.type === 'textarea') {
+      inputHtml = `<textarea id="dfooter_${def.key}" rows="2">${val}</textarea>`;
+    } else if (def.type === 'phone') {
+      const digits = val.replace(/^\+/, '');
+      const cc = digits.length > 10 ? '+' + digits.slice(0, digits.length - 10) : '+91';
+      const num = digits.length > 10 ? digits.slice(-10) : digits;
+      inputHtml = `<div style="display:flex;gap:6px">
+        <input id="dfooter_${def.key}_cc" value="${cc}" maxlength="4" style="width:60px;flex:0 0 auto">
+        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${num}" style="flex:1" placeholder="90290 06090">
+      </div>`;
+    } else {
+      inputHtml = `<input id="dfooter_${def.key}" value="${val}" placeholder="${def.placeholder || ''}">`;
+    }
+    return `
+      <div style="margin-top:12px">
+        <label>${def.label}</label>
+        ${inputHtml}
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:4px">
+          <input type="checkbox" id="dshow_${def.key}" style="width:auto" ${f.show?.[def.key] ? 'checked' : ''}> <span class="muted" style="font-weight:400">Show on order link</span>
+        </label>
+      </div>`;
+  }).join('');
+}
+async function uploadDetailLogo(){
+  const file = document.getElementById('detailLogoFile').files[0];
+  if (!file) return;
+  try {
+    const fd = new FormData(); fd.append('logo', file);
+    const res = await fetch(`/api/platform/tenants/${lastTenantId}/logo`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    document.getElementById('detailLogoPreview').src = data.logoUrl;
+    document.getElementById('detailLogoPreview').style.display = 'inline-block';
+    EXO.toast('Logo uploaded.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function saveDetailFooter(){
+  const body = { show: { logo: document.getElementById('detail_show_logo').checked } };
+  for (const def of FOOTER_FIELD_DEFS) {
+    if (def.type === 'phone') {
+      const num = document.getElementById(`dfooter_${def.key}`).value.trim();
+      body[def.key] = num ? document.getElementById(`dfooter_${def.key}_cc`).value.trim() + num : '';
+    } else {
+      body[def.key] = document.getElementById(`dfooter_${def.key}`).value.trim();
+    }
+    body.show[def.key] = document.getElementById(`dshow_${def.key}`).checked;
+  }
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/footer`, { method: 'PUT', body: JSON.stringify(body) });
+    EXO.toast('Footer saved.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+
 async function resetUserPassword(tenantId, userId, name){
   const pw = prompt(`New password for ${name} (min 6 characters):`);
   if (pw === null) return;

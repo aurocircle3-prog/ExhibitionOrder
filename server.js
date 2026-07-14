@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.3.0';
-const BUILD_TIME   = '2026-07-13T18:35:00Z';
+const APP_VERSION  = '1.4.0';
+const BUILD_TIME   = '2026-07-13T19:05:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -106,10 +106,31 @@ const tenantSchema = new mongoose.Schema({
       orderDetailsFields: { type: Boolean, default: false },
       orderViewLayout: { type: Boolean, default: false },
       itemMasterFields: { type: Boolean, default: false },
+      orderFooter: { type: Boolean, default: false },
     },
-    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false }),
+    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false }),
   },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Company details shown as a footer on the buyer-facing order link — each
+  // field has its own show/hide toggle so e.g. a GST number can be entered
+  // without necessarily being made public. logoUrl is a separate top-level
+  // field (already used elsewhere) rather than duplicated in here.
+  footer: {
+    type: {
+      address: String, gstNumber: String, whatsappNumber: String,
+      instagram: String, facebook: String, twitter: String, youtube: String, website: String,
+      show: {
+        type: {
+          logo: { type: Boolean, default: false }, address: { type: Boolean, default: false },
+          gstNumber: { type: Boolean, default: false }, whatsappNumber: { type: Boolean, default: false },
+          instagram: { type: Boolean, default: false }, facebook: { type: Boolean, default: false },
+          twitter: { type: Boolean, default: false }, youtube: { type: Boolean, default: false }, website: { type: Boolean, default: false },
+        },
+        default: () => ({}),
+      },
+    },
+    default: () => ({ show: {} }),
+  },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -627,7 +648,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   const tenant = {
     id: uuid(), name: companyName, slug, plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
-    settingsPermissions: { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false },
+    settingsPermissions: { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
   };
   await TenantDB.create(tenant);
 
@@ -665,7 +686,7 @@ app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) =>
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  const allowedKeys = ['companyName', 'orderForm', 'orderDetailsFields', 'orderViewLayout', 'itemMasterFields'];
+  const allowedKeys = ['companyName', 'orderForm', 'orderDetailsFields', 'orderViewLayout', 'itemMasterFields', 'orderFooter'];
   const settingsPermissions = { ...tenant.settingsPermissions };
   for (const key of allowedKeys) {
     if (req.body[key] !== undefined) settingsPermissions[key] = !!req.body[key];
@@ -793,6 +814,20 @@ app.put('/api/platform/tenants/:id/order-view-columns', platformAuth, async (req
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(tenant, req.body.columns) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/footer', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  res.json({ ok: true, footer: await saveFooterForTenant(tenant.id, req.body) });
+});
+app.post('/api/platform/tenants/:id/logo', platformAuth, (req, res) => {
+  const uploader = makeUploader(`exo/${req.params.id}/logo`, path.join('logos', req.params.id));
+  uploader.single('logo')(req, res, async err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Logo too large (max 10MB)' : err.message });
+    const logoUrl = fileUrl(req.file, path.join('logos', req.params.id));
+    await TenantDB.update({ id: req.params.id }, { logoUrl });
+    res.json({ ok: true, logoUrl });
+  });
 });
 
 // ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
@@ -1069,6 +1104,23 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
     await TenantDB.update({ id: req.tenant.id }, { logoUrl });
     res.json({ ok: true, logoUrl });
   });
+});
+
+// Company details shown as a footer on the buyer-facing order link. Each
+// field is stored regardless of its show/hide toggle — a company can type
+// in its GST number to have on file without necessarily publishing it —
+// the public order route below is what actually filters by `show`.
+const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website'];
+const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
+async function saveFooterForTenant(tenantId, body) {
+  const footer = { show: {} };
+  for (const key of FOOTER_TEXT_FIELDS) footer[key] = String(body[key] || '').trim().slice(0, 300);
+  for (const key of FOOTER_SHOW_KEYS) footer.show[key] = !!body.show?.[key];
+  await TenantDB.update({ id: tenantId }, { footer });
+  return footer;
+}
+app.put('/api/companies/footer', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderFooter'), async (req, res) => {
+  res.json({ ok: true, footer: await saveFooterForTenant(req.tenant.id, req.body) });
 });
 
 // ── ITEM MASTER FIELD DEFINITIONS — the "10-12 fields, add/delete, customer-wise" builder ──
@@ -1735,7 +1787,16 @@ app.get('/api/orders/public/:token', async (req, res) => {
   // shared link immediately, old and new — that's the whole point of it
   // being a "layout", not a record of what happened.
   const columns = (tenant?.orderViewColumns && tenant.orderViewColumns.length) ? tenant.orderViewColumns : (order.columnsSnapshot || []);
-  res.json({ order: { ...order, columnsSnapshot: columns }, company: { name: tenant?.name, logoUrl: tenant?.logoUrl } });
+  // Only send fields the company actually chose to publish — never leak a
+  // GST number or phone that was entered but left toggled off.
+  const rawFooter = tenant?.footer || { show: {} };
+  const footer = {};
+  for (const key of FOOTER_TEXT_FIELDS) if (rawFooter.show?.[key] && rawFooter[key]) footer[key] = rawFooter[key];
+  const showLogo = !!(rawFooter.show?.logo && tenant?.logoUrl);
+  res.json({
+    order: { ...order, columnsSnapshot: columns },
+    company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
+  });
 });
 
 // ── EXHIBITIONS (optional grouping — one company can run several events) ─────
@@ -1902,7 +1963,7 @@ async function migrateFixedFields() {
 // closed — matching what every tenant created since would have gotten.
 async function migrateSettingsPermissionsDefault() {
   const tenants = await TenantDB.find({});
-  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false };
+  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false };
   for (const tenant of tenants) {
     if (tenant.settingsPermissions?.itemMasterFields === undefined) {
       await TenantDB.update({ id: tenant.id }, { settingsPermissions: closed });

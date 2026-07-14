@@ -72,10 +72,34 @@ async function load(){
         ${fieldTotalRows ? `<div style="margin-top:10px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
       </div>
-      <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>`;
+      <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>
+      ${renderFooter(company)}`;
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
   }
+}
+
+// Company details footer — every field is independently optional, since the
+// company chooses which of these (if any) to publish on the buyer link.
+function renderFooter(company){
+  const f = company.footer || {};
+  const hasContent = company.logoUrl || f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
+  if (!hasContent) return '';
+  const socialLinks = [
+    f.instagram && { label: 'Instagram', url: f.instagram.startsWith('http') ? f.instagram : `https://instagram.com/${f.instagram.replace(/^@/, '')}` },
+    f.facebook && { label: 'Facebook', url: f.facebook.startsWith('http') ? f.facebook : `https://facebook.com/${f.facebook}` },
+    f.twitter && { label: 'Twitter/X', url: f.twitter.startsWith('http') ? f.twitter : `https://twitter.com/${f.twitter.replace(/^@/, '')}` },
+    f.youtube && { label: 'YouTube', url: f.youtube.startsWith('http') ? f.youtube : `https://youtube.com/${f.youtube}` },
+    f.website && { label: 'Website', url: f.website.startsWith('http') ? f.website : `https://${f.website}` },
+  ].filter(Boolean);
+  return `
+    <div class="card" style="text-align:center;margin-top:16px">
+      ${company.logoUrl ? `<img src="${company.logoUrl}" style="max-height:56px;max-width:180px;object-fit:contain;margin-bottom:10px">` : ''}
+      ${f.address ? `<p class="muted" style="margin:4px 0">${f.address}</p>` : ''}
+      ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${f.gstNumber}</p>` : ''}
+      ${f.whatsappNumber ? `<p style="margin:8px 0"><a href="https://wa.me/${f.whatsappNumber.replace(/\D/g, '')}" target="_blank">💬 WhatsApp us</a></p>` : ''}
+      ${socialLinks.length ? `<div style="margin-top:8px">${socialLinks.map(s => `<a href="${s.url}" target="_blank" style="margin:0 10px">${s.label}</a>`).join('')}</div>` : ''}
+    </div>`;
 }
 
 // Original fixed layout — still used for any order placed before the
