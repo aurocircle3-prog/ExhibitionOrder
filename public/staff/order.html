@@ -5,7 +5,23 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.css">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
+<script>
+  // Defined before the ZXing tag below so it's guaranteed to exist by the
+  // time any load failure could fire. Tries a second CDN (unpkg) if the
+  // primary (jsdelivr) fails — a transient failure on one shouldn't
+  // permanently disable camera scanning for the whole session.
+  function loadZXingFallback(){
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js';
+    s.onload = () => {
+      if (navigator.mediaDevices?.getUserMedia && typeof ZXingBrowser !== 'undefined' && document.getElementById('cameraBtn')) {
+        document.getElementById('cameraBtn').style.display = 'inline-block';
+      }
+    };
+    document.head.appendChild(s);
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js" onerror="loadZXingFallback()"></script>
 <script src="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.js"></script>
 <div id="nav"></div>
 <div class="wrap">
@@ -456,11 +472,21 @@ function newOrder(){
 // and Apple broke it further behind their experimental flag as of iOS 18.
 // getUserMedia itself IS supported on iOS Safari, so gating on that instead
 // of BarcodeDetector is what actually makes this show up on iPhone.
-if (navigator.mediaDevices?.getUserMedia) {
+//
+// ZXing loads from a CDN, which can fail on a flaky connection — checking
+// it's actually defined (not just that getUserMedia exists) before showing
+// the button avoids offering something that then throws a raw JS error when
+// tapped; manual code entry (always available above) is the fallback.
+if (navigator.mediaDevices?.getUserMedia && typeof ZXingBrowser !== 'undefined') {
   document.getElementById('cameraBtn').style.display = 'inline-block';
 }
 async function cameraScan(){
   const err = document.getElementById('scanErr'); err.style.display = 'none';
+  if (typeof ZXingBrowser === 'undefined') {
+    err.textContent = "Camera scanning couldn't load (needs a connection at least once to fetch it) — type the item code above instead.";
+    err.style.display = 'block';
+    return;
+  }
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:999;background:#000';
   const video = document.createElement('video');
