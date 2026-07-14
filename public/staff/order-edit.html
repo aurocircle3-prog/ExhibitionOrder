@@ -22,7 +22,7 @@
     <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
     <textarea id="remark" rows="2"></textarea>
     <div class="btn-row" style="margin-top:14px">
-      <button class="primary" onclick="saveOrder()">Save changes</button>
+      <button class="primary" onclick="EXO.busy(this, saveOrder)">Save changes</button>
       <button class="ghost" onclick="location.href='/staff/orders.html'">Cancel</button>
     </div>
   </div>

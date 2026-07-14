@@ -45,7 +45,7 @@
         </div>
         <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
       </div>
-      <button class="primary" style="margin-top:14px" onclick="createCompany()">Create company</button>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, createCompany)">Create company</button>
     </div>
 
     <div class="card" id="setupLinkCard" style="display:none">
@@ -83,7 +83,7 @@
       <p class="muted" style="margin-top:-6px">Used in login URLs and as the subdomain. Changing this breaks any bookmarked login link using the old one.</p>
       <div class="grid cols-2">
         <div><label>Slug</label><input id="slugInput"></div>
-        <div><label>&nbsp;</label><button class="primary" onclick="saveSlug()">Save link</button></div>
+        <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, saveSlug)">Save link</button></div>
       </div>
 
       <h4>Status</h4>
@@ -95,17 +95,17 @@
       <h4>Staff limit</h4>
       <div class="grid cols-2">
         <div><label>Max staff <span class="muted">(blank = unlimited)</span> — currently <span id="staffUsage"></span></label><input id="maxStaffInput" type="number" min="0"></div>
-        <div><label>&nbsp;</label><button class="primary" onclick="saveMaxStaff()">Save limit</button></div>
+        <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, saveMaxStaff)">Save limit</button></div>
       </div>
 
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by AuroCircle based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
-      <button class="primary" style="margin-top:10px" onclick="savePermissions()">Save permissions</button>
+      <button class="primary" style="margin-top:10px" onclick="EXO.busy(this, savePermissions)">Save permissions</button>
 
       <h4 style="color:#c0392b">Danger zone</h4>
       <p class="muted" style="margin-top:-6px">Permanently deletes this company and everything in it — items, orders, buyers, staff accounts, uploaded photos. Cannot be undone.</p>
-      <button class="danger" onclick="deleteCompany()">Delete company permanently</button>
+      <button class="danger" onclick="EXO.busy(this, deleteCompany)">Delete company permanently</button>
     </div>
 
     <div class="tab-panel" id="dtab-config">
@@ -133,7 +133,7 @@
           <label>Dropdown choices <span class="muted">— separate with commas, e.g. "Red, Blue, Green"</span></label>
           <input id="newFieldOptions" placeholder="Red, Blue, Green">
         </div>
-        <button class="primary" style="margin-top:14px" onclick="addDetailField()">Add field</button>
+        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addDetailField)">Add field</button>
       </div>
 
       <div class="tab-panel" id="ctab-orderform">
@@ -145,21 +145,21 @@
           <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
           <tbody id="detailOrderFieldRows"></tbody>
         </table></div>
-        <button class="primary" style="margin-top:14px" onclick="saveDetailOrderFields()">Save order form</button>
+        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveDetailOrderFields)">Save order form</button>
       </div>
 
       <div class="tab-panel" id="ctab-orderdetails">
         <p class="muted" style="margin-top:0">Asked once per order (not per item), e.g. Delivery Date, PO Number.</p>
         <div id="detailCustomFieldRows"></div>
         <button class="ghost" style="margin-top:10px" onclick="addDetailCustomField()">+ Add field</button>
-        <button class="primary" style="margin-top:14px;display:block" onclick="saveDetailCustomFields()">Save order details fields</button>
+        <button class="primary" style="margin-top:14px;display:block" onclick="EXO.busy(this, saveDetailCustomFields)">Save order details fields</button>
       </div>
 
       <div class="tab-panel" id="ctab-layout">
         <p class="muted" style="margin-top:0">The table buyers see on the shared order link, column by column. Leave empty to use the simple default layout (photos, Order Form fields, then quantity).</p>
         <div id="detailColumnRows"></div>
         <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
-        <button class="primary" style="margin-top:14px;display:block" onclick="saveDetailColumns()">Save layout</button>
+        <button class="primary" style="margin-top:14px;display:block" onclick="EXO.busy(this, saveDetailColumns)">Save layout</button>
       </div>
 
       <div class="tab-panel" id="ctab-footer">
@@ -173,7 +173,7 @@
           <input type="checkbox" id="detail_show_logo" style="width:auto"> <span class="muted" style="font-weight:400">Show logo on order link</span>
         </label>
         <div id="detailFooterFieldRows" style="margin-top:14px"></div>
-        <button class="primary" style="margin-top:14px" onclick="saveDetailFooter()">Save footer</button>
+        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveDetailFooter)">Save footer</button>
       </div>
     </div>
 
@@ -429,7 +429,7 @@ function renderDetailFieldRows(){
         <td>${fieldTypeLabel(f)}</td>
         <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editDetailOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
-          <button class="primary small" onclick="saveEditDetailField('${f.id}')">Save</button>
+          <button class="primary small" onclick="EXO.busy(this, () => saveEditDetailField('${f.id}'))">Save</button>
           <button class="ghost small" onclick="cancelEditDetailField()">Cancel</button>
         </td>
       </tr>`;

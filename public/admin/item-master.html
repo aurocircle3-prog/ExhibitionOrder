@@ -31,7 +31,7 @@
         <label>Dropdown choices <span class="muted">— separate with commas, e.g. "Red, Blue, Green"</span></label>
         <input id="newOptions" placeholder="Red, Blue, Green">
       </div>
-      <button class="primary" style="margin-top:14px" onclick="addField()">Add field</button>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addField)">Add field</button>
     </div>
   </div>
 
@@ -91,7 +91,7 @@
         <div id="existingPhotos" style="display:flex;gap:10px;margin-bottom:8px"></div>
         <p class="muted" id="photoHint" style="margin-top:4px"></p>
       </div>
-      <button class="primary" style="margin-top:14px" onclick="saveItem()">Save item</button>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveItem)">Save item</button>
       <button class="ghost" style="margin-top:14px" onclick="resetForm()">Clear</button>
     </div>
   </div>
@@ -132,7 +132,7 @@ function renderFieldRows(){
         <td>${typeLabel(f)}</td>
         <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
-          <button class="primary small" onclick="saveEditField('${f.id}')">Save</button>
+          <button class="primary small" onclick="EXO.busy(this, () => saveEditField('${f.id}'))">Save</button>
           <button class="ghost small" onclick="cancelEditField()">Cancel</button>
         </td>
       </tr>`;

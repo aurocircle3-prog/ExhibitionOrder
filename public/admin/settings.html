@@ -22,7 +22,7 @@
         <div><label>Company name</label><input id="name"></div>
       </div>
       <p class="muted" style="margin-top:10px">Company link: <b id="slugShow"></b>.orders.is <span class="muted">(fixed at signup)</span></p>
-      <button class="primary" onclick="save()">Save</button>
+      <button class="primary" onclick="EXO.busy(this, save)">Save</button>
     </div>
   </div>
 
@@ -37,7 +37,7 @@
         <tbody id="orderFieldRows"></tbody>
       </table></div>
       <p class="muted" style="margin-top:8px">"Show total" adds up that field's value × quantity across the whole order (e.g. total weight) — only makes sense for number fields.</p>
-      <button class="primary" onclick="saveOrderFields()">Save order form</button>
+      <button class="primary" onclick="EXO.busy(this, saveOrderFields)">Save order form</button>
     </div>
   </div>
 
@@ -47,7 +47,7 @@
       <div id="customFieldRows"></div>
       <button class="ghost" style="margin-top:10px" onclick="addCustomField()">+ Add field</button>
       <div class="error" id="cfErr"></div>
-      <button class="primary" style="margin-top:14px" onclick="saveCustomFields()">Save order details fields</button>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveCustomFields)">Save order details fields</button>
     </div>
   </div>
 
@@ -58,7 +58,7 @@
       <div id="columnRows"></div>
       <button class="ghost" style="margin-top:10px" onclick="addColumn()">+ Add column</button>
       <div class="error" id="colErr"></div>
-      <button class="primary" style="margin-top:14px" onclick="saveColumns()">Save layout</button>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveColumns)">Save layout</button>
     </div>
   </div>
 
@@ -79,7 +79,7 @@
       <div id="footerFieldRows" style="margin-top:14px"></div>
 
       <div class="error" id="footerErr"></div>
-      <button class="primary" style="margin-top:14px" onclick="saveFooter()">Save footer</button>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveFooter)">Save footer</button>
     </div>
   </div>
 
@@ -93,7 +93,7 @@
       <div class="grid cols-3" style="margin-top:12px">
         <div><label>Name</label><input id="exName"></div>
         <div><label>Location</label><input id="exLoc"></div>
-        <div><label>&nbsp;</label><button class="primary" onclick="addExhibition()">Add exhibition</button></div>
+        <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, addExhibition)">Add exhibition</button></div>
       </div>
     </div>
   </div>

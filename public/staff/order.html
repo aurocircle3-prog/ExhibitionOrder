@@ -36,7 +36,7 @@
         </div>
         <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
       </div>
-      <button class="primary" style="margin-top:12px" onclick="createParty()">Use this buyer</button>
+      <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, createParty)">Use this buyer</button>
     </div>
   </div>
 
@@ -70,7 +70,7 @@
     <div id="orderDetailFields"></div>
     <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
     <textarea id="remark" rows="2"></textarea>
-    <button class="primary" style="margin-top:14px" onclick="submitOrder()">Create order</button>
+    <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, submitOrder)">Create order</button>
   </div>
 
   <div class="card" id="shareCard" style="display:none">

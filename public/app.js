@@ -104,7 +104,22 @@
     } catch {}
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion };
+  // The standard fix for "save is slow, so I click it again" — duplicate
+  // orders, duplicate staff, duplicate items. Disables the button and swaps
+  // its label the instant it's clicked, restores it when the async work
+  // finishes (success or failure), and — critically — ignores a second
+  // click on the same button while the first is still in flight, so even a
+  // click that lands in the gap before the DOM updates can't fire twice.
+  async function busy(btn, fn) {
+    if (!btn || btn.disabled) return; // already running — ignore the repeat click
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try { await fn(); }
+    finally { btn.disabled = false; btn.textContent = original; }
+  }
+
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;
