@@ -46,8 +46,11 @@
   function navBar(links, active) {
     const user = getUser();
     const items = links.map(l => `<a href="${l.href}" class="${l.key===active?'active':''}">${l.label}</a>`).join('');
-    return `<div class="topbar"><div class="brand">🎪 ${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</div>
-      <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav></div>`;
+    return `<div class="topbar">
+      <div class="brand">🎪 ${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</div>
+      <button class="nav-toggle" onclick="this.closest('.topbar').classList.toggle('nav-open')" aria-label="Menu">☰</button>
+      <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>
+    </div>`;
   }
   function adminNav(active) {
     return navBar([

@@ -7,6 +7,7 @@ a{color:var(--accent);text-decoration:none}
 .topbar nav a{color:rgba(255,255,255,.78);margin-left:4px;font-size:14px;padding:8px 15px;border-radius:20px;transition:background .15s,color .15s}
 .topbar nav a:hover{background:rgba(255,255,255,.12);color:#fff}
 .topbar nav a.active{color:var(--brand);background:#fff;font-weight:700}
+.nav-toggle{display:none;background:none;border:none;color:#fff;font-size:22px;line-height:1;padding:4px 8px;cursor:pointer}
 .wrap{max-width:1100px;margin:0 auto;padding:24px}
 .card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px;margin-bottom:16px;box-shadow:0 1px 4px rgba(43,28,22,.06)}
 .grid{display:grid;gap:16px}
@@ -102,10 +103,12 @@ td.thumb-cell{width:56px}
 
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
 @media (max-width:640px){
-  .topbar{flex-direction:column;align-items:flex-start;gap:10px;padding:12px 16px}
-  .topbar .brand{font-size:16px}
-  .topbar nav{display:flex;flex-wrap:wrap;gap:6px 14px;width:100%}
-  .topbar nav a{margin-left:0;font-size:13px}
+  .topbar{flex-direction:row;align-items:center;justify-content:space-between;padding:12px 16px;position:relative;border-radius:0 0 14px 14px}
+  .topbar .brand{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .nav-toggle{display:block}
+  .topbar nav{display:none;position:absolute;top:100%;left:0;right:0;background:var(--brand);flex-direction:column;padding:6px 12px 14px;border-radius:0 0 14px 14px;box-shadow:0 10px 24px rgba(0,0,0,.2);z-index:200}
+  .topbar.nav-open nav{display:flex}
+  .topbar nav a{margin-left:0;font-size:15px;padding:11px 12px;width:100%;box-sizing:border-box;border-radius:8px}
   .wrap{padding:14px}
   .card{padding:16px;border-radius:10px}
   .hero{padding:40px 16px}

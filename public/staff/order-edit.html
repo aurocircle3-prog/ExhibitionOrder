@@ -2,6 +2,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
+<script>
+  function loadZXingFallback(){
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js';
+    s.onload = () => {
+      if (navigator.mediaDevices?.getUserMedia && typeof ZXingBrowser !== 'undefined' && document.getElementById('cameraBtn')) {
+        document.getElementById('cameraBtn').style.display = 'inline-block';
+      }
+    };
+    document.head.appendChild(s);
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js" onerror="loadZXingFallback()"></script>
 <div id="nav"></div>
 <div class="wrap">
   <div class="card" id="loadingCard">
@@ -14,7 +27,13 @@
     <div class="error" id="editErr"></div>
 
     <label>Scan or type item code to add</label>
-    <input id="scanCode" placeholder="Scan or type item code, then Enter" onkeydown="if(event.key==='Enter')lookupItem()">
+    <div class="grid cols-2">
+      <input id="scanCode" placeholder="Scan or type item code, then Enter" onkeydown="if(event.key==='Enter')lookupItem()">
+      <div class="btn-row">
+        <button class="primary" onclick="lookupItem()">Add item</button>
+        <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
+      </div>
+    </div>
 
     <div id="cartRows" style="margin-top:14px"></div>
     <div id="orderDetailFields"></div>
@@ -139,6 +158,103 @@ async function saveOrder(){
     });
     location.href = '/staff/orders.html';
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+
+// Camera barcode scanning — same approach as the Take Order page: prefer
+// the native BarcodeDetector API (fast, hardware-accelerated) and only fall
+// back to ZXing where it's unavailable (Safari/iPhone).
+const hasNativeDetector = 'BarcodeDetector' in window;
+if (navigator.mediaDevices?.getUserMedia && (hasNativeDetector || typeof ZXingBrowser !== 'undefined')) {
+  document.getElementById('cameraBtn').style.display = 'inline-block';
+}
+async function cameraScan(){
+  const err = document.getElementById('editErr'); err.style.display = 'none';
+  if (!hasNativeDetector && typeof ZXingBrowser === 'undefined') {
+    err.textContent = "Camera scanning couldn't load (needs a connection at least once to fetch it) — type the item code above instead.";
+    err.style.display = 'block';
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:999;background:#000';
+  const video = document.createElement('video');
+  video.style.cssText = 'width:100%;height:100%;object-fit:cover';
+  video.setAttribute('playsinline', '');
+  video.setAttribute('muted', '');
+  const guide = document.createElement('div');
+  guide.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80%;max-width:340px;height:120px;border:3px solid #f0b429;border-radius:12px;pointer-events:none';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕ Close';
+  closeBtn.className = 'ghost';
+  closeBtn.style.cssText = 'position:absolute;top:16px;right:16px;z-index:1000';
+  const torchBtn = document.createElement('button');
+  torchBtn.textContent = '💡 Light';
+  torchBtn.className = 'ghost';
+  torchBtn.style.cssText = 'position:absolute;top:16px;left:16px;z-index:1000;display:none';
+  overlay.appendChild(video); overlay.appendChild(guide); overlay.appendChild(closeBtn); overlay.appendChild(torchBtn);
+  document.body.appendChild(overlay);
+
+  let controls = null, rafId = null, stream = null;
+  const stop = () => {
+    controls?.stop();
+    if (rafId) cancelAnimationFrame(rafId);
+    stream?.getTracks().forEach(t => t.stop());
+    overlay.remove();
+  };
+  closeBtn.onclick = stop;
+
+  function setupTorch(mediaStream){
+    const track = mediaStream?.getVideoTracks?.()[0];
+    if (!track?.getCapabilities?.()?.torch) return;
+    torchBtn.style.display = 'inline-block';
+    let torchOn = false;
+    torchBtn.onclick = async () => {
+      torchOn = !torchOn;
+      try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch { torchOn = !torchOn; }
+    };
+  }
+
+  try {
+    if (hasNativeDetector) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = stream;
+      await video.play();
+      setupTorch(stream);
+      const detector = new BarcodeDetector({ formats: ['code_128', 'code_39', 'code_93', 'codabar', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'qr_code', 'data_matrix', 'pdf417', 'aztec'] });
+      const tick = async () => {
+        try {
+          const codes = await detector.detect(video);
+          if (codes.length) {
+            const value = codes[0].rawValue;
+            stop();
+            document.getElementById('scanCode').value = value;
+            lookupItem();
+            return;
+          }
+        } catch (e) { /* transient — video not ready for a frame yet, just retry */ }
+        rafId = requestAnimationFrame(tick);
+      };
+      tick();
+    } else {
+      const codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+      controls = await codeReader.decodeFromConstraints(
+        { video: { facingMode: 'environment' } },
+        video,
+        (result, decodeErr, ctrl) => {
+          controls = ctrl;
+          if (result) {
+            stop();
+            document.getElementById('scanCode').value = result.getText();
+            lookupItem();
+          }
+        }
+      );
+      setupTorch(video.srcObject);
+    }
+  } catch (e) {
+    overlay.remove();
+    err.textContent = 'Camera scan unavailable: ' + e.message;
+    err.style.display = 'block';
+  }
 }
 load();
 </script>

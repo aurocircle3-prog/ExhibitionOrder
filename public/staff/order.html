@@ -40,70 +40,6 @@
     </div>
   </div>
 
-  <div class="card" id="partyCard">
-    <h3 style="margin-top:0">1. Buyer</h3>
-    <div class="error" id="partyErr"></div>
-    <div id="partyPicked" style="display:none">
-      <p><b id="partyName"></b> — <span id="partyPhone" class="muted"></span> <button class="ghost small" onclick="clearParty()">Change</button></p>
-    </div>
-    <div id="partyPicker">
-      <label>Search existing buyer by phone</label>
-      <input id="partySearch" placeholder="98765..." oninput="searchParty(this.value)">
-      <div id="partyResults"></div>
-      <p class="muted" style="margin:14px 0 6px">— or —</p>
-      <label>Photograph or upload visiting card</label>
-      <input type="file" id="cardFile" accept="image/*" onchange="onCardFileSelected(event)">
-      <div id="cardPreview" style="margin-top:10px"></div>
-      <p class="muted" id="ocrStatus" style="display:none;margin-top:6px"></p>
-      <div class="grid cols-2" style="margin-top:10px">
-        <div><label>Firm name</label><input id="firmName"></div>
-        <div><label>Contact person</label><input id="contactPerson"></div>
-        <div>
-          <label>Phone</label>
-          <div style="display:flex;gap:6px">
-            <input id="phoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-            <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
-          </div>
-        </div>
-        <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
-      </div>
-      <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, createParty)">Use this buyer</button>
-    </div>
-  </div>
-
-  <div class="lightbox" id="cropModal">
-    <div class="crop-box">
-      <p class="muted" style="margin:0 0 10px">Drag the corners to frame just the card, then confirm.</p>
-      <div class="crop-canvas-wrap"><img id="cropImg" style="max-width:100%"></div>
-      <div class="btn-row" style="margin-top:14px;justify-content:center">
-        <button class="primary" onclick="confirmCrop()">Use this crop</button>
-        <button class="ghost" onclick="skipCrop()">Use full photo</button>
-        <button class="ghost" onclick="cancelCrop()">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3 style="margin-top:0">2. Scan items</h3>
-    <div class="error" id="scanErr"></div>
-    <div class="grid cols-2">
-      <input id="scanCode" placeholder="Scan or type item code, then Enter" autofocus onkeydown="if(event.key==='Enter')lookupItem()">
-      <div class="btn-row">
-        <button class="primary" onclick="lookupItem()">Add item</button>
-        <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3 style="margin-top:0">3. Cart <span class="muted" id="cartTotal"></span></h3>
-    <div id="cartRows"><p class="muted">No items scanned yet</p></div>
-    <div id="orderDetailFields"></div>
-    <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
-    <textarea id="remark" rows="2"></textarea>
-    <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, submitOrder)">Create order</button>
-  </div>
-
   <div class="card" id="shareCard" style="display:none">
     <h3 style="margin-top:0">Order created ✅</h3>
     <p>Order <b id="orderNo"></b></p>
@@ -119,6 +55,84 @@
     <h3 style="margin-top:0">Order saved offline 📴</h3>
     <p class="muted">No connection right now — this order is saved on this device and will be sent automatically once you're back online. You can't share a WhatsApp link for it until then.</p>
     <button class="primary" onclick="newOrder()">Start new order</button>
+  </div>
+
+  <div class="tabs" id="orderTabs">
+    <button class="tab-btn" data-otab="buyer" onclick="switchOrderTab('buyer')">1. Buyer</button>
+    <button class="tab-btn" data-otab="scan" onclick="switchOrderTab('scan')">2. Scan Items <span class="muted" id="cartCountBadge"></span></button>
+    <button class="tab-btn" data-otab="details" onclick="switchOrderTab('details')">3. Details</button>
+  </div>
+
+  <div class="tab-panel" id="otab-buyer">
+    <div class="card" id="partyCard">
+      <div class="error" id="partyErr"></div>
+      <div id="partyPicked" style="display:none">
+        <p><b id="partyName"></b> — <span id="partyPhone" class="muted"></span> <button class="ghost small" onclick="clearParty()">Change</button></p>
+      </div>
+      <div id="partyPicker">
+        <label>Search existing buyer by phone</label>
+        <input id="partySearch" placeholder="98765..." oninput="searchParty(this.value)">
+        <div id="partyResults"></div>
+        <p class="muted" style="margin:14px 0 6px">— or —</p>
+        <label>Photograph or upload visiting card</label>
+        <input type="file" id="cardFile" accept="image/*" onchange="onCardFileSelected(event)">
+        <div id="cardPreview" style="margin-top:10px"></div>
+        <p class="muted" id="ocrStatus" style="display:none;margin-top:6px"></p>
+        <div class="grid cols-2" style="margin-top:10px">
+          <div><label>Firm name</label><input id="firmName"></div>
+          <div><label>Contact person</label><input id="contactPerson"></div>
+          <div>
+            <label>Phone</label>
+            <div style="display:flex;gap:6px">
+              <input id="phoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
+              <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+            </div>
+          </div>
+          <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
+        </div>
+        <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, createParty)">Use this buyer</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="lightbox" id="cropModal">
+    <div class="crop-box">
+      <p class="muted" style="margin:0 0 10px">Drag the corners to frame just the card, then confirm.</p>
+      <div class="crop-canvas-wrap"><img id="cropImg" style="max-width:100%"></div>
+      <div class="btn-row" style="margin-top:14px;justify-content:center">
+        <button class="primary" onclick="confirmCrop()">Use this crop</button>
+        <button class="ghost" onclick="skipCrop()">Use full photo</button>
+        <button class="ghost" onclick="cancelCrop()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="otab-scan">
+    <div class="card">
+      <h3 style="margin-top:0">Scan items</h3>
+      <div class="error" id="scanErr"></div>
+      <div class="grid cols-2">
+        <input id="scanCode" placeholder="Scan or type item code, then Enter" autofocus onkeydown="if(event.key==='Enter')lookupItem()">
+        <div class="btn-row">
+          <button class="primary" onclick="lookupItem()">Add item</button>
+          <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Cart <span class="muted" id="cartTotal"></span></h3>
+      <div id="cartRows"><p class="muted">No items scanned yet</p></div>
+      <button class="primary" style="margin-top:14px" onclick="switchOrderTab('details')">Next: Details →</button>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="otab-details">
+    <div class="card">
+      <div id="orderDetailFields"></div>
+      <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
+      <textarea id="remark" rows="2"></textarea>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, submitOrder)">Create order</button>
+    </div>
   </div>
 </div>
 <script src="/offline.js"></script>
@@ -223,6 +237,7 @@ setInterval(() => { if (navigator.onLine) refreshOfflineCache(); trySync(); }, 2
 (async function(){
   await refreshOfflineCache();
   await updateSyncBanner();
+  switchOrderTab('buyer');
 })();
 
 async function searchParty(q){
@@ -243,8 +258,13 @@ function showPartyPicked(){
   document.getElementById('partyPicked').style.display = 'block';
   document.getElementById('partyName').textContent = party.firmName;
   document.getElementById('partyPhone').textContent = party.phone;
+  switchOrderTab('scan'); // buyer done — move straight to scanning, the main event
 }
-function clearParty(){ party = null; document.getElementById('partyPicker').style.display='block'; document.getElementById('partyPicked').style.display='none'; }
+function clearParty(){ party = null; document.getElementById('partyPicker').style.display='block'; document.getElementById('partyPicked').style.display='none'; switchOrderTab('buyer'); }
+function switchOrderTab(name){
+  document.querySelectorAll('#orderTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.otab === name));
+  document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'otab-' + name));
+}
 
 let cardImageUrl = '';
 let cropper = null, pendingCardFile = null;
@@ -409,6 +429,7 @@ function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart();
 function renderCart(){
   const itemCount = cart.reduce((s,c)=>s+c.qty,0);
   document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
+  document.getElementById('cartCountBadge').textContent = cart.length ? `(${itemCount})` : '';
   if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; return; }
   const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
