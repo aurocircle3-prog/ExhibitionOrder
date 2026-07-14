@@ -4,10 +4,24 @@
 <link rel="icon" href="/logo.svg">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.css">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.js"></script>
 <div id="nav"></div>
 <div class="wrap">
   <div class="card" id="syncBanner" style="display:none"></div>
+
+  <div class="lightbox" id="pendingModal">
+    <div class="crop-box" style="max-width:600px;text-align:left;max-height:80vh;display:flex;flex-direction:column">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h3 style="margin:0">Pending orders <span class="muted">— saved on this device</span></h3>
+        <button class="ghost small" onclick="closePendingModal()">✕ Close</button>
+      </div>
+      <div id="pendingList" style="overflow-y:auto"></div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="ghost" onclick="downloadPendingExcel()">⬇ Download as Excel (backup)</button>
+      </div>
+    </div>
+  </div>
 
   <div class="card" id="partyCard">
     <h3 style="margin-top:0">1. Buyer</h3>
@@ -140,15 +154,45 @@ async function updateSyncBanner(){
   const outbox = await ExoOffline.getOutbox(tenantSlug);
   const cachedCount = await ExoOffline.countItems(tenantSlug);
   const banner = document.getElementById('syncBanner');
+  const pendingOrderCount = outbox.filter(e => e.type === 'order').length;
+  const viewLink = pendingOrderCount ? ` <button class="ghost small" onclick="showPendingOrders()">View ${pendingOrderCount} pending</button>` : '';
   if (!navigator.onLine) {
     banner.style.display = 'block';
-    banner.innerHTML = `<p style="margin:0"><b>📴 Offline</b> — ${cachedCount} item(s) available to scan from cache. Orders you take now are saved on this device and will send automatically once you're back online.${outbox.length ? ` (${outbox.length} waiting)` : ''}</p>`;
+    banner.innerHTML = `<p style="margin:0"><b>📴 Offline</b> — ${cachedCount} item(s) available to scan from cache. Orders you take now are saved on this device and will send automatically once you're back online.${outbox.length ? ` (${outbox.length} waiting)` : ''}${viewLink}</p>`;
   } else if (outbox.length) {
     banner.style.display = 'block';
-    banner.innerHTML = `<p style="margin:0">🔄 ${outbox.length} order(s) waiting to sync. <button class="ghost small" onclick="trySync()">Sync now</button></p>`;
+    banner.innerHTML = `<p style="margin:0">🔄 ${outbox.length} order(s) waiting to sync. <button class="ghost small" onclick="trySync()">Sync now</button>${viewLink}</p>`;
   } else {
     banner.style.display = 'none';
   }
+}
+async function showPendingOrders(){
+  const pending = await ExoOffline.getReadableOutbox(tenantSlug);
+  document.getElementById('pendingList').innerHTML = pending.length ? pending.map(o => `
+    <div class="card" style="background:#f7f7f8;padding:12px;margin-top:8px">
+      <p style="margin:0"><b>${o.buyerName}</b>${o.buyerPhone ? ' · ' + o.buyerPhone : ''}</p>
+      <p class="muted" style="margin:4px 0">Saved ${new Date(o.queuedAt).toLocaleString()} — not yet on the server</p>
+      <ul style="margin:6px 0;padding-left:18px">
+        ${o.items.map(i => `<li>${i.label}${i.code ? ' (' + i.code + ')' : ''} × ${i.qty}${i.comment ? ' — ' + i.comment : ''}</li>`).join('')}
+      </ul>
+      ${o.remark ? `<p class="muted" style="margin:4px 0">Remark: ${o.remark}</p>` : ''}
+    </div>`).join('') : '<p class="muted">Nothing pending — everything is synced.</p>';
+  document.getElementById('pendingModal').classList.add('open');
+}
+function closePendingModal(){ document.getElementById('pendingModal').classList.remove('open'); }
+async function downloadPendingExcel(){
+  const pending = await ExoOffline.getReadableOutbox(tenantSlug);
+  if (!pending.length) { EXO.toast('Nothing pending to download', 'error'); return; }
+  const rows = [['Buyer', 'Phone', 'Item', 'Item Code', 'Qty', 'Item Comment', 'Order Remark', 'Saved At (on this device)']];
+  pending.forEach(o => {
+    o.items.forEach(i => rows.push([o.buyerName, o.buyerPhone, i.label, i.code, i.qty, i.comment, o.remark, new Date(o.queuedAt).toLocaleString()]));
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = rows[0].map(() => ({ wch: 18 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Pending Orders');
+  XLSX.writeFile(wb, `pending-orders-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  EXO.toast(`Downloaded ${pending.length} pending order(s)`);
 }
 async function trySync(){
   const { synced } = await ExoOffline.flushOutbox(tenantSlug, EXO.apiFetch);

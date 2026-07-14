@@ -127,5 +127,34 @@
     return { synced, remaining };
   }
 
-  window.ExoOffline = { cacheItems, countItems, findItemByCode, cacheParties, searchPartiesOffline, queue, getOutbox, removeFromOutbox, flushOutbox };
+  // Turns the raw outbox (item IDs, possibly-unsynced local party IDs) into
+  // something a person can actually read — buyer name, item names, queued
+  // time. Built specifically so staff can SEE what's saved offline rather
+  // than just trust it's there; the data was never actually at risk (it's
+  // sitting safely in IndexedDB the whole time), but there was previously no
+  // way to confirm that without opening dev tools.
+  async function getReadableOutbox(tenantSlug) {
+    const outbox = await getOutbox(tenantSlug);
+    const allItems = await getAll('items');
+    const itemById = {};
+    allItems.filter(r => r.tenantSlug === tenantSlug).forEach(r => { itemById[r.item.id] = r.item; });
+
+    const partyByLocalId = {};
+    outbox.filter(e => e.type === 'party').forEach(e => { partyByLocalId[e.id] = e.payload; });
+    const allParties = await getAll('parties');
+    const partyById = {};
+    allParties.filter(r => r.tenantSlug === tenantSlug).forEach(r => { partyById[r.party.id] = r.party; });
+
+    return outbox.filter(e => e.type === 'order').map(entry => {
+      const p = entry.payload;
+      const partyInfo = partyByLocalId[p.partyId] || partyById[p.partyId] || { firmName: '(buyer syncing)', phone: '' };
+      const items = (p.items || []).map(line => {
+        const item = itemById[line.itemId];
+        return { label: item?.fields?.productName || item?.scannerCode || 'Unknown item', code: item?.scannerCode || '', qty: line.qty, comment: line.comment || '' };
+      });
+      return { id: entry.id, queuedAt: entry.queuedAt, buyerName: partyInfo.firmName, buyerPhone: partyInfo.phone, items, remark: p.remark || '' };
+    });
+  }
+
+  window.ExoOffline = { cacheItems, countItems, findItemByCode, cacheParties, searchPartiesOffline, queue, getOutbox, removeFromOutbox, flushOutbox, getReadableOutbox };
 })();
