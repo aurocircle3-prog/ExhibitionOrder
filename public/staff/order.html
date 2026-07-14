@@ -493,11 +493,20 @@ async function cameraScan(){
   video.style.cssText = 'width:100%;height:100%;object-fit:cover';
   video.setAttribute('playsinline', ''); // required so iOS Safari plays inline instead of forcing fullscreen
   video.setAttribute('muted', '');
+  // A visible framing box — mainly to guide the person holding the phone to
+  // get the barcode centered, steady, and reasonably filling the frame,
+  // which matters far more to ZXing's success rate than any code-side tweak.
+  const guide = document.createElement('div');
+  guide.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80%;max-width:340px;height:120px;border:3px solid #f0b429;border-radius:12px;pointer-events:none';
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '✕ Close';
   closeBtn.className = 'ghost';
   closeBtn.style.cssText = 'position:absolute;top:16px;right:16px;z-index:1000';
-  overlay.appendChild(video); overlay.appendChild(closeBtn);
+  const torchBtn = document.createElement('button');
+  torchBtn.textContent = '💡 Light';
+  torchBtn.className = 'ghost';
+  torchBtn.style.cssText = 'position:absolute;top:16px;left:16px;z-index:1000;display:none';
+  overlay.appendChild(video); overlay.appendChild(guide); overlay.appendChild(closeBtn); overlay.appendChild(torchBtn);
   document.body.appendChild(overlay);
 
   let controls = null;
@@ -519,6 +528,18 @@ async function cameraScan(){
         // decodeErr fires continuously between frames with no code in view — expected, not a real error
       }
     );
+    // Not every device/browser supports torch control — only show the
+    // button if it's actually available, rather than offering something
+    // that silently does nothing when tapped.
+    const track = video.srcObject?.getVideoTracks?.()[0];
+    if (track?.getCapabilities?.()?.torch) {
+      torchBtn.style.display = 'inline-block';
+      let torchOn = false;
+      torchBtn.onclick = async () => {
+        torchOn = !torchOn;
+        try { await controls.switchTorch(torchOn); } catch { torchOn = !torchOn; }
+      };
+    }
   } catch (e) {
     overlay.remove();
     err.textContent = 'Camera scan unavailable: ' + e.message;

@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.7.3';
-const BUILD_TIME   = '2026-07-14T10:40:00Z';
+const APP_VERSION  = '1.8.0';
+const BUILD_TIME   = '2026-07-14T11:05:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1613,10 +1613,22 @@ app.post('/api/parties/scan-card', resolveTenant, auth, requireRole('admin', 'st
     if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Image too large (max 10MB)' : err.message });
     if (!req.file) return res.status(400).json({ error: 'Visiting card image is required' });
     const cardImageUrl = fileUrl(req.file, localDir);
-    const base64 = useR2
-      ? Buffer.from(await (await fetch(cardImageUrl)).arrayBuffer()).toString('base64')
-      : fs.readFileSync(req.file.path).toString('base64');
-    const guess = await runVisitingCardOcr(base64);
+    // The card image is already safely saved at this point — everything
+    // below is a "nice to have" auto-fill enhancement (server-side OCR),
+    // not something the request should fail over. In R2 mode this needs to
+    // re-fetch the file from its own public URL, which previously had no
+    // error handling at all: any hiccup (R2 propagation delay, a network
+    // blip) left the request hanging indefinitely with no response, which
+    // is exactly what shows up client-side as a generic "failed to fetch."
+    let guess = { firmName: '', contactPerson: '', phone: '', email: '' };
+    try {
+      const base64 = useR2
+        ? Buffer.from(await (await fetch(cardImageUrl)).arrayBuffer()).toString('base64')
+        : fs.readFileSync(req.file.path).toString('base64');
+      guess = await runVisitingCardOcr(base64);
+    } catch (ocrErr) {
+      log.warn({ err: ocrErr }, 'Card OCR step failed — card image was still saved, just no auto-fill guess from it');
+    }
     res.json({ cardImageUrl, guess });
   });
 });
