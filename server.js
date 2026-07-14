@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.4.1';
-const BUILD_TIME   = '2026-07-14T05:10:00Z';
+const APP_VERSION  = '1.5.0';
+const BUILD_TIME   = '2026-07-14T06:35:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -829,6 +829,24 @@ app.post('/api/platform/tenants/:id/logo', platformAuth, (req, res) => {
     res.json({ ok: true, logoUrl });
   });
 });
+// Lets the platform admin preview exactly what a company's current Item
+// Master field structure produces as a downloadable template — useful right
+// after setting up fields, to confirm it looks right before handing
+// anything to the client.
+app.get('/api/platform/tenants/:id/items/template', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
+  const headers = fieldDefs.map(fieldHeaderLabel);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers]);
+  ws['!cols'] = headers.map(() => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Item Master');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="${tenant.slug}_Item_Master_Template.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+});
 
 // ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
 app.get('/api/auth/setup-token/:token', async (req, res) => {
@@ -1036,14 +1054,18 @@ function validateFormula(expr, allowedNames) {
 
 async function saveOrderViewColumnsForTenant(tenant, list) {
   const orderFields = tenant.orderFields || [];
-  const allowedFieldKeys = new Set(orderFields.map(f => f.key));
-  // Formulas can only meaningfully use numeric fields — a text field like
-  // "Category" can't be multiplied. Looked up fresh from FieldDefDB rather
-  // than trusting orderFields[].type, which older saved configs won't have
-  // yet — this way it's correct immediately, not just after a re-save.
+  // Field/Formula columns can reference ANY active Item Master field, not
+  // just ones added to the Order Form — Order Form controls what staff can
+  // edit per line and what gets totaled, but the display layout is a
+  // separate concern and shouldn't be limited to that subset. Every active
+  // field's value is already snapshotted onto every order line (see
+  // buildOrderLines) specifically so this works.
   const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
-  const typeByKey = {}; fieldDefs.forEach(f => { typeByKey[f.key] = f.type; });
-  const allowedFormulaNames = new Set([...orderFields.filter(f => typeByKey[f.key] === 'number').map(f => f.key), 'qty']);
+  const fieldByKey = {}; fieldDefs.forEach(f => { fieldByKey[f.key] = f; });
+  const allowedFieldKeys = new Set(fieldDefs.map(f => f.key));
+  // Formulas can only meaningfully use numeric fields — a text field like
+  // "Category" can't be multiplied.
+  const allowedFormulaNames = new Set([...fieldDefs.filter(f => f.type === 'number').map(f => f.key), 'qty']);
   const orderCustomFields = tenant.orderCustomFields || [];
   const allowedOrderFieldKeys = new Set(orderCustomFields.map(f => f.key));
 
@@ -1059,9 +1081,10 @@ async function saveOrderViewColumnsForTenant(tenant, list) {
     const col = { id: raw.id || uuid(), type: raw.type, width };
 
     if (raw.type === 'field') {
-      if (!allowedFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't a field on the Order Form — add it there first`), { status: 400 });
-      const f = orderFields.find(x => x.key === raw.fieldKey);
+      if (!allowedFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't an Item Master field — add it there first`), { status: 400 });
+      const f = fieldByKey[raw.fieldKey];
       col.fieldKey = raw.fieldKey;
+      col.unit = f.unit || ''; // stored directly so the public order view never needs to re-look-up field metadata
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
     } else if (raw.type === 'orderfield') {
       if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
@@ -1627,8 +1650,13 @@ async function buildOrderLines(tenant, items) {
     const item = await ItemDB.findOne({ id: line.itemId, tenantId: tenant.id });
     if (!item) continue;
     const qty = Number(line.qty) || 1;
+    // Every active Item Master field gets snapshotted, not just the ones on
+    // the Order Form — Order Form only controls which fields staff can
+    // override per-line and which get totaled; a column in Order View
+    // Layout can reference any Item Master field regardless, and needs the
+    // value to actually be here to display it.
     const rawExtra = {};
-    orderFields.forEach(f => { rawExtra[f.key] = item.fields?.[f.key] ?? ''; });
+    fieldDefs.forEach(f => { rawExtra[f.key] = item.fields?.[f.key] ?? ''; });
     if (line.extra && typeof line.extra === 'object') {
       for (const [k, v] of Object.entries(line.extra)) {
         if (orderKeys.has(k)) rawExtra[k] = v; // only known Order Form fields — never trust arbitrary keys from the client

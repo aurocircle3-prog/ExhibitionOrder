@@ -171,12 +171,12 @@ async function loadOrderFields(saved){
       <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
       <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''} onchange="if(this.checked) document.querySelector('.of-show[data-key=\\'${f.key}\\']').checked = true">` : ''}</td>
     </tr>`).join('');
-  // Column builder can only reference fields actually on the Order Form —
-  // those are the only ones with a value collected per order line. Type is
-  // cross-referenced from the full field list so it's correct even for
-  // saved orderFields from before type was tracked on them.
-  const typeByKey = {}; fields.forEach(f => { typeByKey[f.key] = f.type; });
-  availableFields = saved.map(f => ({ key: f.key, label: f.label, type: typeByKey[f.key] }));
+  // Field/Formula columns in Order View Layout can reference ANY active
+  // Item Master field (fixed or custom) — not just ones on the Order Form.
+  // Order Form only controls what's staff-editable per line and totaled;
+  // every field's value is snapshotted onto every order line regardless
+  // (see buildOrderLines server-side), so any of them can be displayed.
+  availableFields = fields.map(f => ({ key: f.key, label: f.label, type: f.type, unit: f.unit }));
 }
 async function saveOrderFields(){
   const err = document.getElementById('err'); err.style.display='none';
@@ -191,8 +191,7 @@ async function saveOrderFields(){
   });
   const showImages = document.getElementById('showImages').checked;
   try {
-    const res = await EXO.apiFetch('/companies/order-fields', { method:'PUT', body: JSON.stringify({ orderFields, showImages }) });
-    availableFields = res.orderFields.map(f => ({ key: f.key, label: f.label, type: f.type }));
+    await EXO.apiFetch('/companies/order-fields', { method:'PUT', body: JSON.stringify({ orderFields, showImages }) });
     EXO.toast('Order form saved');
   }
   catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Save failed — see error above', 'error'); }

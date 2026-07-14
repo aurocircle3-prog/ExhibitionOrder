@@ -136,7 +136,6 @@ function renderLegacyTable(order){
 // that for any text wider than a fixed-character-width cell.
 function renderDynamicTable(order){
   const extraFields = order.orderFieldsSnapshot || [];
-  const unitFor = key => extraFields.find(f => f.key === key)?.unit || '';
   const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
   const widthStyle = w => `style="width:${w}ch"`;
 
@@ -152,7 +151,7 @@ function renderDynamicTable(order){
             ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
           </div>` : ''}</td>`;
       }
-      if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], unitFor(col.fieldKey))}</td>`;
+      if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], col.unit || '')}</td>`;
       if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;
       if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
       if (col.type === 'itemcode') return `<td ${widthStyle(col.width)}>${item.scannerCode || ''}</td>`;
