@@ -159,7 +159,16 @@
       </div>
 
       <div class="tab-panel" id="ctab-layout">
-        <p class="muted" style="margin-top:0">The table buyers see on the shared order link, column by column. Leave empty to use the simple default layout (photos, Order Form fields, then quantity).</p>
+        <h4 style="margin-top:0">Row grouping</h4>
+        <p class="muted" style="margin-top:-6px">For products made of multiple scanned items that should appear as one row on the order link — e.g. a necklace set scanned as a necklace + earrings. Numeric fields (like weight) are added together; text fields (like item code) are combined with a comma. Doesn't change how staff scan or see items while taking the order — only how the buyer-facing link displays them.</p>
+        <select id="rowGroupingSelect">
+          <option value="none">No grouping — one row per scanned item (default)</option>
+          <option value="itemName">Group by Item Name — items with the same Item Name merge into one row</option>
+        </select>
+        <button class="primary" style="margin-top:10px" onclick="EXO.busy(this, saveRowGrouping)">Save</button>
+
+        <h4>Columns</h4>
+        <p class="muted" style="margin-top:-6px">The table buyers see on the shared order link, column by column. Leave empty to use the simple default layout (photos, Order Form fields, then quantity).</p>
         <div id="detailColumnRows"></div>
         <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
         <button class="primary" style="margin-top:14px;display:block" onclick="EXO.busy(this, saveDetailColumns)">Save layout</button>
@@ -297,6 +306,13 @@ async function saveSlug(){
     load();
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
+async function saveRowGrouping(){
+  const value = document.getElementById('rowGroupingSelect').value;
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/row-grouping`, { method: 'PUT', body: JSON.stringify({ orderRowGrouping: value }) });
+    EXO.toast('Row grouping saved.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -355,6 +371,7 @@ async function openDetail(id){
   document.getElementById('detailSlug').textContent = `/${tenant.slug} — plan: ${tenant.plan} — created ${new Date(tenant.createdAt).toLocaleString()} — ${counts.itemCount} items, ${counts.orderCount} orders, ${counts.partyCount} buyers, ${counts.exhibitionCount} exhibitions`;
   document.getElementById('slugInput').value = tenant.slug;
   document.getElementById('activeToggle').checked = tenant.active !== false;
+  document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>

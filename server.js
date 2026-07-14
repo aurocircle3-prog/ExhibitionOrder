@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.6.0';
-const BUILD_TIME   = '2026-07-14T07:10:00Z';
+const APP_VERSION  = '1.7.0';
+const BUILD_TIME   = '2026-07-14T07:35:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -71,6 +71,13 @@ const tenantSchema = new mongoose.Schema({
   // in Settings > Order Form.
   orderFields: { type: [{ key: String, label: String, unit: String, showTotal: Boolean }], default: [] },
   orderShowImages: { type: Boolean, default: true }, // whether item photos appear on the order link
+  // How rows are combined on the buyer-facing order link — 'none' (default,
+  // one row per scanned item) or 'itemName' (items sharing the exact same
+  // Item Name merge into one row: numeric fields summed, text fields
+  // comma-joined, images combined). Platform-admin-only, not exposed to the
+  // company admin — this is AuroCircle choosing a display method for the
+  // client, not something the client configures themselves.
+  orderRowGrouping: { type: String, enum: ['none', 'itemName'], default: 'none' },
   // Atomically incremented to generate order numbers (EX1001, EX1002...).
   // Replaces the old "count existing orders, then create" approach, which
   // had a race window: two staff submitting at the same instant could both
@@ -681,6 +688,14 @@ app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) =>
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   await TenantDB.update({ id: tenant.id }, { maxStaff });
   res.json({ ok: true, maxStaff });
+});
+app.put('/api/platform/tenants/:id/row-grouping', platformAuth, async (req, res) => {
+  const value = req.body.orderRowGrouping;
+  if (!['none', 'itemName'].includes(value)) return res.status(400).json({ error: 'Invalid grouping method' });
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  await TenantDB.update({ id: tenant.id }, { orderRowGrouping: value });
+  res.json({ ok: true, orderRowGrouping: value });
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -1664,7 +1679,7 @@ async function buildOrderLines(tenant, items) {
     }
     const extra = normalizeFieldValues(fieldDefs, rawExtra);
     lineItems.push({
-      itemId: item.id, label: item.fields?.productName || item.scannerCode || item.id,
+      itemId: item.id, label: item.fields?.itemName || item.fields?.productName || item.scannerCode || item.id,
       scannerCode: item.scannerCode, images: item.images || [],
       qty, extra, comment: typeof line.comment === 'string' ? line.comment.trim().slice(0, 500) : '',
     });
@@ -1824,6 +1839,10 @@ app.get('/api/orders/public/:token', async (req, res) => {
   res.json({
     order: { ...order, columnsSnapshot: columns },
     company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
+    // Live like the column layout, not frozen at order-creation time — same
+    // reasoning: this is a display method AuroCircle chose for the client,
+    // not a record of what happened on that specific order.
+    rowGrouping: tenant?.orderRowGrouping || 'none',
   });
 });
 

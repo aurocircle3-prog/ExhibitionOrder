@@ -43,13 +43,50 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape') closeLightbox();
 });
 
+// Merges scanned items that share the exact same Item Name into one row —
+// e.g. a necklace set scanned as separate necklace + earring items. Numeric
+// field values (weight, etc.) are added together; text values are combined
+// with a comma; images and remarks are combined too. Runs before either
+// table renderer, so both the dynamic and legacy layouts get it for free
+// without duplicating the merge logic in each one.
+function groupItemsByName(items){
+  const order = [], groups = {};
+  items.forEach(item => {
+    const key = item.extra?.itemName || item.label;
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(item);
+  });
+  return order.map(key => {
+    const group = groups[key];
+    if (group.length === 1) return group[0]; // nothing to merge
+    const merged = {
+      itemId: group.map(g => g.itemId).join(','),
+      label: group[0].extra?.itemName || group[0].label, // identical across the group by definition
+      scannerCode: [...new Set(group.map(g => g.scannerCode).filter(Boolean))].join(', '),
+      images: [...new Set(group.flatMap(g => g.images || []))],
+      qty: group[0].qty, // the set's quantity — scanned components of one set share the same qty, not summed
+      comment: [...new Set(group.map(g => g.comment).filter(Boolean))].join(', '),
+      extra: {},
+    };
+    const allKeys = new Set(group.flatMap(g => Object.keys(g.extra || {})));
+    allKeys.forEach(fieldKey => {
+      const values = group.map(g => g.extra?.[fieldKey]).filter(v => v !== '' && v !== undefined && v !== null);
+      const allNumeric = values.length > 0 && values.every(v => typeof v === 'number');
+      merged.extra[fieldKey] = allNumeric ? values.reduce((sum, v) => sum + v, 0) : [...new Set(values.map(String))].join(', ');
+    });
+    return merged;
+  });
+}
+
 async function load(){
   const token = location.pathname.split('/').pop();
   const box = document.getElementById('content');
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
-    const { order, company } = res;
+    const { order, company, rowGrouping } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Expo Orders');
+
+    if (rowGrouping === 'itemName') order.items = groupItemsByName(order.items);
 
     const isDynamic = !!(order.columnsSnapshot && order.columnsSnapshot.length);
     const { headerCells, rows } = isDynamic ? renderDynamicTable(order) : renderLegacyTable(order);
