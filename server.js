@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.14.0';
-const BUILD_TIME   = '2026-07-15T10:20:00Z';
+const APP_VERSION  = '1.15.0';
+const BUILD_TIME   = '2026-07-15T11:10:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -193,7 +193,7 @@ const partySchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema({
   id: String, orderNo: String, tenantId: String, exhibitionId: String,
-  partyId: String, partyName: String, partyPhone: String,
+  partyId: String, partyName: String, partyPhone: String, partyContactPerson: String, partyEmail: String,
   staffId: String, staffName: String,
   items: Array,                       // [{itemId, label, scannerCode, images, qty, extra}]
   remark: String,
@@ -213,6 +213,7 @@ const orderSchema = new mongoose.Schema({
   customFields: { type: mongoose.Schema.Types.Mixed, default: {} },
   showImages: { type: Boolean, default: true },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
+  deleted: { type: Boolean, default: false }, // soft delete — kept for audit/history, hidden from normal views
   shareToken: { type: String, unique: true, sparse: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -1851,7 +1852,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
 
   const order = {
     id: uuid(), orderNo, tenantId: req.tenant.id,
-    exhibitionId: exhibitionId || '', partyId, partyName: party.firmName, partyPhone: party.phone,
+    exhibitionId: exhibitionId || '', partyId, partyName: party.firmName, partyPhone: party.phone, partyContactPerson: party.contactPerson || '', partyEmail: party.email || '',
     staffId: req.user.id, staffName: req.user.name,
     items: lineItems, remark: remark || '', status: 'pending',
     orderFieldsSnapshot: orderFields, fieldTotals,
@@ -1882,13 +1883,13 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
     const party = await PartyDB.findOne({ tenantId: req.tenant.id, phone: user.phone });
     q.partyId = party ? party.id : '__none__';
   }
-  const orders = await OrderDB.find(q);
+  const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
   res.json(orders);
 });
 
 app.get('/api/orders/:id', resolveTenant, auth, async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
   res.json(order);
 });
 
@@ -1930,12 +1931,22 @@ app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), asy
   res.json({ ok: true });
 });
 
+// Soft delete — kept in the database for audit/history, just hidden from
+// every normal view (list, reports, the buyer's own share link). Admin-only.
+app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { deleted: true });
+  logAudit(req, 'order.delete', 'order', req.params.id, { orderNo: order.orderNo });
+  res.json({ ok: true });
+});
+
 // Public — no auth, no tenant header required. shareToken is a random uuid so it
 // doubles as the access secret; the order's own tenant is looked up from it so the
 // client-facing page can render the company name/logo without logging in.
 app.get('/api/orders/public/:token', async (req, res) => {
   const order = await OrderDB.findOne({ shareToken: req.params.token });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
   const tenant = await TenantDB.findOne({ id: order.tenantId });
   // Order View Layout is live, not frozen at order-creation time — unlike
   // orderFieldsSnapshot (which preserves what was actually collected on the
@@ -2016,7 +2027,7 @@ app.delete('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), as
 // equivalent below — single-sourced so the numbers can never disagree
 // between what a company admin sees and what the platform admin sees.
 async function getReportsForTenant(tenantId) {
-  const orders = await OrderDB.find({ tenantId });
+  const orders = (await OrderDB.find({ tenantId })).filter(o => !o.deleted);
   const byParty = {}, byItem = {}, byStaff = {};
   for (const o of orders) {
     byParty[o.partyId] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };

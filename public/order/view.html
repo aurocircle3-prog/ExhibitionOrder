@@ -64,11 +64,13 @@ function fmt(val, unit, decimals){
   }
   return `${val} ${unit}`;
 }
-// Renders header/footer field specs as compact "Label: Value" lines — the
-// same visual treatment as the totals block, reused here for consistency.
+// Renders header/footer/buyer field specs as compact inline chips that flow
+// left-to-right on the same line, wrapping to a new line only when the
+// content actually needs it — rather than one field per row regardless of
+// how short they are.
 function renderFieldList(fields){
   if (!fields || !fields.length) return '';
-  return fields.map(f => `<div class="cart-row" style="border-bottom:none"><span class="muted">${f.label}</span><span>${fmt(f.value, f.unit, f.decimals)}</span></div>`).join('');
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px 28px">${fields.map(f => `<div class="muted">${f.label}: <b style="color:var(--ink)">${fmt(f.value, f.unit, f.decimals)}</b></div>`).join('')}</div>`;
 }
 // Same percent-notation support as the server (see preprocessPercent there)
 // — applied here too since formulas are actually EVALUATED client-side.
@@ -148,21 +150,28 @@ async function load(){
       return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${fmt(val, f?.unit, f?.decimals)}</span></div>`;
     }).join('');
 
+    const buyerFields = [
+      { label: 'Buyer', value: order.partyName },
+      order.partyContactPerson ? { label: 'Contact', value: order.partyContactPerson } : null,
+      { label: 'Phone', value: order.partyPhone },
+      order.partyEmail ? { label: 'Email', value: order.partyEmail } : null,
+    ].filter(Boolean);
+
     box.innerHTML = `
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
-        <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
-        ${renderFieldList(viewHeaderFields)}
+        <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
+        ${viewHeaderFields?.length ? `<div style="margin-bottom:14px">${renderFieldList(viewHeaderFields)}</div>` : ''}
         <div class="table-scroll"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
           <tbody id="orderRowsBody"></tbody>
         </table></div>
         <div id="orderPagination" style="margin-top:10px"></div>
-        ${fieldTotalRows ? `<div style="margin-top:14px;margin-left:auto;max-width:320px">${fieldTotalRows}</div>` : ''}
+        ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
         ${viewFooterFields?.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(viewFooterFields)}</div>` : ''}
       </div>
-      <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>
       ${renderFooter(company)}`;
     renderTablePage();
   } catch (e) {
