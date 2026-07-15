@@ -130,7 +130,8 @@ async function load(){
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
     const { order, company, rowGrouping, viewHeaderFields, viewFooterFields } = res;
-    document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Expo Orders');
+    const logoHtml = company.logoUrl ? `<img src="${company.logoUrl}" alt="" style="height:28px;vertical-align:-8px;margin-right:8px;border-radius:4px;object-fit:contain">` : '🎪 ';
+    document.getElementById('companyName').innerHTML = logoHtml + (company.name || 'Expo Orders');
 
     if (rowGrouping === 'itemName') {
       const decimalsByKey = {};
@@ -170,9 +171,9 @@ async function load(){
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
-        ${viewFooterFields?.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(viewFooterFields)}</div>` : ''}
       </div>
-      ${renderFooter(company)}`;
+      ${renderFooter(company)}
+      ${viewFooterFields?.length ? `<div class="card" style="margin-top:16px">${renderFieldList(viewFooterFields)}</div>` : ''}`;
     renderTablePage();
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
@@ -205,24 +206,33 @@ function goToPage(n){
 
 // Company details footer — every field is independently optional, since the
 // company chooses which of these (if any) to publish on the buyer link.
+// Simple, generic icon glyphs (not reproductions of any brand's actual
+// logo mark — just conventionally recognizable shapes) so social links
+// read as tappable icons rather than plain text.
+const SOCIAL_ICONS = {
+  instagram: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>',
+  facebook: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M14 21v-8h2.7l.4-3.3H14V7.6c0-1 .3-1.6 1.7-1.6H17V3.1C16.7 3 15.7 3 14.6 3 12.3 3 10.7 4.4 10.7 7v2.7H8V13h2.7v8h3.3z"/></svg>',
+  twitter: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 4l16 16M20 4L4 20"/></svg>',
+  youtube: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M10 9.3l6 2.7-6 2.7z" fill="currentColor" stroke="none"/></svg>',
+  website: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>',
+};
 function renderFooter(company){
   const f = company.footer || {};
-  const hasContent = company.logoUrl || f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
+  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
   if (!hasContent) return '';
   const socialLinks = [
-    f.instagram && { label: 'Instagram', url: f.instagram.startsWith('http') ? f.instagram : `https://instagram.com/${f.instagram.replace(/^@/, '')}` },
-    f.facebook && { label: 'Facebook', url: f.facebook.startsWith('http') ? f.facebook : `https://facebook.com/${f.facebook}` },
-    f.twitter && { label: 'Twitter/X', url: f.twitter.startsWith('http') ? f.twitter : `https://twitter.com/${f.twitter.replace(/^@/, '')}` },
-    f.youtube && { label: 'YouTube', url: f.youtube.startsWith('http') ? f.youtube : `https://youtube.com/${f.youtube}` },
-    f.website && { label: 'Website', url: f.website.startsWith('http') ? f.website : `https://${f.website}` },
+    f.instagram && { key: 'instagram', label: 'Instagram', url: f.instagram.startsWith('http') ? f.instagram : `https://instagram.com/${f.instagram.replace(/^@/, '')}` },
+    f.facebook && { key: 'facebook', label: 'Facebook', url: f.facebook.startsWith('http') ? f.facebook : `https://facebook.com/${f.facebook}` },
+    f.twitter && { key: 'twitter', label: 'Twitter/X', url: f.twitter.startsWith('http') ? f.twitter : `https://twitter.com/${f.twitter.replace(/^@/, '')}` },
+    f.youtube && { key: 'youtube', label: 'YouTube', url: f.youtube.startsWith('http') ? f.youtube : `https://youtube.com/${f.youtube}` },
+    f.website && { key: 'website', label: 'Website', url: f.website.startsWith('http') ? f.website : `https://${f.website}` },
   ].filter(Boolean);
   return `
     <div class="card" style="text-align:center;margin-top:16px">
-      ${company.logoUrl ? `<img src="${company.logoUrl}" style="max-height:56px;max-width:180px;object-fit:contain;margin-bottom:10px">` : ''}
       ${f.address ? `<p class="muted" style="margin:4px 0">${f.address}</p>` : ''}
       ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${f.gstNumber}</p>` : ''}
       ${f.whatsappNumber ? `<p style="margin:8px 0"><a href="https://wa.me/${f.whatsappNumber.replace(/\D/g, '')}" target="_blank">💬 WhatsApp us</a></p>` : ''}
-      ${socialLinks.length ? `<div style="margin-top:8px">${socialLinks.map(s => `<a href="${s.url}" target="_blank" style="margin:0 10px">${s.label}</a>`).join('')}</div>` : ''}
+      ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${s.url}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
     </div>`;
 }
 
