@@ -43,13 +43,35 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape') closeLightbox();
 });
 
+// Shared value formatter — used everywhere a field value is displayed.
+// Two things this fixes: (1) a currency symbol (₹, $, Rs.) reads naturally
+// BEFORE the number, unlike a unit word like "Grams" which reads naturally
+// after it; (2) rounds to the field's own configured decimal places, so a
+// summed value (from row grouping, or a total) shows e.g. "23.08" instead
+// of "23.080000000000002" — a classic floating-point artifact from adding
+// decimal numbers in JS, not a real difference in the underlying value.
+function isCurrencyUnit(unit){
+  const u = (unit || '').trim();
+  return /^[₹$€£¥]$/.test(u) || /^(rs\.?|inr)$/i.test(u);
+}
+function fmt(val, unit, decimals){
+  if (val === '' || val === undefined || val === null) return '';
+  if (typeof val === 'number' && decimals !== undefined && decimals !== null) val = val.toFixed(decimals);
+  if (!unit) return String(val);
+  if (isCurrencyUnit(unit)) {
+    const symbol = unit.trim();
+    return /^[₹$€£¥]$/.test(symbol) ? `${symbol}${val}` : `${symbol} ${val}`;
+  }
+  return `${val} ${unit}`;
+}
+
 // Merges scanned items that share the exact same Item Name into one row —
 // e.g. a necklace set scanned as separate necklace + earring items. Numeric
 // field values (weight, etc.) are added together; text values are combined
 // with a comma; images and remarks are combined too. Runs before either
 // table renderer, so both the dynamic and legacy layouts get it for free
 // without duplicating the merge logic in each one.
-function groupItemsByName(items){
+function groupItemsByName(items, decimalsByKey){
   const order = [], groups = {};
   items.forEach(item => {
     const key = item.extra?.itemName || item.label;
@@ -72,7 +94,13 @@ function groupItemsByName(items){
     allKeys.forEach(fieldKey => {
       const values = group.map(g => g.extra?.[fieldKey]).filter(v => v !== '' && v !== undefined && v !== null);
       const allNumeric = values.length > 0 && values.every(v => typeof v === 'number');
-      merged.extra[fieldKey] = allNumeric ? values.reduce((sum, v) => sum + v, 0) : [...new Set(values.map(String))].join(', ');
+      if (allNumeric) {
+        const sum = values.reduce((s, v) => s + v, 0);
+        const decimals = decimalsByKey?.[fieldKey] ?? 2;
+        merged.extra[fieldKey] = Number(sum.toFixed(decimals)); // rounds away the floating-point artifact
+      } else {
+        merged.extra[fieldKey] = [...new Set(values.map(String))].join(', ');
+      }
     });
     return merged;
   });
@@ -86,16 +114,20 @@ async function load(){
     const { order, company, rowGrouping } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Expo Orders');
 
-    if (rowGrouping === 'itemName') order.items = groupItemsByName(order.items);
+    if (rowGrouping === 'itemName') {
+      const decimalsByKey = {};
+      (order.orderFieldsSnapshot || []).forEach(f => { if (f.decimals !== undefined) decimalsByKey[f.key] = f.decimals; });
+      (order.columnsSnapshot || []).forEach(c => { if (c.type === 'field' && c.decimals !== undefined) decimalsByKey[c.fieldKey] = c.decimals; });
+      order.items = groupItemsByName(order.items, decimalsByKey);
+    }
 
     const isDynamic = !!(order.columnsSnapshot && order.columnsSnapshot.length);
     const { headerCells, rows } = isDynamic ? renderDynamicTable(order) : renderLegacyTable(order);
 
     const extraFields = order.orderFieldsSnapshot || [];
-    const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
     const fieldTotalRows = Object.entries(order.fieldTotals || {}).map(([key, val]) => {
       const f = extraFields.find(x => x.key === key);
-      return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${fmt(val, f?.unit)}</span></div>`;
+      return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${fmt(val, f?.unit, f?.decimals)}</span></div>`;
     }).join('');
 
     box.innerHTML = `
@@ -145,7 +177,6 @@ function renderLegacyTable(order){
   const extraFields = order.orderFieldsSnapshot || [];
   const showImages = order.showImages !== false;
   const hasRemarks = order.items.some(i => i.comment);
-  const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
 
   const headerCells = (showImages ? '<th>Photo</th>' : '') + '<th>Item</th>'
     + extraFields.map(f => `<th>${f.label}</th>`).join('')
@@ -159,7 +190,7 @@ function renderLegacyTable(order){
             ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
           </div>` : ''}</td>`
       : '';
-    const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit)}</td>`).join('');
+    const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit, f.decimals)}</td>`).join('');
     const remarkCell = hasRemarks ? `<td>${i.comment || ''}</td>` : '';
     return `<tr>${photoCell}<td>${i.label}</td>${extraCells}${remarkCell}<td>${i.qty}</td></tr>`;
   }).join('');
@@ -173,7 +204,6 @@ function renderLegacyTable(order){
 // that for any text wider than a fixed-character-width cell.
 function renderDynamicTable(order){
   const extraFields = order.orderFieldsSnapshot || [];
-  const fmt = (val, unit) => (val === '' || val === undefined || val === null) ? '' : `${val}${unit ? ' ' + unit : ''}`;
   const widthStyle = w => `style="width:${w}ch"`;
 
   const headerCells = order.columnsSnapshot.map(col => `<th ${widthStyle(col.width)}>${col.label}</th>`).join('');
@@ -188,7 +218,7 @@ function renderDynamicTable(order){
             ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
           </div>` : ''}</td>`;
       }
-      if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], col.unit || '')}</td>`;
+      if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals)}</td>`;
       if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;
       if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
       if (col.type === 'itemcode') return `<td ${widthStyle(col.width)}>${item.scannerCode || ''}</td>`;

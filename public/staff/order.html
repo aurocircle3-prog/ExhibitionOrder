@@ -486,6 +486,13 @@ function renderCart(){
   const itemCount = cart.reduce((s,c)=>s+c.qty,0);
   document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
   document.getElementById('cartCountBadge').textContent = cart.length ? `(${itemCount})` : '';
+  // Re-rendering the cart replaces the whole table, including a fresh
+  // .table-scroll wrapper — which resets scroll position to 0 by default.
+  // On a phone, the qty +/- controls are usually off to the right of a wide
+  // table, so tapping "+" would otherwise scroll the view back to the left
+  // every single time, right after you scrolled right to reach the button.
+  const existingScroll = document.querySelector('#cartRows .table-scroll');
+  const scrollLeft = existingScroll ? existingScroll.scrollLeft : 0;
   if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; saveDraft(); return; }
   const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
@@ -501,6 +508,7 @@ function renderCart(){
       <thead><tr><th>Item</th>${fieldCols}<th>Comment</th><th>Qty</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
+  document.querySelector('#cartRows .table-scroll').scrollLeft = scrollLeft;
   saveDraft();
 }
 

@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.10.0';
-const BUILD_TIME   = '2026-07-14T16:35:00Z';
+const APP_VERSION  = '1.10.1';
+const BUILD_TIME   = '2026-07-14T17:05:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1100,6 +1100,7 @@ async function saveOrderViewColumnsForTenant(tenant, list) {
       const f = fieldByKey[raw.fieldKey];
       col.fieldKey = raw.fieldKey;
       col.unit = f.unit || ''; // stored directly so the public order view never needs to re-look-up field metadata
+      col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
     } else if (raw.type === 'orderfield') {
       if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
@@ -1220,7 +1221,7 @@ async function saveOrderFieldsForTenant(tenantId, list, showImages) {
   const byKey = {}; fieldDefs.forEach(f => { byKey[f.key] = f; });
   const orderFields = (Array.isArray(list) ? list : [])
     .filter(f => f && byKey[f.key])
-    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', type: byKey[f.key].type, showTotal: !!f.showTotal }));
+    .map(f => ({ key: f.key, label: byKey[f.key].label, unit: byKey[f.key].unit || '', type: byKey[f.key].type, decimals: byKey[f.key].type === 'number' ? (byKey[f.key].decimals ?? 2) : undefined, showTotal: !!f.showTotal }));
   const orderShowImages = showImages !== undefined ? !!showImages : true;
   await TenantDB.update({ id: tenantId }, { orderFields, orderShowImages });
   return { orderFields, orderShowImages };
@@ -1698,7 +1699,8 @@ async function buildOrderLines(tenant, items) {
   }
   const fieldTotals = {};
   orderFields.filter(f => f.showTotal).forEach(f => {
-    fieldTotals[f.key] = lineItems.reduce((sum, l) => sum + (Number(l.extra?.[f.key]) || 0) * l.qty, 0);
+    const raw = lineItems.reduce((sum, l) => sum + (Number(l.extra?.[f.key]) || 0) * l.qty, 0);
+    fieldTotals[f.key] = Number(raw.toFixed(f.decimals ?? 2));
   });
   return { lineItems, fieldTotals, orderFields };
 }

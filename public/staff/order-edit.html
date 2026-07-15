@@ -127,6 +127,8 @@ function updateExtra(id, key, value){ const line = cart.find(c => c.itemId === i
 function updateComment(id, value){ const line = cart.find(c => c.itemId === id); if (line) line.comment = value; }
 function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart(); }
 function renderCart(){
+  const existingScroll = document.querySelector('#cartRows .table-scroll');
+  const scrollLeft = existingScroll ? existingScroll.scrollLeft : 0;
   if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items — add at least one below</p>'; return; }
   const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
@@ -142,6 +144,7 @@ function renderCart(){
       <thead><tr><th>Item</th>${fieldCols}<th>Comment</th><th>Qty</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
+  document.querySelector('#cartRows .table-scroll').scrollLeft = scrollLeft;
 }
 
 async function saveOrder(){
