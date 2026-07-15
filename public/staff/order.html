@@ -520,7 +520,7 @@ async function submitOrder(){
 }
 function waLink(){
   const msg = encodeURIComponent(`Your order ${lastOrder.orderNo}\n${lastOrder.shareUrl}`);
-  return `https://wa.me/${(party.phone||'').replace(/\D/g,'')}?text=${msg}`;
+  return `https://wa.me/${(lastOrder.partyPhone||'').replace(/\D/g,'')}?text=${msg}`;
 }
 function copyLink(){ document.getElementById('shareUrl').select(); document.execCommand('copy'); }
 function clearForm(){

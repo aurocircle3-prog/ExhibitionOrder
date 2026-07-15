@@ -80,6 +80,60 @@ function preprocessPercent(expr){
   return result;
 }
 
+// Inline per-row image slider — items with multiple photos previously
+// showed every thumbnail stacked in the same cell, which (especially after
+// the images were made bigger) meant several rows just wrapped into a tall
+// stack of photos instead of a clean row. Shows one photo at a time with
+// prev/next arrows, swipe support, and a "1 of 3" counter; tapping the
+// photo itself still opens the full-screen lightbox to flip through at a
+// larger size. Each slider is tracked by a numeric ID so many independent
+// sliders can coexist on one page without stepping on each other.
+let sliderImagesRegistry = [];
+function renderImageSlider(images){
+  if (!images.length) return '';
+  const sliderId = sliderImagesRegistry.length;
+  sliderImagesRegistry.push(images);
+  const arrows = images.length > 1 ? `
+    <button onclick="stepSlider(${sliderId},-1,event)" style="position:absolute;left:2px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:1;cursor:pointer;padding:0">‹</button>
+    <button onclick="stepSlider(${sliderId},1,event)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:1;cursor:pointer;padding:0">›</button>` : '';
+  return `
+    <div class="img-slider" data-slider-id="${sliderId}" data-index="0" style="position:relative;display:inline-block">
+      <img src="${images[0]}" style="width:120px;height:120px;object-fit:cover;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
+      ${arrows}
+    </div>
+    ${images.length > 1 ? `<div class="muted" style="font-size:11px;text-align:center;margin-top:2px" id="slider-count-${sliderId}">1 of ${images.length}</div>` : ''}`;
+}
+function stepSlider(sliderId, delta, event){
+  event?.stopPropagation();
+  const el = document.querySelector(`.img-slider[data-slider-id="${sliderId}"]`);
+  if (!el) return;
+  const images = sliderImagesRegistry[sliderId];
+  let idx = ((parseInt(el.dataset.index, 10) + delta) % images.length + images.length) % images.length;
+  el.dataset.index = idx;
+  el.querySelector('img').src = images[idx];
+  const counter = document.getElementById(`slider-count-${sliderId}`);
+  if (counter) counter.textContent = `${idx + 1} of ${images.length}`;
+}
+// Swipe support — delegated to the document so it keeps working across
+// re-renders (pagination rebuilds the table rows) without re-attaching
+// listeners to each individual slider every time.
+let swipeStartX = null, swipeStartSliderId = null;
+document.addEventListener('touchstart', e => {
+  const slider = e.target.closest?.('.img-slider');
+  if (!slider) return;
+  swipeStartX = e.touches[0].clientX;
+  swipeStartSliderId = slider.dataset.sliderId;
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  if (swipeStartX === null) return;
+  const slider = e.target.closest?.('.img-slider');
+  if (slider && slider.dataset.sliderId === swipeStartSliderId) {
+    const dx = e.changedTouches[0].clientX - swipeStartX;
+    if (Math.abs(dx) > 40) stepSlider(+slider.dataset.sliderId, dx < 0 ? 1 : -1);
+  }
+  swipeStartX = null;
+});
+
 // Merges scanned items that share the exact same Item Name into one row —
 // e.g. a necklace set scanned as separate necklace + earring items. Numeric
 // field values (weight, etc.) are added together; text values are combined
@@ -249,12 +303,7 @@ function renderLegacyTable(order){
 
   const rowsArray = order.items.map(i => {
     const imgs = i.images || (i.image ? [i.image] : []);
-    const photoCell = showImages
-      ? `<td>${imgs.length ? `
-          <div class="order-thumbs">
-            ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
-          </div>` : ''}</td>`
-      : '';
+    const photoCell = showImages ? `<td>${renderImageSlider(imgs)}</td>` : '';
     const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit, f.decimals)}</td>`).join('');
     const remarkCell = hasRemarks ? `<td>${i.comment || ''}</td>` : '';
     return `<tr>${photoCell}<td>${i.label}</td>${extraCells}${remarkCell}<td>${i.qty}</td></tr>`;
@@ -278,10 +327,7 @@ function renderDynamicTable(order){
       if (col.type === 'serial') return `<td ${widthStyle(col.width)}>${rowIndex + 1}</td>`;
       if (col.type === 'images') {
         const imgs = item.images || (item.image ? [item.image] : []);
-        return `<td ${widthStyle(col.width)}>${imgs.length ? `
-          <div class="order-thumbs">
-            ${imgs.map((url, idx) => `<img src="${url}" onclick='openLightbox(${JSON.stringify(imgs)}, ${idx})'>`).join('')}
-          </div>` : ''}</td>`;
+        return `<td ${widthStyle(col.width)}>${renderImageSlider(imgs)}</td>`;
       }
       if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals)}</td>`;
       if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;

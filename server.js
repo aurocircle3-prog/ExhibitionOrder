@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.16.0';
-const BUILD_TIME   = '2026-07-15T11:35:00Z';
+const APP_VERSION  = '1.17.0';
+const BUILD_TIME   = '2026-07-15T12:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1305,7 +1305,7 @@ async function deleteFieldForTenant(tenantId, fieldId) {
   const field = await FieldDefDB.findOne({ id: fieldId, tenantId });
   if (!field) throw Object.assign(new Error('Field not found'), { status: 404 });
   if (field.fixed) throw Object.assign(new Error(`"${field.label}" is a built-in field and can't be deleted`), { status: 400 });
-  await FieldDefDB.update({ id: fieldId }, { active: false });
+  await FieldDefDB.remove({ id: fieldId });
 }
 async function saveOrderFieldsForTenant(tenantId, list, showImages) {
   const fieldDefs = await FieldDefDB.find({ tenantId, active: true });
@@ -1451,7 +1451,7 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
 });
 
 app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  await ItemDB.update({ id: req.params.id, tenantId: req.tenant.id }, { active: false });
+  await ItemDB.remove({ id: req.params.id, tenantId: req.tenant.id });
   logAudit(req, 'item.delete', 'item', req.params.id);
   res.json({ ok: true });
 });
@@ -1460,10 +1460,18 @@ app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), as
   if (!ids.length) return res.status(400).json({ error: 'No items selected' });
   if (ids.length > 500) return res.status(400).json({ error: 'Too many at once — delete in smaller batches (max 500)' });
   for (const id of ids) {
-    await ItemDB.update({ id, tenantId: req.tenant.id }, { active: false });
+    await ItemDB.remove({ id, tenantId: req.tenant.id });
   }
   logAudit(req, 'item.bulk_delete', 'item', ids.length, { count: ids.length, ids });
   res.json({ ok: true, deleted: ids.length });
+});
+// Wipes the entire item catalog for this company in one action — a step
+// further than bulk-delete-by-selection, for a full reset/restart.
+app.post('/api/items/delete-all', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const existing = await ItemDB.find({ tenantId: req.tenant.id });
+  await ItemDB.remove({ tenantId: req.tenant.id });
+  logAudit(req, 'item.delete_all', 'item', existing.length, { count: existing.length });
+  res.json({ ok: true, deleted: existing.length });
 });
 
 // Photos are named from the item's Image Code (see makeItemImageUploader) —
@@ -1936,7 +1944,7 @@ app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), asy
 app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!order) return res.status(404).json({ error: 'Order not found' });
-  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { deleted: true });
+  await OrderDB.remove({ id: req.params.id, tenantId: req.tenant.id });
   logAudit(req, 'order.delete', 'order', req.params.id, { orderNo: order.orderNo });
   res.json({ ok: true });
 });
@@ -2015,7 +2023,7 @@ app.put('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), async
 });
 
 app.delete('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  await ExhibitionDB.update({ id: req.params.id, tenantId: req.tenant.id }, { active: false });
+  await ExhibitionDB.remove({ id: req.params.id, tenantId: req.tenant.id });
   logAudit(req, 'exhibition.delete', 'exhibition', req.params.id);
   res.json({ ok: true });
 });

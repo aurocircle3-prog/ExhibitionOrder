@@ -77,6 +77,7 @@
       <input placeholder="Search items…" oninput="searchItems(this.value)" style="margin-bottom:12px">
       <div class="btn-row" style="margin-bottom:10px">
         <button class="danger small" id="bulkDeleteBtn" style="display:none" onclick="bulkDeleteItems()">Delete selected (<span id="selectedCount">0</span>)</button>
+        <button class="danger small" onclick="deleteAllItems()">Delete ALL items</button>
       </div>
       <div class="table-scroll">
         <table>
@@ -228,7 +229,7 @@ function toggleSelectItem(id, checked){
 async function bulkDeleteItems(){
   const count = selectedItemIds.size;
   if (!count) return;
-  if (!confirm(`Delete ${count} selected item${count===1?'':'s'}? This cannot be undone.`)) return;
+  if (!confirm(`Permanently delete ${count} selected item${count===1?'':'s'}? This cannot be undone.`)) return;
   try {
     await EXO.apiFetch('/items/bulk-delete', { method: 'POST', body: JSON.stringify({ ids: [...selectedItemIds] }) });
     EXO.toast(`Deleted ${count} item${count===1?'':'s'}`);
@@ -236,6 +237,19 @@ async function bulkDeleteItems(){
   } catch (e) {
     const err = document.getElementById('itemErr'); err.textContent = e.message; err.style.display = 'block';
     EXO.toast('Bulk delete failed — see error above', 'error');
+  }
+}
+async function deleteAllItems(){
+  if (!items.length) { EXO.toast('No items to delete', 'error'); return; }
+  const typed = prompt(`This permanently deletes ALL ${items.length} items in your catalog — cannot be undone. Type DELETE ALL to confirm:`);
+  if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
+  try {
+    const res = await EXO.apiFetch('/items/delete-all', { method: 'POST' });
+    EXO.toast(`Deleted all ${res.deleted} items`);
+    loadItems();
+  } catch (e) {
+    const err = document.getElementById('itemErr'); err.textContent = e.message; err.style.display = 'block';
+    EXO.toast('Delete all failed — see error above', 'error');
   }
 }
 let currentItemsList = [];
