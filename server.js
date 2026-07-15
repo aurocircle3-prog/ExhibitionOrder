@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.11.0';
-const BUILD_TIME   = '2026-07-15T05:15:00Z';
+const APP_VERSION  = '1.12.0';
+const BUILD_TIME   = '2026-07-15T08:20:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -118,11 +118,13 @@ const tenantSchema = new mongoose.Schema({
     default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false }),
   },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
-  // Optional free text shown above/below the item table on the buyer-facing
-  // order link — e.g. instructions above, terms/thank-you note below.
-  // Neither is required; both simply don't render if left blank.
-  orderViewHeaderText: { type: String, default: '' },
-  orderViewFooterText: { type: String, default: '' },
+  // Order-level info shown above/below the item table on the buyer-facing
+  // link — e.g. a PO Number above, a Total Weight below. Each entry is
+  // either an Order Details field or a total already being computed for a
+  // "showTotal" Order Form field; deliberately structured data, not free
+  // text, same reasoning as orderViewColumns above.
+  orderViewHeaderFields: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  orderViewFooterFields: { type: [mongoose.Schema.Types.Mixed], default: [] },
   // Company details shown as a footer on the buyer-facing order link — each
   // field has its own show/hide toggle so e.g. a GST number can be entered
   // without necessarily being made public. logoUrl is a separate top-level
@@ -832,7 +834,7 @@ app.put('/api/platform/tenants/:id/order-custom-fields', platformAuth, async (re
 app.put('/api/platform/tenants/:id/order-view-columns', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(tenant, req.body.columns, req.body.headerText, req.body.footerText) }); }
+  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(tenant, req.body.columns, req.body.headerFields, req.body.footerFields) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.put('/api/platform/tenants/:id/footer', platformAuth, async (req, res) => {
@@ -1061,9 +1063,20 @@ function normalizeCustomFields(defs, raw) {
 // actually a real Order Form field (or "qty") — a formula referencing a
 // typo'd or deleted field would just silently show blank to every buyer
 // otherwise.
+// Lets a formula use "%" the way people actually write percentages in this
+// industry — e.g. "net_weight * (melting + wastage) %" for a fine-weight
+// calculation — rather than requiring "/100" instead. mathjs treats a bare
+// "%" as the modulo operator, so "(x)%" alone is invalid syntax to it; this
+// rewrites "(EXPR)%" and "name%"/"number%" into "(EXPR/100)" before parsing,
+// so the formula still reads naturally when someone re-opens it to edit.
+function preprocessPercent(expr) {
+  let result = expr.replace(/\(([^()]*)\)\s*%/g, '(($1)/100)');
+  result = result.replace(/([A-Za-z_][A-Za-z0-9_]*|\d+(\.\d+)?)\s*%(?!\w)/g, '($1/100)');
+  return result;
+}
 function validateFormula(expr, allowedNames) {
   let parsed;
-  try { parsed = math.parse(expr); }
+  try { parsed = math.parse(preprocessPercent(expr)); }
   catch (e) { return { ok: false, error: `Invalid formula: ${e.message}` }; }
   const used = new Set();
   parsed.traverse(node => { if (node.isSymbolNode) used.add(node.name); });
@@ -1072,7 +1085,7 @@ function validateFormula(expr, allowedNames) {
   return { ok: true };
 }
 
-async function saveOrderViewColumnsForTenant(tenant, list, headerText, footerText) {
+async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerFields) {
   const orderFields = tenant.orderFields || [];
   // Field/Formula columns can reference ANY active Item Master field, not
   // just ones added to the Order Form — Order Form controls what staff can
@@ -1088,10 +1101,11 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerText, footerTex
   const allowedFormulaNames = new Set([...fieldDefs.filter(f => f.type === 'number').map(f => f.key), 'qty']);
   const orderCustomFields = tenant.orderCustomFields || [];
   const allowedOrderFieldKeys = new Set(orderCustomFields.map(f => f.key));
+  const totalableKeys = new Set(orderFields.filter(f => f.showTotal).map(f => f.key));
 
   const columns = [];
   for (const raw of (Array.isArray(list) ? list : [])) {
-    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield', 'itemcode'].includes(raw.type)) {
+    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield', 'itemcode', 'qty'].includes(raw.type)) {
       throw Object.assign(new Error('Each column needs a valid type'), { status: 400 });
     }
     const width = Number(raw.width);
@@ -1125,21 +1139,44 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerText, footerTex
       col.label = (raw.label || 'Remark').trim().slice(0, 60) || 'Remark';
     } else if (raw.type === 'itemcode') {
       col.label = (raw.label || 'Item Code').trim().slice(0, 60) || 'Item Code';
+    } else if (raw.type === 'qty') {
+      col.label = (raw.label || 'Qty').trim().slice(0, 60) || 'Qty';
     } else { // serial
       col.label = (raw.label || 'Sr. No.').trim().slice(0, 60) || 'Sr. No.';
     }
     columns.push(col);
   }
 
+  // Header/footer "fields" — order-level info shown above/below the item
+  // table, e.g. a PO Number above, a Total Weight below. Each is either an
+  // Order Details field or one of the totals already being computed for a
+  // "showTotal" Order Form field — deliberately not free text, so this
+  // stays structured data rather than a loose text box.
+  function validateFieldList(list) {
+    const out = [];
+    for (const raw of (Array.isArray(list) ? list : [])) {
+      if (!raw || !['orderfield', 'total'].includes(raw.type)) throw Object.assign(new Error('Each field needs a valid type'), { status: 400 });
+      if (raw.type === 'orderfield') {
+        if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
+        const f = orderCustomFields.find(x => x.key === raw.fieldKey);
+        out.push({ type: 'orderfield', fieldKey: raw.fieldKey, label: (raw.label || f.label || '').trim().slice(0, 60) || f.label });
+      } else { // total
+        if (!totalableKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't a field with "Show total" turned on — enable that on the Order Form first`), { status: 400 });
+        const f = orderFields.find(x => x.key === raw.fieldKey);
+        out.push({ type: 'total', fieldKey: raw.fieldKey, label: (raw.label || `Total ${f.label}`).trim().slice(0, 60) || `Total ${f.label}` });
+      }
+    }
+    return out;
+  }
   const updates = { orderViewColumns: columns };
-  if (headerText !== undefined) updates.orderViewHeaderText = String(headerText).slice(0, 2000);
-  if (footerText !== undefined) updates.orderViewFooterText = String(footerText).slice(0, 2000);
+  if (headerFields !== undefined) updates.orderViewHeaderFields = validateFieldList(headerFields);
+  if (footerFields !== undefined) updates.orderViewFooterFields = validateFieldList(footerFields);
   await TenantDB.update({ id: tenant.id }, updates);
   return columns;
 }
 
 app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderViewLayout'), async (req, res) => {
-  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(req.tenant, req.body.columns, req.body.headerText, req.body.footerText) }); }
+  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(req.tenant, req.body.columns, req.body.headerFields, req.body.footerFields) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
@@ -1852,8 +1889,25 @@ app.get('/api/orders/public/:token', async (req, res) => {
   // shared link immediately, old and new — that's the whole point of it
   // being a "layout", not a record of what happened.
   const columns = (tenant?.orderViewColumns && tenant.orderViewColumns.length) ? tenant.orderViewColumns : (order.columnsSnapshot || []);
-  const viewHeaderText = tenant?.orderViewHeaderText || '';
-  const viewFooterText = tenant?.orderViewFooterText || '';
+  // Resolves each configured header/footer field spec into the actual
+  // label + value for THIS order — an "orderfield" reads from this order's
+  // own customFields; a "total" reads from this order's own fieldTotals
+  // (with the field's unit/decimals attached so the client formats it the
+  // same way it formats every other number). Entries with no value for this
+  // particular order are dropped rather than shown blank.
+  function resolveFieldList(specs) {
+    return (specs || []).map(spec => {
+      if (spec.type === 'orderfield') {
+        const val = order.customFields?.[spec.fieldKey];
+        return { label: spec.label, value: val ?? '' };
+      }
+      const val = order.fieldTotals?.[spec.fieldKey];
+      const meta = (order.orderFieldsSnapshot || []).find(f => f.key === spec.fieldKey);
+      return { label: spec.label, value: val ?? '', unit: meta?.unit, decimals: meta?.decimals };
+    }).filter(f => f.value !== '' && f.value !== undefined && f.value !== null);
+  }
+  const viewHeaderFields = resolveFieldList(tenant?.orderViewHeaderFields);
+  const viewFooterFields = resolveFieldList(tenant?.orderViewFooterFields);
   // Only send fields the company actually chose to publish — never leak a
   // GST number or phone that was entered but left toggled off.
   const rawFooter = tenant?.footer || { show: {} };
@@ -1867,7 +1921,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
     // reasoning: this is a display method AuroCircle chose for the client,
     // not a record of what happened on that specific order.
     rowGrouping: tenant?.orderRowGrouping || 'none',
-    viewHeaderText, viewFooterText,
+    viewHeaderFields, viewFooterFields,
   });
 });
 

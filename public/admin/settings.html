@@ -53,16 +53,18 @@
 
   <div class="tab-panel" id="tab-layout">
     <div class="card">
-      <h3 style="margin-top:0">Text above the table <span class="muted">(optional)</span></h3>
-      <textarea id="viewHeaderText" rows="2" placeholder="e.g. instructions or a note shown before the item list"></textarea>
+      <h3 style="margin-top:0">Fields above the table <span class="muted">(optional — e.g. PO Number, Delivery Date, a total)</span></h3>
+      <div id="headerFieldRows"></div>
+      <button class="ghost" style="margin-top:8px" onclick="addHeaderField()">+ Add field</button>
 
       <h3>Order View Layout <span class="muted">— build the table buyers see on the shared order link, column by column</span></h3>
       <p class="muted" style="margin-top:-4px">Leave this empty to use the simple default layout (photos, your Order Form fields, then quantity). Add columns here for full control over what's shown, in what order, and how wide. Changes apply to every order's shared link immediately — old orders too, not just new ones.</p>
       <div id="columnRows"></div>
       <button class="ghost" style="margin-top:10px" onclick="addColumn()">+ Add column</button>
 
-      <h3>Text below the table <span class="muted">(optional)</span></h3>
-      <textarea id="viewFooterText" rows="2" placeholder="e.g. terms, a thank-you note, or return policy"></textarea>
+      <h3>Fields below the table <span class="muted">(optional — e.g. terms, a total)</span></h3>
+      <div id="footerFieldRows"></div>
+      <button class="ghost" style="margin-top:8px" onclick="addFooterField()">+ Add field</button>
 
       <div class="error" id="colErr"></div>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveColumns)">Save layout</button>
@@ -132,8 +134,10 @@ async function load(){
   renderCustomFields();
   orderFieldDefs = me.tenant.orderCustomFields || [];
   columns = (me.tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || cid() }));
-  document.getElementById('viewHeaderText').value = me.tenant.orderViewHeaderText || '';
-  document.getElementById('viewFooterText').value = me.tenant.orderViewFooterText || '';
+  headerFields = (me.tenant.orderViewHeaderFields || []).map(f => ({ ...f, _id: cid() }));
+  footerFields = (me.tenant.orderViewFooterFields || []).map(f => ({ ...f, _id: cid() }));
+  renderFieldListEntries('header');
+  renderFieldListEntries('footer');
   renderColumns();
   loadExhibitions();
   loadFooter(me.tenant);
@@ -170,10 +174,12 @@ async function save(){
 }
 
 // ── Order Form ──
+let totalableFields = [];
 async function loadOrderFields(saved){
   const fields = await EXO.apiFetch('/fields');
   const savedByKey = {};
   saved.forEach(f => { savedByKey[f.key] = f; });
+  totalableFields = saved.filter(f => f.showTotal);
   document.getElementById('orderFieldRows').innerHTML = fields.map(f => `
     <tr>
       <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
@@ -250,6 +256,60 @@ async function saveCustomFields(){
 
 let columns = [];
 let availableFields = [];
+let headerFields = [], footerFields = [];
+// Shared by both the "above the table" and "below the table" builders —
+// identical structure, just a different array/DOM target, so one set of
+// functions handles both rather than duplicating everything twice.
+function fieldListState(which){ return which === 'header' ? headerFields : footerFields; }
+function addFieldListEntry(which){
+  fieldListState(which).push({ type: 'orderfield', fieldKey: orderFieldDefs[0]?.key || '', label: '', _id: cid() });
+  renderFieldListEntries(which);
+}
+function addHeaderField(){ addFieldListEntry('header'); }
+function addFooterField(){ addFieldListEntry('footer'); }
+function removeFieldListEntry(which, id){
+  const list = fieldListState(which);
+  const idx = list.findIndex(f => f._id === id);
+  if (idx > -1) list.splice(idx, 1);
+  renderFieldListEntries(which);
+}
+function updateFieldListEntry(which, id, key, value){
+  const entry = fieldListState(which).find(f => f._id === id);
+  if (!entry) return;
+  entry[key] = value;
+  if (key === 'type') {
+    // switching type — reset fieldKey to a valid default for the new type
+    entry.fieldKey = value === 'total' ? (totalableFields[0]?.key || '') : (orderFieldDefs[0]?.key || '');
+    renderFieldListEntries(which);
+  }
+}
+function renderFieldListEntries(which){
+  const list = fieldListState(which);
+  const container = document.getElementById(which === 'header' ? 'headerFieldRows' : 'footerFieldRows');
+  container.innerHTML = list.map(f => `
+    <div class="grid cols-3" style="align-items:end;margin-top:8px">
+      <div>
+        <label>Type</label>
+        <select onchange="updateFieldListEntry('${which}','${f._id}','type',this.value)">
+          <option value="orderfield" ${f.type==='orderfield'?'selected':''}>Order detail</option>
+          <option value="total" ${f.type==='total'?'selected':''}>Total</option>
+        </select>
+      </div>
+      <div>
+        <label>${f.type === 'total' ? 'Which total' : 'Which order detail field'}</label>
+        <select onchange="updateFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
+          ${f.type === 'total'
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" for a field in Order Form first —</option>')
+            : (orderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
+        </select>
+      </div>
+      <div>
+        <label>Label <span class="muted">(optional)</span></label>
+        <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateFieldListEntry('${which}','${f._id}','label',this.value)">
+      </div>
+      <div style="grid-column:1/-1"><button class="danger small" onclick="removeFieldListEntry('${which}','${f._id}')">Remove</button></div>
+    </div>`).join('') || '<p class="muted">None added.</p>';
+}
 function cid(){ return 'c' + Math.random().toString(36).slice(2); }
 
 function addColumn(){
@@ -269,12 +329,20 @@ function updateColumn(id, key, value){
   if (col) col[key] = value;
   if (key === 'type') renderColumns();
 }
+// Lets a formula use "%" the way people actually write percentages — e.g.
+// "net_weight * (melting + wastage) %" — same logic as the server, needed
+// here too since this validates live as you type, before ever saving.
+function preprocessPercent(expr){
+  let result = expr.replace(/\(([^()]*)\)\s*%/g, '(($1)/100)');
+  result = result.replace(/([A-Za-z_][A-Za-z0-9_]*|\d+(\.\d+)?)\s*%(?!\w)/g, '($1/100)');
+  return result;
+}
 function validateFormulaClient(expr){
   if (!expr.trim()) return 'Formula is required';
   try {
     const allowed = new Set([...availableFields.filter(f => f.type === 'number').map(f => f.key), 'qty']);
     const used = new Set();
-    math.parse(expr).traverse(n => { if (n.isSymbolNode) used.add(n.name); });
+    math.parse(preprocessPercent(expr)).traverse(n => { if (n.isSymbolNode) used.add(n.name); });
     const unknown = [...used].filter(n => !allowed.has(n));
     if (unknown.length) return `Unknown or non-numeric field(s): ${unknown.join(', ')}`;
     return '';
@@ -297,6 +365,7 @@ function renderColumns(){
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
             <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
+            <option value="qty" ${c.type==='qty'?'selected':''}>Quantity</option>
             <option value="serial" ${c.type==='serial'?'selected':''}>Sr. No.</option>
           </select>
         </div>
@@ -307,7 +376,7 @@ function renderColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
@@ -355,8 +424,8 @@ async function saveColumns(){
       method: 'PUT',
       body: JSON.stringify({
         columns: payload,
-        headerText: document.getElementById('viewHeaderText').value,
-        footerText: document.getElementById('viewFooterText').value,
+        headerFields: headerFields.map(f => ({ type: f.type, fieldKey: f.fieldKey, label: f.label })),
+        footerFields: footerFields.map(f => ({ type: f.type, fieldKey: f.fieldKey, label: f.label })),
       }),
     });
     EXO.toast('Order view layout saved');

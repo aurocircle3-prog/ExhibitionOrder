@@ -167,16 +167,18 @@
         </select>
         <button class="primary" style="margin-top:10px" onclick="EXO.busy(this, saveRowGrouping)">Save</button>
 
-        <h4>Text above the table <span class="muted">(optional)</span></h4>
-        <textarea id="detailViewHeaderText" rows="2" placeholder="e.g. instructions or a note shown before the item list"></textarea>
+        <h4>Fields above the table <span class="muted">(optional — e.g. PO Number, Delivery Date, a total)</span></h4>
+        <div id="detailHeaderFieldRows"></div>
+        <button class="ghost" style="margin-top:8px" onclick="addDetailHeaderField()">+ Add field</button>
 
         <h4>Columns</h4>
         <p class="muted" style="margin-top:-6px">The table buyers see on the shared order link, column by column. Leave empty to use the simple default layout (photos, Order Form fields, then quantity).</p>
         <div id="detailColumnRows"></div>
         <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
 
-        <h4>Text below the table <span class="muted">(optional)</span></h4>
-        <textarea id="detailViewFooterText" rows="2" placeholder="e.g. terms, a thank-you note, or return policy"></textarea>
+        <h4>Fields below the table <span class="muted">(optional — e.g. terms, a total)</span></h4>
+        <div id="detailFooterFieldRows"></div>
+        <button class="ghost" style="margin-top:8px" onclick="addDetailFooterField()">+ Add field</button>
 
         <button class="primary" style="margin-top:14px;display:block" onclick="EXO.busy(this, saveDetailColumns)">Save layout</button>
       </div>
@@ -408,8 +410,10 @@ async function openDetail(id){
   detailOrderFieldDefs = tenant.orderCustomFields || [];
   renderDetailCustomFields();
   detailColumns = (tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || dcid() }));
-  document.getElementById('detailViewHeaderText').value = tenant.orderViewHeaderText || '';
-  document.getElementById('detailViewFooterText').value = tenant.orderViewFooterText || '';
+  detailHeaderFields = (tenant.orderViewHeaderFields || []).map(f => ({ ...f, _id: dcid() }));
+  detailFooterFields = (tenant.orderViewFooterFields || []).map(f => ({ ...f, _id: dcid() }));
+  renderDetailFieldListEntries('header');
+  renderDetailFieldListEntries('footer');
   renderDetailColumns();
   loadDetailFooter(tenant);
 
@@ -594,6 +598,58 @@ async function saveDetailCustomFields(){
 
 // ── Order View Layout (column builder) ──
 let detailColumns = [];
+let detailHeaderFields = [], detailFooterFields = [];
+function detailFieldListState(which){ return which === 'header' ? detailHeaderFields : detailFooterFields; }
+function addDetailFieldListEntry(which){
+  detailFieldListState(which).push({ type: 'orderfield', fieldKey: detailOrderFieldDefs[0]?.key || '', label: '', _id: dcid() });
+  renderDetailFieldListEntries(which);
+}
+function addDetailHeaderField(){ addDetailFieldListEntry('header'); }
+function addDetailFooterField(){ addDetailFieldListEntry('footer'); }
+function removeDetailFieldListEntry(which, id){
+  const list = detailFieldListState(which);
+  const idx = list.findIndex(f => f._id === id);
+  if (idx > -1) list.splice(idx, 1);
+  renderDetailFieldListEntries(which);
+}
+function updateDetailFieldListEntry(which, id, key, value){
+  const totalableFields = detailOrderFieldsSaved.filter(f => f.showTotal);
+  const entry = detailFieldListState(which).find(f => f._id === id);
+  if (!entry) return;
+  entry[key] = value;
+  if (key === 'type') {
+    entry.fieldKey = value === 'total' ? (totalableFields[0]?.key || '') : (detailOrderFieldDefs[0]?.key || '');
+    renderDetailFieldListEntries(which);
+  }
+}
+function renderDetailFieldListEntries(which){
+  const totalableFields = detailOrderFieldsSaved.filter(f => f.showTotal);
+  const list = detailFieldListState(which);
+  const container = document.getElementById(which === 'header' ? 'detailHeaderFieldRows' : 'detailFooterFieldRows');
+  container.innerHTML = list.map(f => `
+    <div class="grid cols-3" style="align-items:end;margin-top:8px">
+      <div>
+        <label>Type</label>
+        <select onchange="updateDetailFieldListEntry('${which}','${f._id}','type',this.value)">
+          <option value="orderfield" ${f.type==='orderfield'?'selected':''}>Order detail</option>
+          <option value="total" ${f.type==='total'?'selected':''}>Total</option>
+        </select>
+      </div>
+      <div>
+        <label>${f.type === 'total' ? 'Which total' : 'Which order detail field'}</label>
+        <select onchange="updateDetailFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
+          ${f.type === 'total'
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" for a field in Order Form first —</option>')
+            : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
+        </select>
+      </div>
+      <div>
+        <label>Label <span class="muted">(optional)</span></label>
+        <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
+      </div>
+      <div style="grid-column:1/-1"><button class="danger small" onclick="removeDetailFieldListEntry('${which}','${f._id}')">Remove</button></div>
+    </div>`).join('') || '<p class="muted">None added.</p>';
+}
 function dcid(){ return 'c' + Math.random().toString(36).slice(2); }
 function addDetailColumn(){
   detailColumns.push({ _id: dcid(), _isNew: true, type: 'field', fieldKey: detailFields[0]?.key || '', label: '', width: 12, formula: '' });
@@ -612,12 +668,19 @@ function updateDetailColumn(id, key, value){
   if (col) col[key] = value;
   if (key === 'type') renderDetailColumns();
 }
+// Same percent-notation support as the server (see preprocessPercent there)
+// — needed here too since this validates live as you type, before saving.
+function preprocessPercent(expr){
+  let result = expr.replace(/\(([^()]*)\)\s*%/g, '(($1)/100)');
+  result = result.replace(/([A-Za-z_][A-Za-z0-9_]*|\d+(\.\d+)?)\s*%(?!\w)/g, '($1/100)');
+  return result;
+}
 function validateDetailFormula(expr){
   if (!expr.trim()) return 'Formula is required';
   try {
     const allowed = new Set([...detailFields.filter(f => f.type === 'number').map(f => f.key), 'qty']);
     const used = new Set();
-    math.parse(expr).traverse(n => { if (n.isSymbolNode) used.add(n.name); });
+    math.parse(preprocessPercent(expr)).traverse(n => { if (n.isSymbolNode) used.add(n.name); });
     const unknown = [...used].filter(n => !allowed.has(n));
     if (unknown.length) return `Unknown or non-numeric field(s): ${unknown.join(', ')}`;
     return '';
@@ -639,6 +702,7 @@ function renderDetailColumns(){
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
             <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
+            <option value="qty" ${c.type==='qty'?'selected':''}>Quantity</option>
             <option value="serial" ${c.type==='serial'?'selected':''}>Sr. No.</option>
           </select>
         </div>
@@ -649,7 +713,7 @@ function renderDetailColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
@@ -687,8 +751,8 @@ async function saveDetailColumns(){
       method: 'PUT',
       body: JSON.stringify({
         columns: payload,
-        headerText: document.getElementById('detailViewHeaderText').value,
-        footerText: document.getElementById('detailViewFooterText').value,
+        headerFields: detailHeaderFields.map(f => ({ type: f.type, fieldKey: f.fieldKey, label: f.label })),
+        footerFields: detailFooterFields.map(f => ({ type: f.type, fieldKey: f.fieldKey, label: f.label })),
       }),
     });
     EXO.toast('Order view layout saved.');

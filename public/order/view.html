@@ -64,6 +64,19 @@ function fmt(val, unit, decimals){
   }
   return `${val} ${unit}`;
 }
+// Renders header/footer field specs as compact "Label: Value" lines — the
+// same visual treatment as the totals block, reused here for consistency.
+function renderFieldList(fields){
+  if (!fields || !fields.length) return '';
+  return fields.map(f => `<div class="cart-row" style="border-bottom:none"><span class="muted">${f.label}</span><span>${fmt(f.value, f.unit, f.decimals)}</span></div>`).join('');
+}
+// Same percent-notation support as the server (see preprocessPercent there)
+// — applied here too since formulas are actually EVALUATED client-side.
+function preprocessPercent(expr){
+  let result = expr.replace(/\(([^()]*)\)\s*%/g, '(($1)/100)');
+  result = result.replace(/([A-Za-z_][A-Za-z0-9_]*|\d+(\.\d+)?)\s*%(?!\w)/g, '($1/100)');
+  return result;
+}
 
 // Merges scanned items that share the exact same Item Name into one row —
 // e.g. a necklace set scanned as separate necklace + earring items. Numeric
@@ -114,7 +127,7 @@ async function load(){
   const box = document.getElementById('content');
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
-    const { order, company, rowGrouping, viewHeaderText, viewFooterText } = res;
+    const { order, company, rowGrouping, viewHeaderFields, viewFooterFields } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Expo Orders');
 
     if (rowGrouping === 'itemName') {
@@ -139,7 +152,7 @@ async function load(){
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
         <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
-        ${viewHeaderText ? `<p style="white-space:pre-wrap;margin-bottom:14px">${viewHeaderText}</p>` : ''}
+        ${renderFieldList(viewHeaderFields)}
         <div class="table-scroll"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
           <tbody id="orderRowsBody"></tbody>
@@ -147,7 +160,7 @@ async function load(){
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;margin-left:auto;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
-        ${viewFooterText ? `<p style="white-space:pre-wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${viewFooterText}</p>` : ''}
+        ${viewFooterFields?.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(viewFooterFields)}</div>` : ''}
       </div>
       <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>
       ${renderFooter(company)}`;
@@ -255,11 +268,12 @@ function renderDynamicTable(order){
       if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;
       if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
       if (col.type === 'itemcode') return `<td ${widthStyle(col.width)}>${item.scannerCode || ''}</td>`;
+      if (col.type === 'qty') return `<td ${widthStyle(col.width)}>${item.qty}</td>`;
       if (col.type === 'formula') {
         try {
           const scope = { qty: Number(item.qty) || 0 };
           extraFields.forEach(f => { scope[f.key] = Number(item.extra?.[f.key]) || 0; });
-          const result = math.evaluate(col.formula, scope);
+          const result = math.evaluate(preprocessPercent(col.formula), scope);
           const display = typeof result === 'number' ? (Number.isInteger(result) ? result : result.toFixed(2)) : String(result);
           return `<td ${widthStyle(col.width)}>${display}</td>`;
         } catch (e) { return `<td ${widthStyle(col.width)}>—</td>`; }
