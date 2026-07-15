@@ -687,7 +687,6 @@ function validateDetailFormula(expr){
   } catch (e) { return 'Invalid formula syntax'; }
 }
 function renderDetailColumns(){
-  const fieldOptions = detailFields.map(f => `<option value="${f.key}">${f.label}</option>`).join('');
   document.getElementById('detailColumnRows').innerHTML = detailColumns.map((c, i) => {
     const formulaError = c.type === 'formula' ? validateDetailFormula(c.formula || '') : '';
     return `
@@ -718,7 +717,7 @@ function renderDetailColumns(){
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${fieldOptions || '<option value="">— add fields to the Order Form first —</option>'}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields to the Order Form first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'orderfield' ? `
         <div style="margin-top:10px">

@@ -349,7 +349,6 @@ function validateFormulaClient(expr){
   } catch (e) { return 'Invalid formula syntax'; }
 }
 function renderColumns(){
-  const fieldOptions = availableFields.map(f => `<option value="${f.key}">${f.label}</option>`).join('');
   document.getElementById('columnRows').innerHTML = columns.map((c, i) => {
     const formulaError = c.type === 'formula' ? validateFormulaClient(c.formula || '') : '';
     const typeLabel = { field: 'Heading', images: 'Photo', remark: 'Remark', serial: 'Sr. No.', formula: 'Amount' };
@@ -381,7 +380,7 @@ function renderColumns(){
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
-          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${fieldOptions || '<option value="">— add fields to your Order Form first —</option>'}</select>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${availableFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields to your Order Form first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'orderfield' ? `
         <div style="margin-top:10px">

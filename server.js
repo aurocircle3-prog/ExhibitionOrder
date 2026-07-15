@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.12.0';
-const BUILD_TIME   = '2026-07-15T08:20:00Z';
+const APP_VERSION  = '1.13.0';
+const BUILD_TIME   = '2026-07-15T09:05:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1408,6 +1408,16 @@ app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (r
   await ItemDB.update({ id: req.params.id, tenantId: req.tenant.id }, { active: false });
   logAudit(req, 'item.delete', 'item', req.params.id);
   res.json({ ok: true });
+});
+app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.filter(Boolean))] : [];
+  if (!ids.length) return res.status(400).json({ error: 'No items selected' });
+  if (ids.length > 500) return res.status(400).json({ error: 'Too many at once — delete in smaller batches (max 500)' });
+  for (const id of ids) {
+    await ItemDB.update({ id, tenantId: req.tenant.id }, { active: false });
+  }
+  logAudit(req, 'item.bulk_delete', 'item', ids.length, { count: ids.length, ids });
+  res.json({ ok: true, deleted: ids.length });
 });
 
 // Photos are named from the item's Image Code (see makeItemImageUploader) —

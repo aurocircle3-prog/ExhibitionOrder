@@ -75,6 +75,9 @@
       <h3 style="margin-top:0">Items <span class="muted" id="itemCount"></span></h3>
       <div class="error" id="itemErr"></div>
       <input placeholder="Search items…" oninput="searchItems(this.value)" style="margin-bottom:12px">
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="danger small" id="bulkDeleteBtn" style="display:none" onclick="bulkDeleteItems()">Delete selected (<span id="selectedCount">0</span>)</button>
+      </div>
       <div class="table-scroll">
         <table>
           <thead id="itemsHead"></thead>
@@ -203,12 +206,47 @@ function renderItemForm(){
 async function loadItems(){
   items = await EXO.apiFetch('/items');
   document.getElementById('itemCount').textContent = `(${items.length})`;
+  selectedItemIds.clear();
+  updateBulkDeleteButton();
   renderItemsTable(items);
 }
+let selectedItemIds = new Set();
+function updateBulkDeleteButton(){
+  const btn = document.getElementById('bulkDeleteBtn');
+  document.getElementById('selectedCount').textContent = selectedItemIds.size;
+  btn.style.display = selectedItemIds.size ? 'inline-block' : 'none';
+}
+function toggleSelectAll(checkbox, visibleIds){
+  visibleIds.forEach(id => checkbox.checked ? selectedItemIds.add(id) : selectedItemIds.delete(id));
+  updateBulkDeleteButton();
+  renderItemsTable(currentItemsList);
+}
+function toggleSelectItem(id, checked){
+  checked ? selectedItemIds.add(id) : selectedItemIds.delete(id);
+  updateBulkDeleteButton();
+}
+async function bulkDeleteItems(){
+  const count = selectedItemIds.size;
+  if (!count) return;
+  if (!confirm(`Delete ${count} selected item${count===1?'':'s'}? This cannot be undone.`)) return;
+  try {
+    await EXO.apiFetch('/items/bulk-delete', { method: 'POST', body: JSON.stringify({ ids: [...selectedItemIds] }) });
+    EXO.toast(`Deleted ${count} item${count===1?'':'s'}`);
+    loadItems();
+  } catch (e) {
+    const err = document.getElementById('itemErr'); err.textContent = e.message; err.style.display = 'block';
+    EXO.toast('Bulk delete failed — see error above', 'error');
+  }
+}
+let currentItemsList = [];
 function renderItemsTable(list){
-  document.getElementById('itemsHead').innerHTML = `<tr><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  currentItemsList = list;
+  const visibleIds = list.map(it => it.id);
+  const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.has(id));
+  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange="toggleSelectAll(this, ${JSON.stringify(visibleIds)})"></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
   document.getElementById('itemsBody').innerHTML = list.map(it => `
     <tr>
+      <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
       <td class="thumb-cell"><img src="${it.images?.[0]||''}" onerror="this.style.visibility='hidden'"></td>
       ${fields.map(f=>`<td>${it.fields[f.key] ?? ''}</td>`).join('')}
       <td>${(it.images||[]).length}/3</td>
@@ -216,7 +254,7 @@ function renderItemsTable(list){
         <button class="ghost small" onclick="editItem('${it.id}')">Edit</button>
         <button class="danger small" onclick="deleteItem('${it.id}')">Delete</button>
       </td>
-    </tr>`).join('') || `<tr><td colspan="${fields.length+3}" class="muted">No items yet — add one below.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="${fields.length+4}" class="muted">No items yet — add one below.</td></tr>`;
 }
 function searchItems(q){
   q = q.toLowerCase();
