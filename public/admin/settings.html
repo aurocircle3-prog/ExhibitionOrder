@@ -53,10 +53,17 @@
 
   <div class="tab-panel" id="tab-layout">
     <div class="card">
-      <h3 style="margin-top:0">Order View Layout <span class="muted">— build the table buyers see on the shared order link, column by column</span></h3>
+      <h3 style="margin-top:0">Text above the table <span class="muted">(optional)</span></h3>
+      <textarea id="viewHeaderText" rows="2" placeholder="e.g. instructions or a note shown before the item list"></textarea>
+
+      <h3>Order View Layout <span class="muted">— build the table buyers see on the shared order link, column by column</span></h3>
       <p class="muted" style="margin-top:-4px">Leave this empty to use the simple default layout (photos, your Order Form fields, then quantity). Add columns here for full control over what's shown, in what order, and how wide. Changes apply to every order's shared link immediately — old orders too, not just new ones.</p>
       <div id="columnRows"></div>
       <button class="ghost" style="margin-top:10px" onclick="addColumn()">+ Add column</button>
+
+      <h3>Text below the table <span class="muted">(optional)</span></h3>
+      <textarea id="viewFooterText" rows="2" placeholder="e.g. terms, a thank-you note, or return policy"></textarea>
+
       <div class="error" id="colErr"></div>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveColumns)">Save layout</button>
     </div>
@@ -125,6 +132,8 @@ async function load(){
   renderCustomFields();
   orderFieldDefs = me.tenant.orderCustomFields || [];
   columns = (me.tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || cid() }));
+  document.getElementById('viewHeaderText').value = me.tenant.orderViewHeaderText || '';
+  document.getElementById('viewFooterText').value = me.tenant.orderViewFooterText || '';
   renderColumns();
   loadExhibitions();
   loadFooter(me.tenant);
@@ -342,7 +351,14 @@ async function saveColumns(){
   }
   const payload = columns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
   try {
-    await EXO.apiFetch('/companies/order-view-columns', { method: 'PUT', body: JSON.stringify({ columns: payload }) });
+    await EXO.apiFetch('/companies/order-view-columns', {
+      method: 'PUT',
+      body: JSON.stringify({
+        columns: payload,
+        headerText: document.getElementById('viewHeaderText').value,
+        footerText: document.getElementById('viewFooterText').value,
+      }),
+    });
     EXO.toast('Order view layout saved');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; EXO.toast('Save failed — see error above', 'error'); }
 }

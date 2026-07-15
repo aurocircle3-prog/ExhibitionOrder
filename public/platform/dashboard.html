@@ -167,10 +167,17 @@
         </select>
         <button class="primary" style="margin-top:10px" onclick="EXO.busy(this, saveRowGrouping)">Save</button>
 
+        <h4>Text above the table <span class="muted">(optional)</span></h4>
+        <textarea id="detailViewHeaderText" rows="2" placeholder="e.g. instructions or a note shown before the item list"></textarea>
+
         <h4>Columns</h4>
         <p class="muted" style="margin-top:-6px">The table buyers see on the shared order link, column by column. Leave empty to use the simple default layout (photos, Order Form fields, then quantity).</p>
         <div id="detailColumnRows"></div>
         <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
+
+        <h4>Text below the table <span class="muted">(optional)</span></h4>
+        <textarea id="detailViewFooterText" rows="2" placeholder="e.g. terms, a thank-you note, or return policy"></textarea>
+
         <button class="primary" style="margin-top:14px;display:block" onclick="EXO.busy(this, saveDetailColumns)">Save layout</button>
       </div>
 
@@ -401,6 +408,8 @@ async function openDetail(id){
   detailOrderFieldDefs = tenant.orderCustomFields || [];
   renderDetailCustomFields();
   detailColumns = (tenant.orderViewColumns || []).map(c => ({ ...c, _id: c.id || dcid() }));
+  document.getElementById('detailViewHeaderText').value = tenant.orderViewHeaderText || '';
+  document.getElementById('detailViewFooterText').value = tenant.orderViewFooterText || '';
   renderDetailColumns();
   loadDetailFooter(tenant);
 
@@ -674,7 +683,14 @@ async function saveDetailColumns(){
   }
   const payload = detailColumns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
   try {
-    await platformFetch(`/tenants/${lastTenantId}/order-view-columns`, { method: 'PUT', body: JSON.stringify({ columns: payload }) });
+    await platformFetch(`/tenants/${lastTenantId}/order-view-columns`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        columns: payload,
+        headerText: document.getElementById('detailViewHeaderText').value,
+        footerText: document.getElementById('detailViewFooterText').value,
+      }),
+    });
     EXO.toast('Order view layout saved.');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }

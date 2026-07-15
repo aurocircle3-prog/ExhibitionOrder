@@ -56,7 +56,7 @@ function isCurrencyUnit(unit){
 }
 function fmt(val, unit, decimals){
   if (val === '' || val === undefined || val === null) return '';
-  if (typeof val === 'number' && decimals !== undefined && decimals !== null) val = val.toFixed(decimals);
+  if (typeof val === 'number') val = val.toFixed(decimals ?? 2); // orders from before decimals were tracked per-field fall back to a sane default rather than showing a raw floating-point artifact
   if (!unit) return String(val);
   if (isCurrencyUnit(unit)) {
     const symbol = unit.trim();
@@ -106,12 +106,15 @@ function groupItemsByName(items, decimalsByKey){
   });
 }
 
+const PAGE_SIZE = 10;
+let allRowsHtml = [], currentPage = 1;
+
 async function load(){
   const token = location.pathname.split('/').pop();
   const box = document.getElementById('content');
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
-    const { order, company, rowGrouping } = res;
+    const { order, company, rowGrouping, viewHeaderText, viewFooterText } = res;
     document.getElementById('companyName').textContent = '🎪 ' + (company.name || 'Expo Orders');
 
     if (rowGrouping === 'itemName') {
@@ -122,7 +125,9 @@ async function load(){
     }
 
     const isDynamic = !!(order.columnsSnapshot && order.columnsSnapshot.length);
-    const { headerCells, rows } = isDynamic ? renderDynamicTable(order) : renderLegacyTable(order);
+    const { headerCells, rowsArray } = isDynamic ? renderDynamicTable(order) : renderLegacyTable(order);
+    allRowsHtml = rowsArray;
+    currentPage = 1;
 
     const extraFields = order.orderFieldsSnapshot || [];
     const fieldTotalRows = Object.entries(order.fieldTotals || {}).map(([key, val]) => {
@@ -134,18 +139,46 @@ async function load(){
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
         <p class="muted" style="margin:0 0 16px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
+        ${viewHeaderText ? `<p style="white-space:pre-wrap;margin-bottom:14px">${viewHeaderText}</p>` : ''}
         <div class="table-scroll"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
-          <tbody>${rows}</tbody>
+          <tbody id="orderRowsBody"></tbody>
         </table></div>
-        ${fieldTotalRows ? `<div style="margin-top:10px">${fieldTotalRows}</div>` : ''}
+        <div id="orderPagination" style="margin-top:10px"></div>
+        ${fieldTotalRows ? `<div style="margin-top:14px;margin-left:auto;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
+        ${viewFooterText ? `<p style="white-space:pre-wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${viewFooterText}</p>` : ''}
       </div>
       <p class="muted" style="text-align:center">Buyer: ${order.partyName} · ${order.partyPhone}</p>
       ${renderFooter(company)}`;
+    renderTablePage();
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
   }
+}
+
+// 10 rows per page — orders with a lot of items were rendering as one very
+// long table; this keeps the page manageable to scroll through, especially
+// on a phone. Just re-slices the already-rendered row HTML and updates the
+// tbody in place, so paging doesn't re-fetch or re-build anything.
+function renderTablePage(){
+  const totalPages = Math.max(1, Math.ceil(allRowsHtml.length / PAGE_SIZE));
+  currentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  document.getElementById('orderRowsBody').innerHTML = allRowsHtml.slice(start, start + PAGE_SIZE).join('');
+  const pager = document.getElementById('orderPagination');
+  if (totalPages <= 1) { pager.innerHTML = ''; return; }
+  pager.innerHTML = `
+    <div class="btn-row" style="justify-content:center">
+      <button class="ghost small" onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>‹ Prev</button>
+      <span class="muted">Page ${currentPage} of ${totalPages}</span>
+      <button class="ghost small" onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ›</button>
+    </div>`;
+}
+function goToPage(n){
+  currentPage = n;
+  renderTablePage();
+  document.getElementById('orderRowsBody').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // Company details footer — every field is independently optional, since the
@@ -182,7 +215,7 @@ function renderLegacyTable(order){
     + extraFields.map(f => `<th>${f.label}</th>`).join('')
     + (hasRemarks ? '<th>Remark</th>' : '') + '<th>Qty</th>';
 
-  const rows = order.items.map(i => {
+  const rowsArray = order.items.map(i => {
     const imgs = i.images || (i.image ? [i.image] : []);
     const photoCell = showImages
       ? `<td>${imgs.length ? `
@@ -193,9 +226,9 @@ function renderLegacyTable(order){
     const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit, f.decimals)}</td>`).join('');
     const remarkCell = hasRemarks ? `<td>${i.comment || ''}</td>` : '';
     return `<tr>${photoCell}<td>${i.label}</td>${extraCells}${remarkCell}<td>${i.qty}</td></tr>`;
-  }).join('');
+  });
 
-  return { headerCells, rows };
+  return { headerCells, rowsArray };
 }
 
 // Custom column layout, built in Settings > Order View Layout. Each column
@@ -208,7 +241,7 @@ function renderDynamicTable(order){
 
   const headerCells = order.columnsSnapshot.map(col => `<th ${widthStyle(col.width)}>${col.label}</th>`).join('');
 
-  const rows = order.items.map((item, rowIndex) => {
+  const rowsArray = order.items.map((item, rowIndex) => {
     const cells = order.columnsSnapshot.map(col => {
       if (col.type === 'serial') return `<td ${widthStyle(col.width)}>${rowIndex + 1}</td>`;
       if (col.type === 'images') {
@@ -234,9 +267,9 @@ function renderDynamicTable(order){
       return `<td ${widthStyle(col.width)}></td>`;
     }).join('');
     return `<tr>${cells}</tr>`;
-  }).join('');
+  });
 
-  return { headerCells, rows };
+  return { headerCells, rowsArray };
 }
 load();
 </script>

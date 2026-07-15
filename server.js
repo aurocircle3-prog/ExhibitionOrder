@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.10.1';
-const BUILD_TIME   = '2026-07-14T17:05:00Z';
+const APP_VERSION  = '1.11.0';
+const BUILD_TIME   = '2026-07-15T05:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -118,6 +118,11 @@ const tenantSchema = new mongoose.Schema({
     default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false }),
   },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Optional free text shown above/below the item table on the buyer-facing
+  // order link — e.g. instructions above, terms/thank-you note below.
+  // Neither is required; both simply don't render if left blank.
+  orderViewHeaderText: { type: String, default: '' },
+  orderViewFooterText: { type: String, default: '' },
   // Company details shown as a footer on the buyer-facing order link — each
   // field has its own show/hide toggle so e.g. a GST number can be entered
   // without necessarily being made public. logoUrl is a separate top-level
@@ -193,7 +198,7 @@ const orderSchema = new mongoose.Schema({
   // Snapshot of the tenant's Order Form config at the time this order was
   // placed, plus the computed per-field totals — kept on the order so it
   // still renders correctly even if the admin changes the config later.
-  orderFieldsSnapshot: { type: [{ key: String, label: String, unit: String, showTotal: Boolean }], default: [] },
+  orderFieldsSnapshot: { type: [{ key: String, label: String, unit: String, decimals: Number, showTotal: Boolean }], default: [] },
   fieldTotals: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Snapshot of the tenant's Order View column layout at the time this order
   // was placed — same reasoning as orderFieldsSnapshot above. Empty array
@@ -827,7 +832,7 @@ app.put('/api/platform/tenants/:id/order-custom-fields', platformAuth, async (re
 app.put('/api/platform/tenants/:id/order-view-columns', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(tenant, req.body.columns) }); }
+  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(tenant, req.body.columns, req.body.headerText, req.body.footerText) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.put('/api/platform/tenants/:id/footer', platformAuth, async (req, res) => {
@@ -1067,7 +1072,7 @@ function validateFormula(expr, allowedNames) {
   return { ok: true };
 }
 
-async function saveOrderViewColumnsForTenant(tenant, list) {
+async function saveOrderViewColumnsForTenant(tenant, list, headerText, footerText) {
   const orderFields = tenant.orderFields || [];
   // Field/Formula columns can reference ANY active Item Master field, not
   // just ones added to the Order Form — Order Form controls what staff can
@@ -1126,12 +1131,15 @@ async function saveOrderViewColumnsForTenant(tenant, list) {
     columns.push(col);
   }
 
-  await TenantDB.update({ id: tenant.id }, { orderViewColumns: columns });
+  const updates = { orderViewColumns: columns };
+  if (headerText !== undefined) updates.orderViewHeaderText = String(headerText).slice(0, 2000);
+  if (footerText !== undefined) updates.orderViewFooterText = String(footerText).slice(0, 2000);
+  await TenantDB.update({ id: tenant.id }, updates);
   return columns;
 }
 
 app.put('/api/companies/order-view-columns', resolveTenant, auth, requireRole('admin'), requireSettingPermission('orderViewLayout'), async (req, res) => {
-  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(req.tenant, req.body.columns) }); }
+  try { res.json({ ok: true, columns: await saveOrderViewColumnsForTenant(req.tenant, req.body.columns, req.body.headerText, req.body.footerText) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
@@ -1844,6 +1852,8 @@ app.get('/api/orders/public/:token', async (req, res) => {
   // shared link immediately, old and new — that's the whole point of it
   // being a "layout", not a record of what happened.
   const columns = (tenant?.orderViewColumns && tenant.orderViewColumns.length) ? tenant.orderViewColumns : (order.columnsSnapshot || []);
+  const viewHeaderText = tenant?.orderViewHeaderText || '';
+  const viewFooterText = tenant?.orderViewFooterText || '';
   // Only send fields the company actually chose to publish — never leak a
   // GST number or phone that was entered but left toggled off.
   const rawFooter = tenant?.footer || { show: {} };
@@ -1857,6 +1867,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
     // reasoning: this is a display method AuroCircle chose for the client,
     // not a record of what happened on that specific order.
     rowGrouping: tenant?.orderRowGrouping || 'none',
+    viewHeaderText, viewFooterText,
   });
 });
 
