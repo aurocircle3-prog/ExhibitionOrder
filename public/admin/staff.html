@@ -29,6 +29,32 @@
     </div>
     <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addStaff)">Create staff login</button>
   </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Buyer logins <span class="muted">— optional</span></h3>
+    <p class="muted">Most buyers just use the order link sent to them — no login needed. Set one up here only for a repeat buyer who wants to see their own order history any time.</p>
+    <div class="error" id="clientErr"></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Name</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
+      <tbody id="clientRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Add buyer login</h3>
+    <div class="grid cols-3">
+      <div><label>Name</label><input id="clientName"></div>
+      <div>
+        <label>Phone</label>
+        <div style="display:flex;gap:6px">
+          <input id="clientPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
+          <input id="clientPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+        </div>
+      </div>
+      <div><label>Email <span class="muted">(used as login ID)</span></label><input id="clientEmail" type="email"></div>
+      <div><label>Password</label><input id="clientPassword" type="password"></div>
+    </div>
+    <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addClient)">Create buyer login</button>
+  </div>
 </div>
 <script src="/app.js"></script>
 <script>
@@ -36,7 +62,7 @@ EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('staff');
 
 async function load(){
-  const [staff, me] = await Promise.all([EXO.apiFetch('/staff'), EXO.apiFetch('/me')]);
+  const [staff, me, clients] = await Promise.all([EXO.apiFetch('/staff'), EXO.apiFetch('/me'), EXO.apiFetch('/clients')]);
   const activeCount = staff.filter(s => s.active).length;
   const max = me.tenant?.maxStaff;
   document.getElementById('usage').textContent = `— ${activeCount} / ${max ?? '∞'} used`;
@@ -50,6 +76,16 @@ async function load(){
         <button class="danger small" onclick="remove('${s.id}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No staff yet</td></tr>';
+  document.getElementById('clientRows').innerHTML = clients.map(c => `
+    <tr>
+      <td>${c.name}</td><td>${c.loginId}</td><td>${c.phone||'—'}</td>
+      <td>${c.active?'Active':'<span class="muted">Disabled</span>'}</td>
+      <td>
+        <button class="ghost small" onclick="resetClientPassword('${c.id}','${c.name.replace(/'/g,"\\'")}')">Reset password</button>
+        <button class="ghost small" onclick="toggleClient('${c.id}', ${!c.active})">${c.active?'Disable':'Enable'}</button>
+        <button class="danger small" onclick="removeClient('${c.id}')">Delete</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No buyer logins yet</td></tr>';
 }
 async function resetPassword(id, name){
   const pw = prompt(`New password for ${name} (min 6 characters):`);
@@ -78,5 +114,33 @@ async function addStaff(){
 }
 async function toggle(id, active){ await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }
 async function remove(id){ if (!confirm('Delete this staff account?')) return; await EXO.apiFetch('/staff/'+id, { method:'DELETE' }); load(); }
+
+async function addClient(){
+  const err = document.getElementById('clientErr'); err.style.display='none';
+  try {
+    const phoneNum = document.getElementById('clientPhone').value.trim();
+    const body = {
+      name: document.getElementById('clientName').value.trim(),
+      phone: phoneNum ? document.getElementById('clientPhoneCC').value.trim() + phoneNum : '',
+      email: document.getElementById('clientEmail').value.trim(),
+      password: document.getElementById('clientPassword').value,
+    };
+    await EXO.apiFetch('/clients', { method:'POST', body: JSON.stringify(body) });
+    document.getElementById('clientName').value = document.getElementById('clientPhone').value = document.getElementById('clientEmail').value = document.getElementById('clientPassword').value = '';
+    EXO.toast('Buyer login created');
+    load();
+  } catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Could not add buyer login — see error above', 'error'); }
+}
+async function resetClientPassword(id, name){
+  const pw = prompt(`New password for ${name} (min 6 characters):`);
+  if (pw === null) return;
+  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
+  try {
+    await EXO.apiFetch('/clients/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
+    EXO.toast(`Password updated for ${name}`);
+  } catch(e) { EXO.toast(e.message, 'error'); }
+}
+async function toggleClient(id, active){ await EXO.apiFetch('/clients/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }
+async function removeClient(id){ if (!confirm('Delete this buyer login?')) return; await EXO.apiFetch('/clients/'+id, { method:'DELETE' }); load(); }
 load();
 </script>

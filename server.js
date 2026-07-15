@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.13.0';
-const BUILD_TIME   = '2026-07-15T09:05:00Z';
+const APP_VERSION  = '1.14.0';
+const BUILD_TIME   = '2026-07-15T10:20:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -970,6 +970,51 @@ app.put('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req,
 app.delete('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'staff' });
   logAudit(req, 'staff.delete', 'user', req.params.id);
+  res.json({ ok: true });
+});
+
+// Buyer/client logins — buyer self-registration is disabled (see
+// register-client above), so this is now the only way a client account
+// gets created: the company admin sets one up directly, e.g. for a repeat
+// buyer who wants to see their order history without needing a fresh link
+// each time. Deliberately mirrors the staff account routes above.
+app.post('/api/clients', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const { name, phone, email, password } = req.body;
+  if (!name || !password) return res.status(400).json({ error: 'Name and password are required' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const loginId = (email || phone || name).toLowerCase();
+  if (await UserDB.findOne({ tenantId: req.tenant.id, loginId }))
+    return res.status(400).json({ error: 'That login ID is already in use' });
+  const client = {
+    id: uuid(), tenantId: req.tenant.id, role: 'client', loginId,
+    password: bcrypt.hashSync(password, 10), name, phone: phone || '', email: email || '',
+    active: true, createdAt: new Date().toISOString(),
+  };
+  await UserDB.create(client);
+  logAudit(req, 'client.create', 'user', client.id, { name: client.name, loginId: client.loginId });
+  const { password: _pw, ...safeClient } = client;
+  res.json(safeClient);
+});
+app.get('/api/clients', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const clients = await UserDB.find({ tenantId: req.tenant.id, role: 'client' });
+  res.json(clients.map(({ password: _pw, ...c }) => c));
+});
+app.put('/api/clients/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const clientUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });
+  if (!clientUser) return res.status(404).json({ error: 'Buyer login not found' });
+  const updates = {};
+  ['name', 'phone', 'email', 'active'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
+  if (req.body.newPassword) {
+    if (req.body.newPassword.length < 6) return res.status(400).json({ error: 'Password min 6 characters' });
+    updates.password = bcrypt.hashSync(req.body.newPassword, 10);
+  }
+  await UserDB.update({ id: req.params.id }, updates);
+  logAudit(req, 'client.update', 'user', req.params.id, { fields: Object.keys(updates) });
+  res.json({ ok: true });
+});
+app.delete('/api/clients/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });
+  logAudit(req, 'client.delete', 'user', req.params.id);
   res.json({ ok: true });
 });
 

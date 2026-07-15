@@ -243,7 +243,7 @@ function renderItemsTable(list){
   currentItemsList = list;
   const visibleIds = list.map(it => it.id);
   const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.has(id));
-  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange="toggleSelectAll(this, ${JSON.stringify(visibleIds)})"></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
   document.getElementById('itemsBody').innerHTML = list.map(it => `
     <tr>
       <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
