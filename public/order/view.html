@@ -293,10 +293,10 @@ function renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages
         { label: 'Qty', value: String(item.qty) },
       ];
     }
-    const detailsHtml = detailLines.map(d => `<div>${d.label} - ${d.value ?? ''}</div>`).join('');
+    const detailsHtml = detailLines.map(d => `<div><span class="muted">${d.label}</span> - <b style="color:var(--ink)">${d.value ?? ''}</b></div>`).join('');
     return `
       <div class="mobile-order-row">
-        <div class="mobile-img">${showImages ? renderImageSlider(imgs, 77) : ''}</div>
+        <div class="mobile-img">${showImages ? renderImageSlider(imgs, 100) : ''}</div>
         <div class="mobile-details">${detailsHtml}</div>
       </div>`;
   });
