@@ -62,7 +62,7 @@
     <div class="card" id="exhibitionListCard">
       <h3 style="margin-top:0">Exhibitions <span class="muted">— set up centrally, then assign companies into each one</span></h3>
       <div class="table-scroll"><table>
-        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Companies</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Companies</th><th>Manage</th></tr></thead>
         <tbody id="platExhibitionRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
       </table></div>
     </div>
@@ -305,12 +305,15 @@ async function loadPlatformExhibitions(){
   try {
     platformExhibitions = await platformFetch('/exhibitions');
     document.getElementById('platExhibitionRows').innerHTML = platformExhibitions.map(e => `
-      <tr style="cursor:pointer" onclick="openExhibitionDetail('${e.id}')">
+      <tr>
         <td><b>${e.name}</b></td>
         <td>${e.location||'—'}</td>
         <td>${e.startDate||''}${e.endDate?' – '+e.endDate:''}</td>
-        <td>${e.participantCount}</td>
-        <td><button class="danger small" onclick="event.stopPropagation();deletePlatformExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Delete</button></td>
+        <td>${e.participantCount} compan${e.participantCount===1?'y':'ies'}</td>
+        <td class="btn-row">
+          <button class="primary small" onclick="openExhibitionDetail('${e.id}')">${e.participantCount ? 'Manage companies' : '+ Add companies'}</button>
+          <button class="danger small" onclick="deletePlatformExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Delete</button>
+        </td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">No exhibitions yet — create one below.</td></tr>';
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
