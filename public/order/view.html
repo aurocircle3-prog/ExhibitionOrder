@@ -150,14 +150,15 @@ document.addEventListener('touchend', e => {
 // with a comma; images and remarks are combined too. Runs before either
 // table renderer, so both the dynamic and legacy layouts get it for free
 // without duplicating the merge logic in each one.
-function groupItemsByName(items, decimalsByKey){
-  const order = [], groups = {};
+function groupItemsByName(items, decimalsByKey, order, columnsSnapshot){
+  const orderKeys = [], groups = {};
   items.forEach(item => {
     const key = item.extra?.itemName || item.label;
-    if (!groups[key]) { groups[key] = []; order.push(key); }
+    if (!groups[key]) { groups[key] = []; orderKeys.push(key); }
     groups[key].push(item);
   });
-  return order.map(key => {
+  const formulaColumns = (columnsSnapshot || []).filter(c => c.type === 'formula');
+  return orderKeys.map(key => {
     const group = groups[key];
     if (group.length === 1) return group[0]; // nothing to merge
     const merged = {
@@ -181,6 +182,24 @@ function groupItemsByName(items, decimalsByKey){
         merged.extra[fieldKey] = [...new Set(values.map(String))].join(', ');
       }
     });
+    // A formula like "net_weight * melting / 100" breaks if evaluated
+    // against the merged row above — net_weight correctly sums across the
+    // set's pieces, but melting (a purity %) doesn't mean anything summed;
+    // two pieces at 50% melting aren't "100% melting" together. So instead
+    // of running the formula once against the (partly wrong) merged
+    // fields, it's run once per ORIGINAL piece using that piece's own
+    // real values, and only the final results get added together.
+    if (formulaColumns.length) {
+      merged.formulaTotals = {};
+      formulaColumns.forEach(col => {
+        let sum = 0, any = false;
+        group.forEach(g => {
+          const n = getNumericColumnValue(col, g, order);
+          if (n !== null) { sum += n; any = true; }
+        });
+        if (any) merged.formulaTotals[col.id] = sum;
+      });
+    }
     return merged;
   });
 }
@@ -201,7 +220,7 @@ async function load(){
       const decimalsByKey = {};
       (order.orderFieldsSnapshot || []).forEach(f => { if (f.decimals !== undefined) decimalsByKey[f.key] = f.decimals; });
       (order.columnsSnapshot || []).forEach(c => { if (c.type === 'field' && c.decimals !== undefined) decimalsByKey[c.fieldKey] = c.decimals; });
-      order.items = groupItemsByName(order.items, decimalsByKey);
+      order.items = groupItemsByName(order.items, decimalsByKey, order, order.columnsSnapshot);
     }
 
     const isDynamic = !!(order.columnsSnapshot && order.columnsSnapshot.length);
@@ -275,6 +294,11 @@ function getNumericColumnValue(col, item, order, rowIndex){
     return (raw !== '' && raw !== undefined && raw !== null && !isNaN(Number(raw))) ? Number(raw) : null;
   }
   if (col.type === 'formula') {
+    // Merged/grouped rows carry a pre-computed sum (see groupItemsByName)
+    // — computed once per original piece and added together, rather than
+    // re-evaluating the formula against this row's (partly summed,
+    // partly meaningless for things like a melting %) merged fields.
+    if (item.formulaTotals && col.id in item.formulaTotals) return item.formulaTotals[col.id];
     try {
       const scope = { qty: Number(item.qty) || 0 };
       Object.entries(item.extra || {}).forEach(([key, val]) => {

@@ -283,10 +283,18 @@ function updateFieldListEntry(which, id, key, value){
     renderFieldListEntries(which);
   }
 }
+function moveFieldListEntry(which, id, direction){
+  const list = fieldListState(which);
+  const i = list.findIndex(f => f._id === id);
+  const j = i + direction;
+  if (i === -1 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  renderFieldListEntries(which);
+}
 function renderFieldListEntries(which){
   const list = fieldListState(which);
   const container = document.getElementById(which === 'header' ? 'layoutHeaderFieldRows' : 'layoutFooterFieldRows');
-  container.innerHTML = list.map(f => `
+  container.innerHTML = list.map((f, i) => `
     <div class="grid cols-3" style="align-items:end;margin-top:8px">
       <div>
         <label>Type</label>
@@ -299,7 +307,7 @@ function renderFieldListEntries(which){
         <label>${f.type === 'total' ? 'Which total' : 'Which order detail field'}</label>
         <select onchange="updateFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
-            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" for a field in Order Form first —</option>')
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
             : (orderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>
@@ -307,7 +315,11 @@ function renderFieldListEntries(which){
         <label>Label <span class="muted">(optional)</span></label>
         <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateFieldListEntry('${which}','${f._id}','label',this.value)">
       </div>
-      <div style="grid-column:1/-1"><button class="danger small" onclick="removeFieldListEntry('${which}','${f._id}')">Remove</button></div>
+      <div style="grid-column:1/-1" class="btn-row">
+        <button class="ghost small" onclick="moveFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑ Move up</button>
+        <button class="ghost small" onclick="moveFieldListEntry('${which}','${f._id}',1)" ${i===list.length-1?'disabled':''}>↓ Move down</button>
+        <button class="danger small" onclick="removeFieldListEntry('${which}','${f._id}')">Remove</button>
+      </div>
     </div>`).join('') || '<p class="muted">None added.</p>';
 }
 function cid(){ return 'c' + Math.random().toString(36).slice(2); }

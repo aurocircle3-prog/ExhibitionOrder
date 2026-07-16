@@ -780,11 +780,19 @@ function updateDetailFieldListEntry(which, id, key, value){
     renderDetailFieldListEntries(which);
   }
 }
+function moveDetailFieldListEntry(which, id, direction){
+  const list = detailFieldListState(which);
+  const i = list.findIndex(f => f._id === id);
+  const j = i + direction;
+  if (i === -1 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  renderDetailFieldListEntries(which);
+}
 function renderDetailFieldListEntries(which){
   const totalableFields = detailColumns.filter(c => c.showTotal).map(c => ({ key: c._id, label: c.label || (c.type === 'formula' ? 'Amount' : (detailFields.find(f=>f.key===c.fieldKey)?.label || 'Field')) }));
   const list = detailFieldListState(which);
   const container = document.getElementById(which === 'header' ? 'layoutDetailHeaderFieldRows' : 'layoutDetailFooterFieldRows');
-  container.innerHTML = list.map(f => `
+  container.innerHTML = list.map((f, i) => `
     <div class="grid cols-3" style="align-items:end;margin-top:8px">
       <div>
         <label>Type</label>
@@ -805,7 +813,11 @@ function renderDetailFieldListEntries(which){
         <label>Label <span class="muted">(optional)</span></label>
         <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
       </div>
-      <div style="grid-column:1/-1"><button class="danger small" onclick="removeDetailFieldListEntry('${which}','${f._id}')">Remove</button></div>
+      <div style="grid-column:1/-1" class="btn-row">
+        <button class="ghost small" onclick="moveDetailFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑ Move up</button>
+        <button class="ghost small" onclick="moveDetailFieldListEntry('${which}','${f._id}',1)" ${i===list.length-1?'disabled':''}>↓ Move down</button>
+        <button class="danger small" onclick="removeDetailFieldListEntry('${which}','${f._id}')">Remove</button>
+      </div>
     </div>`).join('') || '<p class="muted">None added.</p>';
 }
 function dcid(){ return 'c' + Math.random().toString(36).slice(2); }
