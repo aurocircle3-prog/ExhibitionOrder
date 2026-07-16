@@ -776,7 +776,10 @@ function updateDetailFieldListEntry(which, id, key, value){
   if (!entry) return;
   entry[key] = value;
   if (key === 'type') {
-    entry.fieldKey = value === 'total' ? (totalableFields[0]?.key || '') : (detailOrderFieldDefs[0]?.key || '');
+    const numericFields = detailFields.filter(f => f.type === 'number');
+    entry.fieldKey = value === 'total' ? (totalableFields[0]?.key || '')
+      : value === 'fieldtotal' ? (numericFields[0]?.key || '')
+      : (detailOrderFieldDefs[0]?.key || '');
     renderDetailFieldListEntries(which);
   }
 }
@@ -790,6 +793,7 @@ function moveDetailFieldListEntry(which, id, direction){
 }
 function renderDetailFieldListEntries(which){
   const totalableFields = detailColumns.filter(c => c.showTotal).map(c => ({ key: c._id, label: c.label || (c.type === 'formula' ? 'Amount' : (detailFields.find(f=>f.key===c.fieldKey)?.label || 'Field')) }));
+  const numericFields = detailFields.filter(f => f.type === 'number');
   const list = detailFieldListState(which);
   const container = document.getElementById(which === 'header' ? 'layoutDetailHeaderFieldRows' : 'layoutDetailFooterFieldRows');
   container.innerHTML = list.map((f, i) => `
@@ -798,14 +802,17 @@ function renderDetailFieldListEntries(which){
         <label>Type</label>
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','type',this.value)">
           <option value="orderfield" ${f.type==='orderfield'?'selected':''}>Order detail</option>
-          <option value="total" ${f.type==='total'?'selected':''}>Total</option>
+          <option value="total" ${f.type==='total'?'selected':''}>Total (of a column)</option>
+          <option value="fieldtotal" ${f.type==='fieldtotal'?'selected':''}>Total (of an Item Master field)</option>
         </select>
       </div>
       <div>
-        <label>${f.type === 'total' ? 'Which total' : 'Which order detail field'}</label>
+        <label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
             ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
+            : f.type === 'fieldtotal'
+            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${n.label}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
             : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>

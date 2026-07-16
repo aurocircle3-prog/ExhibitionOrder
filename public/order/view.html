@@ -240,12 +240,25 @@ async function load(){
     // "Total" type header/footer fields were sent unresolved (just a label
     // + which column) — fill in the actual number from the totals just
     // computed above, so a formula-based total works there too, same as
-    // in the main totals block.
+    // in the main totals block. "fieldtotal" entries sum a numeric Item
+    // Master field directly across every item, without that field needing
+    // to be a visible column at all.
     const resolveTotalFields = list => (list || [])
       .map(f => {
-        if (f.type !== 'total') return f;
-        const match = columnTotals.find(t => t.columnId === f.columnId);
-        return match ? { label: f.label, ...match } : { label: f.label, value: undefined };
+        if (f.type === 'total') {
+          const match = columnTotals.find(t => t.columnId === f.columnId);
+          return match ? { label: f.label, ...match } : { label: f.label, value: undefined };
+        }
+        if (f.type === 'fieldtotal') {
+          let sum = 0, any = false;
+          order.items.forEach(item => {
+            const raw = item.extra?.[f.fieldKey];
+            if (raw !== '' && raw !== undefined && raw !== null && !isNaN(Number(raw))) { sum += Number(raw); any = true; }
+          });
+          if (!any) return { label: f.label, value: undefined };
+          return { label: f.label, value: Number(sum.toFixed(f.decimals ?? 2)), unit: f.unit, decimals: f.decimals };
+        }
+        return f;
       })
       .filter(f => f.value !== '' && f.value !== undefined && f.value !== null);
     const resolvedHeaderFields = resolveTotalFields(viewHeaderFields);
@@ -272,8 +285,9 @@ async function load(){
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
+        ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
-      ${renderFooter(company, resolvedFooterFields)}`;
+      ${renderFooter(company)}`;
     renderTablePage();
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
@@ -425,10 +439,9 @@ const SOCIAL_ICONS = {
   youtube: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M10 9.3l6 2.7-6 2.7z" fill="currentColor" stroke="none"/></svg>',
   website: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>',
 };
-function renderFooter(company, footerFields){
+function renderFooter(company){
   const f = company.footer || {};
-  const hasFooterFields = footerFields && footerFields.length;
-  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website || hasFooterFields;
+  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
   if (!hasContent) return '';
   const socialLinks = [
     f.whatsappNumber && { key: 'whatsapp', label: 'WhatsApp', url: `https://wa.me/${f.whatsappNumber.replace(/\D/g, '')}` },
@@ -443,7 +456,6 @@ function renderFooter(company, footerFields){
       ${f.address ? `<p class="muted" style="margin:4px 0">${f.address}</p>` : ''}
       ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${f.gstNumber}</p>` : ''}
       ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${s.url}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
-      ${hasFooterFields ? `<div style="margin-top:${hasContent && (f.address||f.gstNumber||socialLinks.length) ? '14px;padding-top:14px;border-top:1px solid var(--line)' : '0'};display:flex;justify-content:center">${renderFieldList(footerFields)}</div>` : ''}
     </div>`;
 }
 

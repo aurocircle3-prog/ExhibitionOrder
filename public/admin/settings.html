@@ -279,7 +279,10 @@ function updateFieldListEntry(which, id, key, value){
   entry[key] = value;
   if (key === 'type') {
     // switching type — reset fieldKey to a valid default for the new type
-    entry.fieldKey = value === 'total' ? (totalableFields[0]?.key || '') : (orderFieldDefs[0]?.key || '');
+    const numericFields = availableFields.filter(f => f.type === 'number');
+    entry.fieldKey = value === 'total' ? (totalableFields[0]?.key || '')
+      : value === 'fieldtotal' ? (numericFields[0]?.key || '')
+      : (orderFieldDefs[0]?.key || '');
     renderFieldListEntries(which);
   }
 }
@@ -293,6 +296,7 @@ function moveFieldListEntry(which, id, direction){
 }
 function renderFieldListEntries(which){
   const list = fieldListState(which);
+  const numericFields = availableFields.filter(f => f.type === 'number');
   const container = document.getElementById(which === 'header' ? 'layoutHeaderFieldRows' : 'layoutFooterFieldRows');
   container.innerHTML = list.map((f, i) => `
     <div class="grid cols-3" style="align-items:end;margin-top:8px">
@@ -300,14 +304,17 @@ function renderFieldListEntries(which){
         <label>Type</label>
         <select onchange="updateFieldListEntry('${which}','${f._id}','type',this.value)">
           <option value="orderfield" ${f.type==='orderfield'?'selected':''}>Order detail</option>
-          <option value="total" ${f.type==='total'?'selected':''}>Total</option>
+          <option value="total" ${f.type==='total'?'selected':''}>Total (of a column)</option>
+          <option value="fieldtotal" ${f.type==='fieldtotal'?'selected':''}>Total (of an Item Master field)</option>
         </select>
       </div>
       <div>
-        <label>${f.type === 'total' ? 'Which total' : 'Which order detail field'}</label>
+        <label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
         <select onchange="updateFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
             ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
+            : f.type === 'fieldtotal'
+            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${n.label}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
             : (orderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>

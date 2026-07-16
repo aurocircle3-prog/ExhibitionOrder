@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.27.0';
-const BUILD_TIME   = '2026-07-16T12:45:00Z';
+const APP_VERSION  = '1.28.0';
+const BUILD_TIME   = '2026-07-16T13:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1316,11 +1316,18 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
   function validateFieldList(list) {
     const out = [];
     for (const raw of (Array.isArray(list) ? list : [])) {
-      if (!raw || !['orderfield', 'total'].includes(raw.type)) throw Object.assign(new Error('Each field needs a valid type'), { status: 400 });
+      if (!raw || !['orderfield', 'total', 'fieldtotal'].includes(raw.type)) throw Object.assign(new Error('Each field needs a valid type'), { status: 400 });
       if (raw.type === 'orderfield') {
         if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
         const f = orderCustomFields.find(x => x.key === raw.fieldKey);
         out.push({ type: 'orderfield', fieldKey: raw.fieldKey, label: (raw.label || f.label || '').trim().slice(0, 60) || f.label });
+      } else if (raw.type === 'fieldtotal') {
+        // Totals a numeric Item Master field directly, across every item on
+        // the order — doesn't require that field to be a visible column in
+        // the table at all, unlike the column-based "total" type below.
+        const f = fieldByKey[raw.fieldKey];
+        if (!f || f.type !== 'number') throw Object.assign(new Error(`"${raw.fieldKey}" isn't a numeric Item Master field`), { status: 400 });
+        out.push({ type: 'fieldtotal', fieldKey: raw.fieldKey, unit: f.unit || '', decimals: f.decimals ?? 2, label: (raw.label || `Total ${f.label}`).trim().slice(0, 60) || `Total ${f.label}` });
       } else { // total — fieldKey here means "column id"
         const col = totalableColumns.find(c => c.id === raw.fieldKey);
         if (!col) throw Object.assign(new Error(`That column isn't marked "Show total" — turn that on for a column in Order View Layout first`), { status: 400 });
@@ -2192,6 +2199,12 @@ app.get('/api/orders/public/:token', async (req, res) => {
           const val = order.customFields?.[spec.fieldKey];
           return { type: 'orderfield', label: spec.label, value: val ?? '' };
         }
+        if (spec.type === 'fieldtotal') {
+          // Sums a numeric Item Master field directly across every item —
+          // left unresolved here (metadata only), the client does the sum
+          // since it already has every item's field values in hand.
+          return { type: 'fieldtotal', label: spec.label, fieldKey: spec.fieldKey, unit: spec.unit, decimals: spec.decimals };
+        }
         // "total" — fieldKey is a column id, and the value may come from a
         // formula column, which only evaluates client-side (same as every
         // other formula column in the table) — so this is left unresolved
@@ -2199,7 +2212,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
         // computed the same totals it uses for the main table.
         return { type: 'total', label: spec.label, columnId: spec.fieldKey };
       })
-      .filter(f => f.type === 'total' || (f.value !== '' && f.value !== undefined && f.value !== null));
+      .filter(f => f.type !== 'orderfield' || (f.value !== '' && f.value !== undefined && f.value !== null));
   }
   const viewHeaderFields = resolveFieldList(tenant?.orderViewHeaderFields);
   const viewFooterFields = resolveFieldList(tenant?.orderViewFooterFields);
