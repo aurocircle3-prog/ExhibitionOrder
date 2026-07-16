@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.28.1';
-const BUILD_TIME   = '2026-07-16T13:30:00Z';
+const APP_VERSION  = '1.29.0';
+const BUILD_TIME   = '2026-07-16T14:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -287,6 +287,7 @@ const exhibitionSchema = new mongoose.Schema({
 const exhibitionParticipantSchema = new mongoose.Schema({
   id: String, exhibitionId: String, tenantId: String,
   validTill: String, // date, platform-admin-controlled — expired means no new items/orders in this exhibition, but past data stays visible
+  closed: { type: Boolean, default: false }, // company admin's own manual close/reopen — independent of validTill, private to this company only
   addedAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -2242,10 +2243,35 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
   const participants = await ExhibitionParticipantDB.find({ tenantId: req.tenant.id });
   const exhibitions = await ExhibitionDB.find({});
   const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
+  const today = new Date().toISOString().slice(0, 10);
   const result = participants
-    .map(p => byId[p.exhibitionId] && { ...byId[p.exhibitionId], validTill: p.validTill })
+    .map(p => {
+      const ex = byId[p.exhibitionId];
+      if (!ex) return null;
+      // "Completed" if either the company closed it themselves, or
+      // AuroCircle's paid-for window has passed — either way it stops
+      // being offered for new items/orders, but stays fully viewable.
+      const expired = !!(p.validTill && p.validTill < today);
+      const status = (p.closed || expired) ? 'completed' : 'current';
+      return { ...ex, validTill: p.validTill, closed: !!p.closed, status };
+    })
     .filter(Boolean);
   res.json(result);
+});
+// Company admin's own manual close/reopen — independent of validTill,
+// private to this company (other companies sharing the same exhibition
+// are completely unaffected).
+app.put('/api/exhibitions/:id/close', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const p = await ExhibitionParticipantDB.findOne({ exhibitionId: req.params.id, tenantId: req.tenant.id });
+  if (!p) return res.status(404).json({ error: 'Not participating in that exhibition' });
+  await ExhibitionParticipantDB.update({ id: p.id }, { closed: true });
+  res.json({ ok: true });
+});
+app.put('/api/exhibitions/:id/reopen', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const p = await ExhibitionParticipantDB.findOne({ exhibitionId: req.params.id, tenantId: req.tenant.id });
+  if (!p) return res.status(404).json({ error: 'Not participating in that exhibition' });
+  await ExhibitionParticipantDB.update({ id: p.id }, { closed: false });
+  res.json({ ok: true });
 });
 
 // ── REPORTS ───────────────────────────────────────────────────────────────────
