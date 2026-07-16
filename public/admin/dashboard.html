@@ -4,51 +4,78 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
-  <div class="grid cols-4" id="stats"><p class="muted">Loading…</p></div>
-  <div class="card">
-    <h3 style="margin-top:0">Recent orders</h3>
-    <div class="table-scroll"><table>
-      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
-      <tbody id="orderRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
-    </table></div>
+  <div class="card" id="noExhibitionsCard" style="display:none">
+    <h3 style="margin-top:0">No exhibitions yet</h3>
+    <p class="muted">Exhibitions are set up centrally by AuroCircle. Contact them to get your company added to one — once you are, it'll show up here.</p>
+  </div>
+
+  <div id="currentSection" style="display:none">
+    <h3>Current exhibitions</h3>
+    <div class="grid cols-2" id="currentExhibitions"></div>
+  </div>
+
+  <div id="completedSection" style="display:none">
+    <h3>Completed exhibitions</h3>
+    <div class="grid cols-2" id="completedExhibitions"></div>
   </div>
 </div>
+
 <script src="/app.js"></script>
 <script>
 const user = EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('dashboard');
+const tenantSlug = EXO.getTenantSlug();
+
+function exhibitionCard(e){
+  const dates = e.startDate ? `${e.startDate}${e.endDate ? ' – ' + e.endDate : ''}` : '';
+  const validTillNote = e.validTill ? `<p class="muted" style="margin:2px 0">Valid till ${e.validTill}</p>` : '';
+  const closedNote = e.closed ? `<p class="muted" style="margin:2px 0">Marked completed by your team</p>` : (e.status === 'completed' ? `<p class="muted" style="margin:2px 0">Access window ended</p>` : '');
+  return `
+    <div class="card">
+      <h4 style="margin:0 0 4px">${e.name}</h4>
+      <p class="muted" style="margin:2px 0">${e.location || ''}${e.location && dates ? ' · ' : ''}${dates}</p>
+      ${validTillNote}${closedNote}
+      <p class="muted" style="margin:8px 0">${e.itemCount} item${e.itemCount===1?'':'s'} · ${e.orderCount} order${e.orderCount===1?'':'s'}</p>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="primary small" onclick="enterExhibition('${e.id}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
+        ${e.status === 'current'
+          ? `<button class="ghost small" onclick="closeExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Mark completed</button>`
+          : (e.closed ? `<button class="ghost small" onclick="reopenExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Reopen</button>` : '')}
+      </div>
+    </div>`;
+}
 
 async function load(){
-  const [items, parties, orders, staff] = await Promise.all([
-    EXO.apiFetch('/items'), EXO.apiFetch('/parties'), EXO.apiFetch('/orders'), EXO.apiFetch('/staff')
-  ]);
-  document.getElementById('stats').innerHTML = `
-    <div class="card"><div class="stat">${items.length}</div><div class="stat-label">Items</div></div>
-    <div class="card"><div class="stat">${orders.length}</div><div class="stat-label">Orders</div></div>
-    <div class="card"><div class="stat">${parties.length}</div><div class="stat-label">Buyers captured</div></div>
-    <div class="card"><div class="stat">${staff.length}</div><div class="stat-label">Staff accounts</div></div>
-  `;
-  document.getElementById('orderRows').innerHTML = orders.slice(0,20).map(o => `
-    <tr>
-      <td>${o.orderNo}</td>
-      <td>${o.partyName}<br><span class="muted">${o.partyPhone}</span></td>
-      <td>${o.staffName}</td>
-      <td>${o.items.length}</td>
-      <td>
-        <select class="status-select ${o.status}" onchange="changeStatus('${o.id}', this)">
-          <option value="pending" ${o.status==='pending'?'selected':''}>pending</option>
-          <option value="confirmed" ${o.status==='confirmed'?'selected':''}>confirmed</option>
-          <option value="cancelled" ${o.status==='cancelled'?'selected':''}>cancelled</option>
-        </select>
-      </td>
-      <td><a href="/order/${o.shareToken}" target="_blank">View link ↗</a></td>
-    </tr>`).join('') || '<tr><td colspan="6" class="muted">No orders yet</td></tr>';
+  const exhibitions = await EXO.apiFetch('/exhibitions');
+  const current = exhibitions.filter(e => e.status === 'current');
+  const completed = exhibitions.filter(e => e.status === 'completed');
+
+  document.getElementById('noExhibitionsCard').style.display = exhibitions.length ? 'none' : 'block';
+  document.getElementById('currentSection').style.display = current.length ? 'block' : 'none';
+  document.getElementById('completedSection').style.display = completed.length ? 'block' : 'none';
+
+  document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
+  document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 }
-async function changeStatus(id, select){
-  const status = select.value;
-  select.className = 'status-select ' + status;
-  try { await EXO.apiFetch('/orders/'+id+'/status', { method:'PUT', body: JSON.stringify({ status }) }); }
-  catch(e) { EXO.toast(e.message, 'error'); load(); }
+
+function enterExhibition(id){
+  localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
+  location.href = '/admin/item-master.html';
+}
+async function closeExhibition(id, name){
+  if (!confirm(`Mark "${name}" as completed? It'll move to Completed and won't be offered for new items or orders — you can reopen it any time.`)) return;
+  try {
+    await EXO.apiFetch('/exhibitions/' + id + '/close', { method: 'PUT' });
+    EXO.toast(`"${name}" marked completed`);
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function reopenExhibition(id, name){
+  try {
+    await EXO.apiFetch('/exhibitions/' + id + '/reopen', { method: 'PUT' });
+    EXO.toast(`"${name}" reopened`);
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 load();
 </script>

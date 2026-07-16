@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.29.0';
-const BUILD_TIME   = '2026-07-16T14:00:00Z';
+const APP_VERSION  = '1.30.0';
+const BUILD_TIME   = '2026-07-16T14:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -2244,6 +2244,13 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
   const exhibitions = await ExhibitionDB.find({});
   const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
   const today = new Date().toISOString().slice(0, 10);
+  const [allItems, allOrders] = await Promise.all([
+    ItemDB.find({ tenantId: req.tenant.id, active: true }),
+    OrderDB.find({ tenantId: req.tenant.id }),
+  ]);
+  const itemCountByEx = {}, orderCountByEx = {};
+  allItems.forEach(i => { if (i.exhibitionId) itemCountByEx[i.exhibitionId] = (itemCountByEx[i.exhibitionId] || 0) + 1; });
+  allOrders.forEach(o => { if (o.exhibitionId) orderCountByEx[o.exhibitionId] = (orderCountByEx[o.exhibitionId] || 0) + 1; });
   const result = participants
     .map(p => {
       const ex = byId[p.exhibitionId];
@@ -2253,7 +2260,7 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
       // being offered for new items/orders, but stays fully viewable.
       const expired = !!(p.validTill && p.validTill < today);
       const status = (p.closed || expired) ? 'completed' : 'current';
-      return { ...ex, validTill: p.validTill, closed: !!p.closed, status };
+      return { ...ex, validTill: p.validTill, closed: !!p.closed, status, itemCount: itemCountByEx[ex.id] || 0, orderCount: orderCountByEx[ex.id] || 0 };
     })
     .filter(Boolean);
   res.json(result);
