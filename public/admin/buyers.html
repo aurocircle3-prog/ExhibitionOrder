@@ -1,0 +1,144 @@
+<title>Buyers — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card">
+    <h3 style="margin-top:0">Buyers <span class="muted" id="buyerCount"></span></h3>
+    <div class="error" id="listErr"></div>
+    <input placeholder="Search by name, phone, city, or contact person…" oninput="searchBuyers(this.value)" style="margin-bottom:12px">
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Firm Name</th><th>Contact Person</th><th>Phone</th><th>City</th><th>Email</th><th></th></tr></thead>
+        <tbody id="buyerRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0" id="formTitle">Add buyer</h3>
+    <div class="error" id="formErr"></div>
+    <div class="grid cols-3">
+      <div><label>Firm Name</label><input id="fFirmName"></div>
+      <div><label>Contact Person</label><input id="fContactPerson"></div>
+      <div>
+        <label>Phone <span class="muted">(unique — used to find this buyer)</span></label>
+        <div style="display:flex;gap:6px">
+          <input id="fPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
+          <input id="fPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+        </div>
+      </div>
+      <div><label>City</label><input id="fCity"></div>
+      <div><label>Email <span class="muted">(optional)</span></label><input id="fEmail" type="email"></div>
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="primary" id="saveBtn" onclick="EXO.busy(this, saveBuyer)">Add buyer</button>
+      <button class="ghost" id="cancelEditBtn" style="display:none" onclick="resetForm()">Cancel edit</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+const currentUser = EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('buyers');
+
+let buyers = [], editingId = null;
+
+async function load(){
+  buyers = await EXO.apiFetch('/parties');
+  buyers.sort((a, b) => a.firmName.localeCompare(b.firmName));
+  document.getElementById('buyerCount').textContent = `(${buyers.length})`;
+  renderRows(buyers);
+}
+function renderRows(list){
+  document.getElementById('buyerRows').innerHTML = list.map(b => `
+    <tr>
+      <td>${b.firmName}</td>
+      <td>${b.contactPerson || '—'}</td>
+      <td>${b.phone}</td>
+      <td>${b.city || '—'}</td>
+      <td>${b.email || '—'}</td>
+      <td>
+        <button class="ghost small" onclick="editBuyer('${b.id}')">Edit</button>
+        <button class="danger small" onclick="deleteBuyer('${b.id}','${b.firmName.replace(/'/g,"\\'")}')">Delete</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">No buyers yet — they\'ll also appear here automatically once added from Take Order.</td></tr>';
+}
+function searchBuyers(q){
+  q = q.trim().toLowerCase();
+  if (!q) { renderRows(buyers); return; }
+  renderRows(buyers.filter(b =>
+    b.firmName?.toLowerCase().includes(q) || b.phone?.includes(q) ||
+    b.city?.toLowerCase().includes(q) || b.contactPerson?.toLowerCase().includes(q) || b.email?.toLowerCase().includes(q)
+  ));
+}
+
+function splitPhone(full){
+  full = (full || '').trim();
+  const m = full.match(/^(\+\d{1,4})\s*(.*)$/);
+  return m ? { cc: m[1], num: m[2] } : { cc: '+91', num: full };
+}
+
+function editBuyer(id){
+  const b = buyers.find(x => x.id === id);
+  if (!b) return;
+  editingId = id;
+  document.getElementById('formTitle').textContent = `Editing ${b.firmName}`;
+  document.getElementById('fFirmName').value = b.firmName || '';
+  document.getElementById('fContactPerson').value = b.contactPerson || '';
+  const { cc, num } = splitPhone(b.phone);
+  document.getElementById('fPhoneCC').value = cc;
+  document.getElementById('fPhone').value = num;
+  document.getElementById('fCity').value = b.city || '';
+  document.getElementById('fEmail').value = b.email || '';
+  document.getElementById('saveBtn').textContent = 'Save changes';
+  document.getElementById('cancelEditBtn').style.display = 'inline-block';
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+}
+function resetForm(){
+  editingId = null;
+  document.getElementById('formTitle').textContent = 'Add buyer';
+  document.getElementById('fFirmName').value = '';
+  document.getElementById('fContactPerson').value = '';
+  document.getElementById('fPhoneCC').value = '+91';
+  document.getElementById('fPhone').value = '';
+  document.getElementById('fCity').value = '';
+  document.getElementById('fEmail').value = '';
+  document.getElementById('saveBtn').textContent = 'Add buyer';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+  document.getElementById('formErr').style.display = 'none';
+}
+async function saveBuyer(){
+  const err = document.getElementById('formErr'); err.style.display = 'none';
+  const body = {
+    firmName: document.getElementById('fFirmName').value.trim(),
+    contactPerson: document.getElementById('fContactPerson').value.trim(),
+    phone: document.getElementById('fPhoneCC').value.trim() + document.getElementById('fPhone').value.trim(),
+    city: document.getElementById('fCity').value.trim(),
+    email: document.getElementById('fEmail').value.trim(),
+  };
+  if (!body.firmName || !document.getElementById('fPhone').value.trim()) {
+    err.textContent = 'Firm name and phone are required'; err.style.display = 'block';
+    return;
+  }
+  try {
+    if (editingId) await EXO.apiFetch('/parties/' + editingId, { method: 'PUT', body: JSON.stringify(body) });
+    else await EXO.apiFetch('/parties', { method: 'POST', body: JSON.stringify(body) });
+    EXO.toast(editingId ? 'Buyer updated' : 'Buyer added');
+    resetForm();
+    load();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; EXO.toast('Save failed — see error above', 'error'); }
+}
+async function deleteBuyer(id, name){
+  if (!confirm(`Delete buyer "${name}"? Their past orders are unaffected, but this contact will be gone. This cannot be undone.`)) return;
+  try {
+    await EXO.apiFetch('/parties/' + id, { method: 'DELETE' });
+    EXO.toast('Buyer deleted');
+    if (editingId === id) resetForm();
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+load();
+</script>

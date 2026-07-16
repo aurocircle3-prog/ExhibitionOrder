@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.19.1';
-const BUILD_TIME   = '2026-07-15T14:00:00Z';
+const APP_VERSION  = '1.20.0';
+const BUILD_TIME   = '2026-07-16T06:50:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -185,7 +185,7 @@ const itemSchema = new mongoose.Schema({
 
 const partySchema = new mongoose.Schema({
   id: String, tenantId: String,
-  firmName: String, contactPerson: String, phone: String, email: String,
+  firmName: String, contactPerson: String, phone: String, email: String, city: String,
   cardImageUrl: String,
   source: { type: String, default: 'manual' }, // manual | scanned
   createdAt: { type: String, default: () => new Date().toISOString() },
@@ -1744,22 +1744,51 @@ app.post('/api/parties/scan-card', resolveTenant, auth, requireRole('admin', 'st
 });
 
 app.post('/api/parties', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const { firmName, contactPerson, phone, email, cardImageUrl, source } = req.body;
+  const { firmName, contactPerson, phone, email, city, cardImageUrl, source } = req.body;
   if (!firmName || !phone) return res.status(400).json({ error: 'Firm name and phone are required' });
+  // Phone is the unique key for a buyer — if this number is already on file
+  // (from a past exhibition, or scanned again this year), update that
+  // existing record with whatever's freshest rather than creating a
+  // duplicate entry for the same person.
+  const existing = await PartyDB.findOne({ tenantId: req.tenant.id, phone });
+  if (existing) {
+    const updates = { firmName, contactPerson: contactPerson || '', email: email || '', city: city || '' };
+    if (cardImageUrl) updates.cardImageUrl = cardImageUrl;
+    await PartyDB.update({ id: existing.id }, updates);
+    return res.json({ ...existing, ...updates });
+  }
   const party = {
     id: uuid(), tenantId: req.tenant.id, firmName, contactPerson: contactPerson || '',
-    phone, email: email || '', cardImageUrl: cardImageUrl || '',
+    phone, email: email || '', city: city || '', cardImageUrl: cardImageUrl || '',
     source: source === 'scanned' ? 'scanned' : 'manual', createdAt: new Date().toISOString(),
   };
   await PartyDB.create(party);
   res.json(party);
+});
+app.put('/api/parties/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const party = await PartyDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!party) return res.status(404).json({ error: 'Buyer not found' });
+  const { firmName, contactPerson, phone, email, city } = req.body;
+  if (!firmName || !phone) return res.status(400).json({ error: 'Firm name and phone are required' });
+  if (phone !== party.phone) {
+    const clash = await PartyDB.findOne({ tenantId: req.tenant.id, phone });
+    if (clash) return res.status(400).json({ error: 'Another buyer already uses that phone number' });
+  }
+  const updates = { firmName, contactPerson: contactPerson || '', phone, email: email || '', city: city || '' };
+  await PartyDB.update({ id: req.params.id }, updates);
+  res.json({ ok: true });
+});
+app.delete('/api/parties/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  await PartyDB.remove({ id: req.params.id, tenantId: req.tenant.id });
+  logAudit(req, 'party.delete', 'party', req.params.id);
+  res.json({ ok: true });
 });
 
 app.get('/api/parties', resolveTenant, auth, async (req, res) => {
   let parties = await PartyDB.find({ tenantId: req.tenant.id });
   if (req.query.q) {
     const needle = String(req.query.q).toLowerCase();
-    parties = parties.filter(p => p.firmName?.toLowerCase().includes(needle) || p.phone?.includes(needle));
+    parties = parties.filter(p => p.firmName?.toLowerCase().includes(needle) || p.phone?.includes(needle) || p.city?.toLowerCase().includes(needle) || p.contactPerson?.toLowerCase().includes(needle));
   }
   res.json(parties);
 });

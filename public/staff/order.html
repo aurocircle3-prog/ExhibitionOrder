@@ -72,6 +72,7 @@
               <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
             </div>
           </div>
+          <div><label>City</label><input id="city"></div>
           <div><label>Email <span class="muted">(optional)</span></label><input id="email"></div>
         </div>
         <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, createParty)">Use this buyer</button>
@@ -414,6 +415,7 @@ async function createParty(){
     firmName: document.getElementById('firmName').value.trim(),
     contactPerson: document.getElementById('contactPerson').value.trim(),
     phone: phoneNum ? document.getElementById('phoneCC').value.trim() + phoneNum : '',
+    city: document.getElementById('city').value.trim(),
     email: document.getElementById('email').value.trim(),
     cardImageUrl, source: cardImageUrl ? 'scanned' : 'manual',
   };

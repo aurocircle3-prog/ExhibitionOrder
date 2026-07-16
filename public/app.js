@@ -58,6 +58,7 @@
       { key: 'order', href: '/staff/order.html', label: 'Take Order' },
       { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
       { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
+      { key: 'buyers', href: '/admin/buyers.html', label: 'Buyers' },
       { key: 'staff', href: '/admin/staff.html', label: 'Staff' },
       { key: 'reports', href: '/admin/reports.html', label: 'Reports' },
       { key: 'settings', href: '/admin/settings.html', label: 'Settings' },
