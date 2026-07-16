@@ -99,7 +99,7 @@ function renderImageSlider(images, size){
     <button onclick="stepSlider(${sliderId},1,event)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:1;cursor:pointer;padding:0">›</button>` : '';
   return `
     <div class="img-slider" data-slider-id="${sliderId}" data-index="0" style="position:relative;display:inline-block">
-      <img src="${images[0]}" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
+      <img src="${images[0]}" style="max-width:${size}px;max-height:${size}px;width:auto;height:auto;object-fit:contain;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
       ${arrows}
     </div>
     ${images.length > 1 ? `<div class="muted" style="font-size:11px;text-align:center;margin-top:2px" id="slider-count-${sliderId}">1 of ${images.length}</div>` : ''}`;
