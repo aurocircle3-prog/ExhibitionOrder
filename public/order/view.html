@@ -262,6 +262,12 @@ function getColumnValue(col, item, order, extraFields, rowIndex){
     try {
       const scope = { qty: Number(item.qty) || 0 };
       extraFields.forEach(f => { scope[f.key] = Number(item.extra?.[f.key]) || 0; });
+      // Order Detail fields are one value per order, not per item — same
+      // value broadcasts into every row's formula (e.g. a Wastage % set
+      // once for the whole order, used to compute each item's fine weight).
+      Object.entries(order.customFields || {}).forEach(([key, val]) => {
+        if (!(key in scope) && val !== '' && val !== undefined && !isNaN(Number(val))) scope[key] = Number(val);
+      });
       const result = math.evaluate(preprocessPercent(col.formula), scope);
       return typeof result === 'number' ? (Number.isInteger(result) ? String(result) : result.toFixed(2)) : String(result);
     } catch (e) { return '—'; }

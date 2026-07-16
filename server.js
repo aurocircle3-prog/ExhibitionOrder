@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.24.0';
-const BUILD_TIME   = '2026-07-16T11:00:00Z';
+const APP_VERSION  = '1.25.0';
+const BUILD_TIME   = '2026-07-16T11:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1249,11 +1249,17 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
   const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const fieldByKey = {}; fieldDefs.forEach(f => { fieldByKey[f.key] = f; });
   const allowedFieldKeys = new Set(fieldDefs.map(f => f.key));
-  // Formulas can only meaningfully use numeric fields — a text field like
-  // "Category" can't be multiplied.
-  const allowedFormulaNames = new Set([...fieldDefs.filter(f => f.type === 'number').map(f => f.key), 'qty']);
   const orderCustomFields = tenant.orderCustomFields || [];
   const allowedOrderFieldKeys = new Set(orderCustomFields.map(f => f.key));
+  // Formulas can only meaningfully use numeric fields — a text field like
+  // "Category" can't be multiplied. Numeric Order Detail fields (one value
+  // per order, e.g. a Wastage % set once) are just as valid to use as Item
+  // Master fields — the same value just applies across every row's formula.
+  const allowedFormulaNames = new Set([
+    ...fieldDefs.filter(f => f.type === 'number').map(f => f.key),
+    ...orderCustomFields.filter(f => f.type === 'number').map(f => f.key),
+    'qty',
+  ]);
   const totalableKeys = new Set(orderFields.filter(f => f.showTotal).map(f => f.key));
 
   const columns = [];
