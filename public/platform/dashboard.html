@@ -194,9 +194,10 @@
           <input type="checkbox" id="detailShowImages" style="width:auto"> <span>Show item photos on the order link</span>
         </label>
         <div class="table-scroll"><table>
-          <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
+          <thead><tr><th>Field</th><th>Show on order</th></tr></thead>
           <tbody id="detailOrderFieldRows"></tbody>
         </table></div>
+        <p class="muted" style="margin-top:8px">Want a total shown for a field (or a formula)? Turn on "Show total" on that column in Order View Layout instead — works for formulas too, not just plain fields.</p>
         <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveDetailOrderFields)">Save order form</button>
       </div>
 
@@ -696,19 +697,12 @@ function renderDetailOrderFieldRows(){
     <tr>
       <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" class="dof-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
-      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="dof-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''} onchange="if(this.checked) document.querySelector('.dof-show[data-key=\\'${f.key}\\']').checked = true">` : ''}</td>
-    </tr>`).join('') || '<tr><td colspan="3" class="muted">Add Item Master fields first</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="2" class="muted">Add Item Master fields first</td></tr>';
 }
 async function saveDetailOrderFields(){
   const err = document.getElementById('fieldErr'); err.style.display='none';
-  const keysToShow = new Set([
-    ...Array.from(document.querySelectorAll('.dof-show')).filter(el => el.checked).map(el => el.dataset.key),
-    ...Array.from(document.querySelectorAll('.dof-total')).filter(el => el.checked).map(el => el.dataset.key), // showing a total implies showing the field
-  ]);
-  const orderFields = Array.from(keysToShow).map(key => {
-    const totalEl = document.querySelector(`.dof-total[data-key="${key}"]`);
-    return { key, showTotal: totalEl ? totalEl.checked : false };
-  });
+  const keysToShow = new Set(Array.from(document.querySelectorAll('.dof-show')).filter(el => el.checked).map(el => el.dataset.key));
+  const orderFields = Array.from(keysToShow).map(key => ({ key }));
   const showImages = document.getElementById('detailShowImages').checked;
   try {
     await platformFetch(`/tenants/${lastTenantId}/order-fields`, { method:'PUT', body: JSON.stringify({ orderFields, showImages }) });
@@ -722,6 +716,12 @@ let detailCustomFields = [], detailOrderFieldDefs = [];
 function addDetailCustomField(){ detailCustomFields.push({ label: '', type: 'text', decimals: 2 }); renderDetailCustomFields(); }
 function removeDetailCustomFieldAt(i){ detailCustomFields.splice(i, 1); renderDetailCustomFields(); }
 function updateDetailCustomFieldAt(i, key, value){ detailCustomFields[i][key] = value; if (key === 'type') renderDetailCustomFields(); }
+function moveDetailCustomField(i, direction){
+  const j = i + direction;
+  if (j < 0 || j >= detailCustomFields.length) return;
+  [detailCustomFields[i], detailCustomFields[j]] = [detailCustomFields[j], detailCustomFields[i]];
+  renderDetailCustomFields();
+}
 function renderDetailCustomFields(){
   document.getElementById('detailCustomFieldRows').innerHTML = detailCustomFields.map((f, i) => `
     <div class="grid cols-3" style="margin-top:${i===0?0:10}px;align-items:end">
@@ -735,8 +735,12 @@ function renderDetailCustomFields(){
       </div>
       ${f.type === 'number'
         ? `<div><label>Decimal places</label><input type="number" min="0" max="6" value="${f.decimals ?? 2}" oninput="updateDetailCustomFieldAt(${i},'decimals',this.value)"></div>`
-        : `<div><button class="danger small" onclick="removeDetailCustomFieldAt(${i})">Remove</button></div>`}
-      ${f.type === 'number' ? `<div style="grid-column:1/-1"><button class="danger small" onclick="removeDetailCustomFieldAt(${i})">Remove</button></div>` : ''}
+        : `<div></div>`}
+      <div style="grid-column:1/-1" class="btn-row">
+        <button class="ghost small" onclick="moveDetailCustomField(${i},-1)" ${i===0?'disabled':''}>↑ Move up</button>
+        <button class="ghost small" onclick="moveDetailCustomField(${i},1)" ${i===detailCustomFields.length-1?'disabled':''}>↓ Move down</button>
+        <button class="danger small" onclick="removeDetailCustomFieldAt(${i})">Remove</button>
+      </div>
     </div>`).join('') || '<p class="muted">No order details fields yet.</p>';
 }
 async function saveDetailCustomFields(){
@@ -767,7 +771,7 @@ function removeDetailFieldListEntry(which, id){
   renderDetailFieldListEntries(which);
 }
 function updateDetailFieldListEntry(which, id, key, value){
-  const totalableFields = detailOrderFieldsSaved.filter(f => f.showTotal);
+  const totalableFields = detailColumns.filter(c => c.showTotal).map(c => ({ key: c._id, label: c.label || (c.type === 'formula' ? 'Amount' : (detailFields.find(f=>f.key===c.fieldKey)?.label || 'Field')) }));
   const entry = detailFieldListState(which).find(f => f._id === id);
   if (!entry) return;
   entry[key] = value;
@@ -777,7 +781,7 @@ function updateDetailFieldListEntry(which, id, key, value){
   }
 }
 function renderDetailFieldListEntries(which){
-  const totalableFields = detailOrderFieldsSaved.filter(f => f.showTotal);
+  const totalableFields = detailColumns.filter(c => c.showTotal).map(c => ({ key: c._id, label: c.label || (c.type === 'formula' ? 'Amount' : (detailFields.find(f=>f.key===c.fieldKey)?.label || 'Field')) }));
   const list = detailFieldListState(which);
   const container = document.getElementById(which === 'header' ? 'layoutDetailHeaderFieldRows' : 'layoutDetailFooterFieldRows');
   container.innerHTML = list.map(f => `
@@ -793,7 +797,7 @@ function renderDetailFieldListEntries(which){
         <label>${f.type === 'total' ? 'Which total' : 'Which order detail field'}</label>
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
-            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" for a field in Order Form first —</option>')
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
             : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>
@@ -888,6 +892,10 @@ function renderDetailColumns(){
           <input placeholder="price * qty" value="${c.formula||''}" oninput="updateDetailColumn('${c._id}','formula',this.value)">
           ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
         </div>` : ''}
+      ${(c.type === 'formula' || (c.type === 'field' && detailFields.find(f=>f.key===c.fieldKey)?.type === 'number')) ? `
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400">
+          <input type="checkbox" style="width:auto" ${c.showTotal?'checked':''} onchange="updateDetailColumn('${c._id}','showTotal',this.checked)"> <span class="muted" style="font-weight:400">Show total for this column — adds up the value across every row</span>
+        </label>` : ''}
       <div class="btn-row" style="margin-top:10px">
         <button class="ghost small" onclick="moveDetailColumn('${c._id}',-1)" ${i===0?'disabled':''}>↑</button>
         <button class="ghost small" onclick="moveDetailColumn('${c._id}',1)" ${i===detailColumns.length-1?'disabled':''}>↓</button>
@@ -902,7 +910,7 @@ async function saveDetailColumns(){
     if (c.type === 'formula' && validateDetailFormula(c.formula || '')) { err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`; err.style.display = 'block'; return; }
     if ((c.type === 'field' || c.type === 'orderfield') && !c.fieldKey) { err.textContent = `Every ${c.type === 'field' ? 'Field' : 'Order detail'} column needs a field selected`; err.style.display = 'block'; return; }
   }
-  const payload = detailColumns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
+  const payload = detailColumns.map(c => ({ id: c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula, showTotal: c.showTotal }));
   try {
     await platformFetch(`/tenants/${lastTenantId}/order-view-columns`, {
       method: 'PUT',

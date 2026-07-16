@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.25.0';
-const BUILD_TIME   = '2026-07-16T11:30:00Z';
+const APP_VERSION  = '1.26.0';
+const BUILD_TIME   = '2026-07-16T12:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1260,7 +1260,6 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
     ...orderCustomFields.filter(f => f.type === 'number').map(f => f.key),
     'qty',
   ]);
-  const totalableKeys = new Set(orderFields.filter(f => f.showTotal).map(f => f.key));
 
   const columns = [];
   for (const raw of (Array.isArray(list) ? list : [])) {
@@ -1280,6 +1279,7 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
       col.unit = f.unit || ''; // stored directly so the public order view never needs to re-look-up field metadata
       col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+      if (f.type === 'number') col.showTotal = !!raw.showTotal;
     } else if (raw.type === 'orderfield') {
       if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
       const f = orderCustomFields.find(x => x.key === raw.fieldKey);
@@ -1292,6 +1292,7 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
       if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
       col.formula = formula;
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+      col.showTotal = !!raw.showTotal;
     } else if (raw.type === 'images') {
       col.label = (raw.label || 'Photo').trim().slice(0, 60) || 'Photo';
     } else if (raw.type === 'remark') {
@@ -1308,9 +1309,10 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
 
   // Header/footer "fields" — order-level info shown above/below the item
   // table, e.g. a PO Number above, a Total Weight below. Each is either an
-  // Order Details field or one of the totals already being computed for a
-  // "showTotal" Order Form field — deliberately not free text, so this
-  // stays structured data rather than a loose text box.
+  // Order Details field, or a "total" referencing one of THIS SAME save's
+  // columns that has showTotal on — by column id, not field key, since a
+  // formula column doesn't have a field key of its own to point at.
+  const totalableColumns = columns.filter(c => c.showTotal);
   function validateFieldList(list) {
     const out = [];
     for (const raw of (Array.isArray(list) ? list : [])) {
@@ -1319,10 +1321,10 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
         if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
         const f = orderCustomFields.find(x => x.key === raw.fieldKey);
         out.push({ type: 'orderfield', fieldKey: raw.fieldKey, label: (raw.label || f.label || '').trim().slice(0, 60) || f.label });
-      } else { // total
-        if (!totalableKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't a field with "Show total" turned on — enable that on the Order Form first`), { status: 400 });
-        const f = orderFields.find(x => x.key === raw.fieldKey);
-        out.push({ type: 'total', fieldKey: raw.fieldKey, label: (raw.label || `Total ${f.label}`).trim().slice(0, 60) || `Total ${f.label}` });
+      } else { // total — fieldKey here means "column id"
+        const col = totalableColumns.find(c => c.id === raw.fieldKey);
+        if (!col) throw Object.assign(new Error(`That column isn't marked "Show total" — turn that on for a column in Order View Layout first`), { status: 400 });
+        out.push({ type: 'total', fieldKey: raw.fieldKey, label: (raw.label || `Total ${col.label}`).trim().slice(0, 60) || `Total ${col.label}` });
       }
     }
     return out;
@@ -2184,15 +2186,20 @@ app.get('/api/orders/public/:token', async (req, res) => {
   // same way it formats every other number). Entries with no value for this
   // particular order are dropped rather than shown blank.
   function resolveFieldList(specs) {
-    return (specs || []).map(spec => {
-      if (spec.type === 'orderfield') {
-        const val = order.customFields?.[spec.fieldKey];
-        return { label: spec.label, value: val ?? '' };
-      }
-      const val = order.fieldTotals?.[spec.fieldKey];
-      const meta = (order.orderFieldsSnapshot || []).find(f => f.key === spec.fieldKey);
-      return { label: spec.label, value: val ?? '', unit: meta?.unit, decimals: meta?.decimals };
-    }).filter(f => f.value !== '' && f.value !== undefined && f.value !== null);
+    return (specs || [])
+      .map(spec => {
+        if (spec.type === 'orderfield') {
+          const val = order.customFields?.[spec.fieldKey];
+          return { type: 'orderfield', label: spec.label, value: val ?? '' };
+        }
+        // "total" — fieldKey is a column id, and the value may come from a
+        // formula column, which only evaluates client-side (same as every
+        // other formula column in the table) — so this is left unresolved
+        // here, and the client fills in the actual number once it's
+        // computed the same totals it uses for the main table.
+        return { type: 'total', label: spec.label, columnId: spec.fieldKey };
+      })
+      .filter(f => f.type === 'total' || (f.value !== '' && f.value !== undefined && f.value !== null));
   }
   const viewHeaderFields = resolveFieldList(tenant?.orderViewHeaderFields);
   const viewFooterFields = resolveFieldList(tenant?.orderViewFooterFields);

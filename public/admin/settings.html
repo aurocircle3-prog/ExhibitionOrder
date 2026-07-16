@@ -33,10 +33,10 @@
         <input type="checkbox" id="showImages" style="width:auto"> <span>Show item photos on the order link</span>
       </label>
       <div class="table-scroll"><table>
-        <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
+        <thead><tr><th>Field</th><th>Show on order</th></tr></thead>
         <tbody id="orderFieldRows"></tbody>
       </table></div>
-      <p class="muted" style="margin-top:8px">"Show total" adds up that field's value × quantity across the whole order (e.g. total weight) — only makes sense for number fields.</p>
+      <p class="muted" style="margin-top:8px">Want a total shown for a field (or a formula)? Turn on "Show total" on that column in Order View Layout instead — that works for formulas too, not just plain fields.</p>
       <button class="primary" onclick="EXO.busy(this, saveOrderFields)">Save order form</button>
     </div>
   </div>
@@ -175,30 +175,24 @@ async function loadOrderFields(saved){
   const fields = await EXO.apiFetch('/fields');
   const savedByKey = {};
   saved.forEach(f => { savedByKey[f.key] = f; });
-  totalableFields = saved.filter(f => f.showTotal);
   document.getElementById('orderFieldRows').innerHTML = fields.map(f => `
     <tr>
       <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
-      <td>${f.type === 'number' ? `<input type="checkbox" data-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''} onchange="if(this.checked) document.querySelector('.of-show[data-key=\\'${f.key}\\']').checked = true">` : ''}</td>
     </tr>`).join('');
   // Field/Formula columns in Order View Layout can reference ANY active
   // Item Master field (fixed or custom) — not just ones on the Order Form.
-  // Order Form only controls what's staff-editable per line and totaled;
-  // every field's value is snapshotted onto every order line regardless
-  // (see buildOrderLines server-side), so any of them can be displayed.
+  // Order Form only controls what's staff-editable per line; every field's
+  // value is snapshotted onto every order line regardless (see
+  // buildOrderLines server-side), so any of them can be displayed.
   availableFields = fields.map(f => ({ key: f.key, label: f.label, type: f.type, unit: f.unit }));
 }
 async function saveOrderFields(){
   const err = document.getElementById('err'); err.style.display='none';
-  const keysToShow = new Set([
-    ...Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => el.dataset.key),
-    ...Array.from(document.querySelectorAll('.of-total')).filter(el => el.checked).map(el => el.dataset.key), // showing a total implies showing the field
-  ]);
+  const keysToShow = new Set(Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => el.dataset.key));
   const orderFields = Array.from(keysToShow).map(key => {
     const showEl = document.querySelector(`.of-show[data-key="${key}"]`);
-    const totalEl = document.querySelector(`.of-total[data-key="${key}"]`);
-    return { key, label: showEl.dataset.label, showTotal: totalEl ? totalEl.checked : false };
+    return { key, label: showEl.dataset.label };
   });
   const showImages = document.getElementById('showImages').checked;
   try {
@@ -217,6 +211,12 @@ function addCustomField(){
 }
 function removeCustomFieldAt(i){ customFields.splice(i, 1); renderCustomFields(); }
 function updateCustomFieldAt(i, key, value){ customFields[i][key] = value; if (key === 'type') renderCustomFields(); }
+function moveCustomField(i, direction){
+  const j = i + direction;
+  if (j < 0 || j >= customFields.length) return;
+  [customFields[i], customFields[j]] = [customFields[j], customFields[i]];
+  renderCustomFields();
+}
 function renderCustomFields(){
   document.getElementById('customFieldRows').innerHTML = customFields.map((f, i) => `
     <div class="grid cols-3" style="margin-top:${i===0?0:10}px;align-items:end">
@@ -230,8 +230,12 @@ function renderCustomFields(){
       </div>
       ${f.type === 'number'
         ? `<div><label>Decimal places</label><input type="number" min="0" max="6" value="${f.decimals ?? 2}" oninput="updateCustomFieldAt(${i},'decimals',this.value)"></div>`
-        : `<div><button class="danger small" onclick="removeCustomFieldAt(${i})">Remove</button></div>`}
-      ${f.type === 'number' ? `<div style="grid-column:1/-1"><button class="danger small" onclick="removeCustomFieldAt(${i})">Remove</button></div>` : ''}
+        : `<div></div>`}
+      <div style="grid-column:1/-1" class="btn-row">
+        <button class="ghost small" onclick="moveCustomField(${i},-1)" ${i===0?'disabled':''}>↑ Move up</button>
+        <button class="ghost small" onclick="moveCustomField(${i},1)" ${i===customFields.length-1?'disabled':''}>↓ Move down</button>
+        <button class="danger small" onclick="removeCustomFieldAt(${i})">Remove</button>
+      </div>
     </div>`).join('') || '<p class="muted">No order details fields yet.</p>';
 }
 async function saveCustomFields(){
@@ -393,6 +397,10 @@ function renderColumns(){
           <input placeholder="price * qty" value="${c.formula||''}" oninput="updateColumn('${c._id}','formula',this.value)">
           ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
         </div>` : ''}
+      ${(c.type === 'formula' || (c.type === 'field' && availableFields.find(f=>f.key===c.fieldKey)?.type === 'number')) ? `
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400">
+          <input type="checkbox" style="width:auto" ${c.showTotal?'checked':''} onchange="updateColumn('${c._id}','showTotal',this.checked)"> <span class="muted" style="font-weight:400">Show total for this column — adds up the value across every row</span>
+        </label>` : ''}
       <div class="btn-row" style="margin-top:10px">
         <button class="ghost small" onclick="moveColumn('${c._id}',-1)" ${i===0?'disabled':''}>↑</button>
         <button class="ghost small" onclick="moveColumn('${c._id}',1)" ${i===columns.length-1?'disabled':''}>↓</button>
@@ -400,6 +408,9 @@ function renderColumns(){
       </div>
     </div>`;
   }).join('') || '<p class="muted">No custom columns yet — using the default layout.</p>';
+  // Kept in sync with the columns themselves — the header/footer "Total"
+  // field type picks from whichever columns currently have this on.
+  totalableFields = columns.filter(c => c.showTotal).map(c => ({ key: c._id, label: c.label || (c.type === 'formula' ? 'Amount' : (availableFields.find(f=>f.key===c.fieldKey)?.label || 'Field')) }));
 }
 async function saveColumns(){
   const err = document.getElementById('colErr'); err.style.display = 'none';
@@ -417,7 +428,7 @@ async function saveColumns(){
       return;
     }
   }
-  const payload = columns.map(c => ({ id: c._isNew ? undefined : c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula }));
+  const payload = columns.map(c => ({ id: c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula, showTotal: c.showTotal }));
   try {
     await EXO.apiFetch('/companies/order-view-columns', {
       method: 'PUT',

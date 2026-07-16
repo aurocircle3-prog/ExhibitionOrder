@@ -214,10 +214,23 @@ async function load(){
     const hasRemarks = order.items.some(i => i.comment);
     allMobileCardsHtml = renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages);
 
-    const fieldTotalRows = Object.entries(order.fieldTotals || {}).map(([key, val]) => {
-      const f = extraFields.find(x => x.key === key);
-      return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${fmt(val, f?.unit, f?.decimals)}</span></div>`;
-    }).join('');
+    const columnTotals = computeColumnTotals(order, isDynamic);
+    const fieldTotalRows = columnTotals.map(t =>
+      `<div class="cart-row" style="border-bottom:none"><span class="muted">${t.label}</span><span>${fmt(t.value, t.unit, t.decimals)}</span></div>`
+    ).join('');
+    // "Total" type header/footer fields were sent unresolved (just a label
+    // + which column) — fill in the actual number from the totals just
+    // computed above, so a formula-based total works there too, same as
+    // in the main totals block.
+    const resolveTotalFields = list => (list || [])
+      .map(f => {
+        if (f.type !== 'total') return f;
+        const match = columnTotals.find(t => t.columnId === f.columnId);
+        return match ? { label: f.label, ...match } : { label: f.label, value: undefined };
+      })
+      .filter(f => f.value !== '' && f.value !== undefined && f.value !== null);
+    const resolvedHeaderFields = resolveTotalFields(viewHeaderFields);
+    const resolvedFooterFields = resolveTotalFields(viewFooterFields);
 
     const buyerFields = [
       { label: 'Buyer', value: order.partyName },
@@ -231,7 +244,7 @@ async function load(){
         <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
-        ${viewHeaderFields?.length ? `<div style="margin-bottom:14px">${renderFieldList(viewHeaderFields)}</div>` : ''}
+        ${resolvedHeaderFields.length ? `<div style="margin-bottom:14px">${renderFieldList(resolvedHeaderFields)}</div>` : ''}
         <div class="table-scroll desktop-order-view"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
           <tbody id="orderRowsBody"></tbody>
@@ -241,7 +254,7 @@ async function load(){
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
       </div>
-      ${renderFooter(company, viewFooterFields)}`;
+      ${renderFooter(company, resolvedFooterFields)}`;
     renderTablePage();
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
@@ -251,6 +264,32 @@ async function load(){
 // Shared by the desktop table and the mobile card view below — one place
 // that knows how to turn any column type into its display value, so
 // formula evaluation (the trickiest part) never has to be duplicated.
+// Returns the raw NUMBER behind a field/formula/qty column for one row, or
+// null if it isn't numeric/computable — used both to format a single
+// cell's display value and to sum up a column's total across every row,
+// so the totals always match exactly what each row actually shows.
+function getNumericColumnValue(col, item, order, rowIndex){
+  if (col.type === 'qty') return Number(item.qty) || 0;
+  if (col.type === 'field') {
+    const raw = item.extra?.[col.fieldKey];
+    return (raw !== '' && raw !== undefined && raw !== null && !isNaN(Number(raw))) ? Number(raw) : null;
+  }
+  if (col.type === 'formula') {
+    try {
+      const scope = { qty: Number(item.qty) || 0 };
+      Object.entries(item.extra || {}).forEach(([key, val]) => {
+        if (val !== '' && val !== undefined && val !== null && !isNaN(Number(val))) scope[key] = Number(val);
+      });
+      Object.entries(order.customFields || {}).forEach(([key, val]) => {
+        if (!(key in scope) && val !== '' && val !== undefined && !isNaN(Number(val))) scope[key] = Number(val);
+      });
+      const result = math.evaluate(preprocessPercent(col.formula), scope);
+      return typeof result === 'number' ? result : null;
+    } catch (e) { return null; }
+  }
+  return null;
+}
+
 function getColumnValue(col, item, order, extraFields, rowIndex){
   if (col.type === 'serial') return String(rowIndex + 1);
   if (col.type === 'field') return fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals);
@@ -259,20 +298,37 @@ function getColumnValue(col, item, order, extraFields, rowIndex){
   if (col.type === 'itemcode') return item.scannerCode || '';
   if (col.type === 'qty') return String(item.qty);
   if (col.type === 'formula') {
-    try {
-      const scope = { qty: Number(item.qty) || 0 };
-      extraFields.forEach(f => { scope[f.key] = Number(item.extra?.[f.key]) || 0; });
-      // Order Detail fields are one value per order, not per item — same
-      // value broadcasts into every row's formula (e.g. a Wastage % set
-      // once for the whole order, used to compute each item's fine weight).
-      Object.entries(order.customFields || {}).forEach(([key, val]) => {
-        if (!(key in scope) && val !== '' && val !== undefined && !isNaN(Number(val))) scope[key] = Number(val);
-      });
-      const result = math.evaluate(preprocessPercent(col.formula), scope);
-      return typeof result === 'number' ? (Number.isInteger(result) ? String(result) : result.toFixed(2)) : String(result);
-    } catch (e) { return '—'; }
+    const result = getNumericColumnValue(col, item, order, rowIndex);
+    if (result === null) return '—';
+    return Number.isInteger(result) ? String(result) : result.toFixed(2);
   }
   return '';
+}
+
+// Totals — one entry per column marked "Show total", summed across every
+// row using the exact same numeric logic each row's own cell uses. Works
+// for both plain Field columns and Formula columns, unlike the old
+// mechanism which only ever worked for a checkbox on the Order Form.
+function computeColumnTotals(order, isDynamic){
+  const extraFields = order.orderFieldsSnapshot || [];
+  if (!isDynamic) {
+    // Legacy layout (no custom columns configured) — falls back to
+    // whatever was computed server-side at order creation, for orders
+    // placed before this became a per-column, formula-aware setting.
+    return Object.entries(order.fieldTotals || {}).map(([key, val]) => {
+      const f = extraFields.find(x => x.key === key);
+      return { columnId: key, label: `Total ${f ? f.label : key}`, value: val, unit: f?.unit, decimals: f?.decimals };
+    });
+  }
+  return (order.columnsSnapshot || []).filter(c => c.showTotal).map(col => {
+    let sum = 0;
+    order.items.forEach((item, idx) => {
+      const num = getNumericColumnValue(col, item, order, idx);
+      if (num !== null) sum += num;
+    });
+    const decimals = col.decimals ?? 2;
+    return { columnId: col.id, label: `Total ${col.label}`, value: Number(sum.toFixed(decimals)), unit: col.unit, decimals: col.decimals };
+  });
 }
 
 // Mobile view — a wide table with many columns just becomes a horizontally
