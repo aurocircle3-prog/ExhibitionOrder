@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.20.0';
-const BUILD_TIME   = '2026-07-16T06:50:00Z';
+const APP_VERSION  = '1.21.0';
+const BUILD_TIME   = '2026-07-16T07:05:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1391,7 +1391,9 @@ app.get('/api/items', resolveTenant, auth, async (req, res) => {
 
 app.get('/api/items/scan/:code', resolveTenant, auth, async (req, res) => {
   const code = String(req.params.code).trim().toUpperCase();
-  const item = await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode: code, active: true });
+  const q = { tenantId: req.tenant.id, scannerCode: code, active: true };
+  if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
+  const item = await ItemDB.findOne(q);
   if (!item) return res.status(404).json({ error: `No item found for code "${req.params.code}"` });
   res.json(item);
 });
@@ -1417,8 +1419,13 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   const requiredErr = validateRequiredFields(fieldDefs, fields);
   if (requiredErr) return res.status(400).json({ error: requiredErr });
   const scannerCode = scannerCodeOf(fields);
-  if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode, active: true }))
-    return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists` });
+  // Scoped to exhibition, not just tenant — two different exhibitions'
+  // catalogs are independent, so the same code can exist in each. Items
+  // with no exhibition yet (exhibitionId === '') all share one bucket,
+  // which is exactly today's tenant-wide behavior — nothing changes until
+  // items actually start getting assigned to real exhibitions.
+  if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId: exhibitionId || '', scannerCode, active: true }))
+    return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists${exhibitionId ? ' in this exhibition' : ''}` });
   const imageCode = String(fields.imageCode || '').trim();
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
@@ -1639,6 +1646,10 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
       fs.unlink(req.file.path, () => {});
+      // A whole file imports into one exhibition at a time — there's no
+      // natural per-row place to specify it in a spreadsheet. Defaults to
+      // the same blank bucket every item already uses if not provided.
+      const exhibitionId = req.body.exhibitionId || req.query.exhibitionId || '';
 
       const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
       const labelToKey = {};
@@ -1656,12 +1667,12 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         const scannerCode = scannerField ? String(fields[scannerField.key] || '').trim() : '';
         if (!scannerCode) { skipped++; continue; }
         if (validateRequiredFields(fieldDefs, fields)) { skipped++; continue; }
-        const existing = await ItemDB.findOne({ tenantId: req.tenant.id, scannerCode, active: true });
+        const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
         if (existing) {
           await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields } });
           updated++;
         } else {
-          await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId: '', scannerCode, fields, images: [], active: true, createdAt: new Date().toISOString() });
+          await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, images: [], active: true, createdAt: new Date().toISOString() });
           created++;
         }
       }
@@ -1782,6 +1793,63 @@ app.delete('/api/parties/:id', resolveTenant, auth, requireRole('admin'), async 
   await PartyDB.remove({ id: req.params.id, tenantId: req.tenant.id });
   logAudit(req, 'party.delete', 'party', req.params.id);
   res.json({ ok: true });
+});
+
+const PARTY_EXCEL_HEADERS = ['Firm Name', 'Contact Person', 'Phone', 'City', 'Email'];
+app.get('/api/parties/template/excel', resolveTenant, auth, async (req, res) => {
+  try {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([PARTY_EXCEL_HEADERS]);
+    ws['!cols'] = PARTY_EXCEL_HEADERS.map(() => ({ wch: 20 }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Buyers');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', 'attachment; filename="Buyers_Template.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/parties/import/excel', resolveTenant, auth, requireRole('admin'), (req, res) => {
+  bulkUploader.single('file')(req, res, async err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'File too large (max 10MB)' : err.message });
+    if (!req.file) return res.status(400).json({ error: 'File is required' });
+    try {
+      const wb = XLSX.readFile(req.file.path);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      fs.unlink(req.file.path, () => {});
+
+      // Case/whitespace-tolerant header matching, same reasoning as the
+      // item import — a person's exported/re-typed sheet won't always
+      // match the template's exact casing.
+      const norm = h => String(h).trim().toLowerCase();
+      let created = 0, updated = 0, skipped = 0;
+      for (const row of rows) {
+        const get = label => { for (const h of Object.keys(row)) if (norm(h) === norm(label)) return String(row[h] ?? '').trim(); return ''; };
+        const firmName = get('Firm Name'), phone = get('Phone');
+        if (!firmName || !phone) { skipped++; continue; }
+        const fields = { firmName, contactPerson: get('Contact Person'), phone, city: get('City'), email: get('Email') };
+        const existing = await PartyDB.findOne({ tenantId: req.tenant.id, phone });
+        if (existing) { await PartyDB.update({ id: existing.id }, fields); updated++; }
+        else { await PartyDB.create({ id: uuid(), tenantId: req.tenant.id, ...fields, cardImageUrl: '', source: 'manual', createdAt: new Date().toISOString() }); created++; }
+      }
+      logAudit(req, 'party.bulk_import', 'party', `${created}+${updated}`, { created, updated, skipped });
+      res.json({ ok: true, created, updated, skipped });
+    } catch (err) { res.status(500).json({ error: 'Could not read that file — make sure it\'s a valid Excel file (.xlsx)' }); }
+  });
+});
+app.post('/api/parties/bulk-delete', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.filter(Boolean))] : [];
+  if (!ids.length) return res.status(400).json({ error: 'No buyers selected' });
+  if (ids.length > 500) return res.status(400).json({ error: 'Too many at once — delete in smaller batches (max 500)' });
+  for (const id of ids) await PartyDB.remove({ id, tenantId: req.tenant.id });
+  logAudit(req, 'party.bulk_delete', 'party', ids.length, { count: ids.length, ids });
+  res.json({ ok: true, deleted: ids.length });
+});
+app.post('/api/parties/delete-all', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const existing = await PartyDB.find({ tenantId: req.tenant.id });
+  await PartyDB.remove({ tenantId: req.tenant.id });
+  logAudit(req, 'party.delete_all', 'party', existing.length, { count: existing.length });
+  res.json({ ok: true, deleted: existing.length });
 });
 
 app.get('/api/parties', resolveTenant, auth, async (req, res) => {
@@ -2201,11 +2269,35 @@ async function migrateSettingsPermissionsDefault() {
   }
 }
 
+// Items and orders created before exhibitions became mandatory don't have
+// an exhibitionId at all — this buckets all of them into a single
+// "General" exhibition per tenant (creating it if it doesn't exist yet) so
+// nothing disappears or breaks once exhibitionId becomes required going
+// forward. Runs once at boot; harmless to re-run since it only touches
+// records that still have no exhibitionId.
+async function migrateExhibitionAssignment() {
+  const tenants = await TenantDB.find({});
+  for (const tenant of tenants) {
+    const orphanItems = (await ItemDB.find({ tenantId: tenant.id })).filter(i => !i.exhibitionId);
+    const orphanOrders = (await OrderDB.find({ tenantId: tenant.id })).filter(o => !o.exhibitionId);
+    if (!orphanItems.length && !orphanOrders.length) continue;
+    let general = await ExhibitionDB.findOne({ tenantId: tenant.id, name: 'General' });
+    if (!general) {
+      general = { id: uuid(), tenantId: tenant.id, name: 'General', location: '', startDate: '', endDate: '', active: true, createdAt: new Date().toISOString() };
+      await ExhibitionDB.create(general);
+    }
+    for (const item of orphanItems) await ItemDB.update({ id: item.id }, { exhibitionId: general.id });
+    for (const order of orphanOrders) await OrderDB.update({ id: order.id }, { exhibitionId: general.id });
+    log.info({ tenant: tenant.slug, items: orphanItems.length, orders: orphanOrders.length }, 'Migrated orphaned items/orders into General exhibition');
+  }
+}
+
 connectDB().then(async () => {
   initR2();
   await ensurePlatformAdminFromEnv();
   await migrateFixedFields();
   await migrateSettingsPermissionsDefault();
+  await migrateExhibitionAssignment();
   app.listen(PORT, () => log.info({ port: PORT, version: APP_VERSION, builtAt: BUILD_TIME }, 'Expo Orders running'));
 }).catch(err => {
   log.fatal({ err }, 'Failed to connect to database');
