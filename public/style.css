@@ -77,9 +77,8 @@ td.thumb-cell{width:56px}
   .desktop-order-view{display:none}
   .mobile-order-view{display:block}
 }
-.mobile-order-row{display:grid;grid-template-columns:28px 74px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.mobile-order-row{display:grid;grid-template-columns:90px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
 .mobile-order-row:last-child{border-bottom:none}
-.mobile-sr{font-weight:700;color:var(--muted);padding-top:2px}
 .mobile-details{font-size:13px;line-height:1.7;padding-top:2px}
 .icon-btn{background:none;border:none;padding:4px 6px;font-size:15px;cursor:pointer;color:var(--muted)}
 .icon-btn:hover{color:var(--ink)}
@@ -87,7 +86,7 @@ td.thumb-cell{width:56px}
 .field-row-edit input{margin:0}
 .btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
-.lightbox{display:none;position:fixed;inset:0;background:rgba(20,10,8,.9);z-index:1000;align-items:center;justify-content:center}
+.lightbox{display:none;position:fixed;inset:0;background:rgba(10,6,4,.97);z-index:1000;align-items:center;justify-content:center}
 .lightbox.open{display:flex}
 .lightbox img{max-width:88vw;max-height:85vh;object-fit:contain;border-radius:8px}
 .lightbox-close{position:absolute;top:18px;right:22px;background:none;color:#fff;font-size:22px;padding:6px 10px}

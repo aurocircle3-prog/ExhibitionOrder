@@ -42,6 +42,19 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight') stepLightbox(1);
   else if (e.key === 'Escape') closeLightbox();
 });
+// Swipe support for the fullscreen viewer — left swipe (drag right-to-left)
+// goes to the next image, right swipe goes back, matching the inline
+// thumbnail slider's gesture behavior.
+let lightboxSwipeStartX = null;
+document.getElementById('lightbox').addEventListener('touchstart', e => {
+  lightboxSwipeStartX = e.touches[0].clientX;
+}, { passive: true });
+document.getElementById('lightbox').addEventListener('touchend', e => {
+  if (lightboxSwipeStartX === null || lightboxImages.length < 2) return;
+  const dx = e.changedTouches[0].clientX - lightboxSwipeStartX;
+  if (Math.abs(dx) > 40) stepLightbox(dx < 0 ? 1 : -1);
+  lightboxSwipeStartX = null;
+});
 
 // Shared value formatter — used everywhere a field value is displayed.
 // Two things this fixes: (1) a currency symbol (₹, $, Rs.) reads naturally
@@ -90,17 +103,13 @@ function preprocessPercent(expr){
 // sliders can coexist on one page without stepping on each other.
 let sliderImagesRegistry = [];
 function renderImageSlider(images, size){
-  size = size || 120;
+  size = size || 144;
   if (!images.length) return '';
   const sliderId = sliderImagesRegistry.length;
   sliderImagesRegistry.push(images);
-  const arrows = images.length > 1 ? `
-    <button onclick="stepSlider(${sliderId},-1,event)" style="position:absolute;left:2px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:1;cursor:pointer;padding:0">‹</button>
-    <button onclick="stepSlider(${sliderId},1,event)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:1;cursor:pointer;padding:0">›</button>` : '';
   return `
     <div class="img-slider" data-slider-id="${sliderId}" data-index="0" style="position:relative;display:inline-block">
       <img src="${images[0]}" style="max-width:${size}px;max-height:${size}px;width:auto;height:auto;object-fit:contain;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
-      ${arrows}
     </div>
     ${images.length > 1 ? `<div class="muted" style="font-size:11px;text-align:center;margin-top:2px" id="slider-count-${sliderId}">1 of ${images.length}</div>` : ''}`;
 }
@@ -287,8 +296,7 @@ function renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages
     const detailsHtml = detailLines.map(d => `<div>${d.label} - ${d.value ?? ''}</div>`).join('');
     return `
       <div class="mobile-order-row">
-        <div class="mobile-sr">${rowIndex + 1}</div>
-        <div class="mobile-img">${showImages ? renderImageSlider(imgs, 64) : ''}</div>
+        <div class="mobile-img">${showImages ? renderImageSlider(imgs, 77) : ''}</div>
         <div class="mobile-details">${detailsHtml}</div>
       </div>`;
   });
