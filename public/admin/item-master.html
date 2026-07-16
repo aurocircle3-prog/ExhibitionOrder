@@ -4,6 +4,15 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
+  <div class="card" id="exhibitionBar">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <label style="margin:0;white-space:nowrap">Exhibition catalog:</label>
+      <select id="exhibitionSelect" onchange="switchExhibition(this.value)" style="flex:1;min-width:180px"></select>
+      <button class="ghost small" onclick="newExhibitionPrompt()">+ New exhibition</button>
+    </div>
+    <p class="muted" id="noExhibitionMsg" style="display:none;margin:10px 0 0">No exhibitions yet — create one above to start adding items. Each exhibition keeps its own separate item catalog.</p>
+  </div>
+
   <div class="tabs">
     <button class="tab-btn" data-tab="fields" onclick="switchTab('fields')">Fields</button>
     <button class="tab-btn" data-tab="io" onclick="switchTab('io')">Import / Export</button>
@@ -105,6 +114,47 @@
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('items');
 let fields = [], items = [], editingId = null, editingFieldId = null;
+let exhibitions = [], currentExhibitionId = null;
+const tenantSlug = EXO.getTenantSlug();
+
+async function loadExhibitions(){
+  exhibitions = await EXO.apiFetch('/exhibitions');
+  const select = document.getElementById('exhibitionSelect');
+  const bar = document.getElementById('noExhibitionMsg');
+  if (!exhibitions.length) {
+    select.innerHTML = '';
+    select.style.display = 'none';
+    bar.style.display = 'block';
+    currentExhibitionId = null;
+    return;
+  }
+  select.style.display = '';
+  bar.style.display = 'none';
+  // Restores the last exhibition this admin was looking at (per browser),
+  // falling back to whichever exhibition comes first if that one's gone or
+  // this is the first visit — if there's genuinely only one exhibition,
+  // that's automatically "the" selection with nothing to pick.
+  const saved = localStorage.getItem('exo_current_exhibition_' + tenantSlug);
+  currentExhibitionId = exhibitions.find(e => e.id === saved)?.id || exhibitions[0].id;
+  select.innerHTML = exhibitions.map(e => `<option value="${e.id}" ${e.id===currentExhibitionId?'selected':''}>${e.name}</option>`).join('');
+}
+function switchExhibition(id){
+  currentExhibitionId = id;
+  localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
+  resetForm();
+  loadItems();
+}
+async function newExhibitionPrompt(){
+  const name = prompt('New exhibition name (e.g. "Mumbai Show 2026"):');
+  if (!name || !name.trim()) return;
+  try {
+    const ex = await EXO.apiFetch('/exhibitions', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    await loadExhibitions();
+    document.getElementById('exhibitionSelect').value = ex.id;
+    switchExhibition(ex.id);
+    EXO.toast(`"${ex.name}" created — you're now viewing its catalog`);
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
 
 function switchTab(name){
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
@@ -205,7 +255,8 @@ function renderItemForm(){
 
 // ---------- Items ----------
 async function loadItems(){
-  items = await EXO.apiFetch('/items');
+  if (!currentExhibitionId) { items = []; document.getElementById('itemCount').textContent = ''; renderItemsTable([]); return; }
+  items = await EXO.apiFetch('/items?exhibitionId=' + currentExhibitionId);
   document.getElementById('itemCount').textContent = `(${items.length})`;
   selectedItemIds.clear();
   updateBulkDeleteButton();
@@ -241,11 +292,12 @@ async function bulkDeleteItems(){
 }
 async function deleteAllItems(){
   if (!items.length) { EXO.toast('No items to delete', 'error'); return; }
-  const typed = prompt(`This permanently deletes ALL ${items.length} items in your catalog — cannot be undone. Type DELETE ALL to confirm:`);
+  const exName = exhibitions.find(e => e.id === currentExhibitionId)?.name || 'this exhibition';
+  const typed = prompt(`This permanently deletes ALL ${items.length} items in "${exName}" — cannot be undone. Type DELETE ALL to confirm:`);
   if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
   try {
-    const res = await EXO.apiFetch('/items/delete-all', { method: 'POST' });
-    EXO.toast(`Deleted all ${res.deleted} items`);
+    const res = await EXO.apiFetch('/items/delete-all', { method: 'POST', body: JSON.stringify({ exhibitionId: currentExhibitionId }) });
+    EXO.toast(`Deleted all ${res.deleted} items from "${exName}"`);
     loadItems();
   } catch (e) {
     const err = document.getElementById('itemErr'); err.textContent = e.message; err.style.display = 'block';
@@ -321,11 +373,12 @@ async function removeImage(ev, index){
 
 async function saveItem(){
   const err = document.getElementById('itemErr'); err.style.display='none';
+  if (!editingId && !currentExhibitionId) { err.textContent = 'Pick or create an exhibition above first'; err.style.display='block'; return; }
   const values = {};
   fields.forEach(f => { const el = document.getElementById('f_'+f.key); if (el && el.value !== '') values[f.key] = el.value; });
   try {
     if (editingId) await EXO.apiFetch('/items/'+editingId, { method:'PUT', body: JSON.stringify({ fields: values }) });
-    else await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values }) });
+    else await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values, exhibitionId: currentExhibitionId }) });
     resetForm();
     loadItems();
   } catch(e) { err.textContent = e.message; err.style.display='block'; }
@@ -337,16 +390,17 @@ function authedUrl(path){
   return path + '?' + p.toString();
 }
 function downloadTemplate(){ location.href = authedUrl('/api/items/template/excel'); }
-function downloadExport(){ location.href = authedUrl('/api/items/export/excel'); }
+function downloadExport(){ location.href = authedUrl('/api/items/export/excel') + (currentExhibitionId ? '&exhibitionId=' + currentExhibitionId : ''); }
 async function importExcel(){
   const err = document.getElementById('bulkErr'); err.style.display='none';
   const msg = document.getElementById('bulkMsg'); msg.style.display='none';
+  if (!currentExhibitionId) { err.textContent = 'Pick or create an exhibition above first'; err.style.display='block'; return; }
   const file = document.getElementById('importFile').files[0];
   if (!file) { err.textContent = 'Choose a file first'; err.style.display='block'; return; }
   try {
-    const fd = new FormData(); fd.append('file', file);
+    const fd = new FormData(); fd.append('file', file); fd.append('exhibitionId', currentExhibitionId);
     const res = await EXO.apiFetch('/items/import/excel', { method:'POST', body: fd });
-    msg.textContent = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows).`;
+    msg.textContent = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${exhibitions.find(e=>e.id===currentExhibitionId)?.name}".`;
     msg.style.display = 'block';
     document.getElementById('importFile').value = '';
     loadItems();
@@ -386,6 +440,7 @@ async function importBulkImages(){
   }
 
   try { await loadFields(); } catch (e) { document.getElementById('fieldRows').innerHTML = `<tr><td colspan="4" class="muted">Couldn't load fields: ${e.message}</td></tr>`; }
+  try { await loadExhibitions(); } catch (e) { document.getElementById('itemErr').textContent = `Couldn't load exhibitions: ${e.message}`; document.getElementById('itemErr').style.display = 'block'; }
   try { await loadItems(); } catch (e) { document.getElementById('itemsBody').innerHTML = `<tr><td class="muted">Couldn't load items: ${e.message}</td></tr>`; }
   renderExistingPhotos();
 

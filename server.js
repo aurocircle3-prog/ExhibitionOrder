@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.21.0';
-const BUILD_TIME   = '2026-07-16T07:05:00Z';
+const APP_VERSION  = '1.22.0';
+const BUILD_TIME   = '2026-07-16T07:40:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1475,9 +1475,11 @@ app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), as
 // Wipes the entire item catalog for this company in one action — a step
 // further than bulk-delete-by-selection, for a full reset/restart.
 app.post('/api/items/delete-all', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const existing = await ItemDB.find({ tenantId: req.tenant.id });
-  await ItemDB.remove({ tenantId: req.tenant.id });
-  logAudit(req, 'item.delete_all', 'item', existing.length, { count: existing.length });
+  const q = { tenantId: req.tenant.id };
+  if (req.body.exhibitionId) q.exhibitionId = req.body.exhibitionId;
+  const existing = await ItemDB.find(q);
+  await ItemDB.remove(q);
+  logAudit(req, 'item.delete_all', 'item', existing.length, { count: existing.length, exhibitionId: req.body.exhibitionId || null });
   res.json({ ok: true, deleted: existing.length });
 });
 
@@ -1624,7 +1626,9 @@ app.get('/api/items/export/excel', resolveTenant, auth, requireRole('admin', 'st
   try {
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     const headers = fieldDefs.map(fieldHeaderLabel);
-    const items = await ItemDB.find({ tenantId: req.tenant.id, active: true });
+    const q = { tenantId: req.tenant.id, active: true };
+    if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
+    const items = await ItemDB.find(q);
     const rows = items.map(it => fieldDefs.map(f => it.fields?.[f.key] ?? ''));
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
