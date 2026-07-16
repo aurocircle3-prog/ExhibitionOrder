@@ -66,6 +66,21 @@ td.thumb-cell img{width:44px;height:44px;object-fit:cover;border-radius:6px;back
 td.thumb-cell{width:56px}
 .order-thumbs{display:flex;gap:8px;flex-wrap:wrap}
 .order-thumbs img{width:120px;height:120px;object-fit:cover;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer}
+
+/* Order view: mobile card layout — swaps in below 640px instead of the
+   normal wide table, which otherwise turns into a horizontally-scrolling
+   mess on a phone once there are more than 2-3 columns. Sr. No. and Image
+   always get their own compact slots; everything else configured for the
+   table collapses into one "Details" column, one line per field. */
+.mobile-order-view{display:none}
+@media (max-width:640px){
+  .desktop-order-view{display:none}
+  .mobile-order-view{display:block}
+}
+.mobile-order-row{display:grid;grid-template-columns:28px 74px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.mobile-order-row:last-child{border-bottom:none}
+.mobile-sr{font-weight:700;color:var(--muted);padding-top:2px}
+.mobile-details{font-size:13px;line-height:1.7;padding-top:2px}
 .icon-btn{background:none;border:none;padding:4px 6px;font-size:15px;cursor:pointer;color:var(--muted)}
 .icon-btn:hover{color:var(--ink)}
 .icon-btn:disabled{opacity:.25;cursor:default}

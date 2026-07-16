@@ -89,7 +89,8 @@ function preprocessPercent(expr){
 // larger size. Each slider is tracked by a numeric ID so many independent
 // sliders can coexist on one page without stepping on each other.
 let sliderImagesRegistry = [];
-function renderImageSlider(images){
+function renderImageSlider(images, size){
+  size = size || 120;
   if (!images.length) return '';
   const sliderId = sliderImagesRegistry.length;
   sliderImagesRegistry.push(images);
@@ -98,7 +99,7 @@ function renderImageSlider(images){
     <button onclick="stepSlider(${sliderId},1,event)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:1;cursor:pointer;padding:0">›</button>` : '';
   return `
     <div class="img-slider" data-slider-id="${sliderId}" data-index="0" style="position:relative;display:inline-block">
-      <img src="${images[0]}" style="width:120px;height:120px;object-fit:cover;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
+      <img src="${images[0]}" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
       ${arrows}
     </div>
     ${images.length > 1 ? `<div class="muted" style="font-size:11px;text-align:center;margin-top:2px" id="slider-count-${sliderId}">1 of ${images.length}</div>` : ''}`;
@@ -176,7 +177,7 @@ function groupItemsByName(items, decimalsByKey){
 }
 
 const PAGE_SIZE = 10;
-let allRowsHtml = [], currentPage = 1;
+let allRowsHtml = [], allMobileCardsHtml = [], currentPage = 1;
 
 async function load(){
   const token = location.pathname.split('/').pop();
@@ -200,6 +201,10 @@ async function load(){
     currentPage = 1;
 
     const extraFields = order.orderFieldsSnapshot || [];
+    const showImages = order.showImages !== false;
+    const hasRemarks = order.items.some(i => i.comment);
+    allMobileCardsHtml = renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages);
+
     const fieldTotalRows = Object.entries(order.fieldTotals || {}).map(([key, val]) => {
       const f = extraFields.find(x => x.key === key);
       return `<div class="cart-row" style="border-bottom:none"><span class="muted">Total ${f ? f.label : key}</span><span>${fmt(val, f?.unit, f?.decimals)}</span></div>`;
@@ -218,10 +223,11 @@ async function load(){
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
         ${viewHeaderFields?.length ? `<div style="margin-bottom:14px">${renderFieldList(viewHeaderFields)}</div>` : ''}
-        <div class="table-scroll"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
+        <div class="table-scroll desktop-order-view"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
           <tbody id="orderRowsBody"></tbody>
         </table></div>
+        <div class="mobile-order-view" id="orderMobileCards"></div>
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
@@ -234,6 +240,60 @@ async function load(){
   }
 }
 
+// Shared by the desktop table and the mobile card view below — one place
+// that knows how to turn any column type into its display value, so
+// formula evaluation (the trickiest part) never has to be duplicated.
+function getColumnValue(col, item, order, extraFields, rowIndex){
+  if (col.type === 'serial') return String(rowIndex + 1);
+  if (col.type === 'field') return fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals);
+  if (col.type === 'orderfield') return order.customFields?.[col.fieldKey] ?? '';
+  if (col.type === 'remark') return item.comment || '';
+  if (col.type === 'itemcode') return item.scannerCode || '';
+  if (col.type === 'qty') return String(item.qty);
+  if (col.type === 'formula') {
+    try {
+      const scope = { qty: Number(item.qty) || 0 };
+      extraFields.forEach(f => { scope[f.key] = Number(item.extra?.[f.key]) || 0; });
+      const result = math.evaluate(preprocessPercent(col.formula), scope);
+      return typeof result === 'number' ? (Number.isInteger(result) ? String(result) : result.toFixed(2)) : String(result);
+    } catch (e) { return '—'; }
+  }
+  return '';
+}
+
+// Mobile view — a wide table with many columns just becomes a horizontally
+// scrolling mess on a phone. Instead: Sr. No. and Image always show as
+// their own compact columns (not configurable — these two are the anchor
+// of the layout regardless of what else is set up), and every other
+// configured column collapses into a single "Details" column, one
+// "Label - Value" line per row, matching how this reads naturally on a
+// small screen.
+function renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages){
+  return order.items.map((item, rowIndex) => {
+    const imgs = item.images || (item.image ? [item.image] : []);
+    let detailLines;
+    if (isDynamic) {
+      detailLines = order.columnsSnapshot
+        .filter(col => col.type !== 'serial' && col.type !== 'images')
+        .map(col => ({ label: col.label, value: getColumnValue(col, item, order, extraFields, rowIndex) }));
+    } else {
+      detailLines = [
+        { label: 'Item', value: item.label },
+        ...extraFields.map(f => ({ label: f.label, value: fmt(item.extra?.[f.key], f.unit, f.decimals) })),
+        ...(hasRemarks ? [{ label: 'Remark', value: item.comment || '' }] : []),
+        { label: 'Qty', value: String(item.qty) },
+      ];
+    }
+    const detailsHtml = detailLines.map(d => `<div>${d.label} - ${d.value ?? ''}</div>`).join('');
+    return `
+      <div class="mobile-order-row">
+        <div class="mobile-sr">${rowIndex + 1}</div>
+        <div class="mobile-img">${showImages ? renderImageSlider(imgs, 64) : ''}</div>
+        <div class="mobile-details">${detailsHtml}</div>
+      </div>`;
+  });
+}
+
 // 10 rows per page — orders with a lot of items were rendering as one very
 // long table; this keeps the page manageable to scroll through, especially
 // on a phone. Just re-slices the already-rendered row HTML and updates the
@@ -243,6 +303,7 @@ function renderTablePage(){
   currentPage = Math.min(Math.max(1, currentPage), totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
   document.getElementById('orderRowsBody').innerHTML = allRowsHtml.slice(start, start + PAGE_SIZE).join('');
+  document.getElementById('orderMobileCards').innerHTML = allMobileCardsHtml.slice(start, start + PAGE_SIZE).join('');
   const pager = document.getElementById('orderPagination');
   if (totalPages <= 1) { pager.innerHTML = ''; return; }
   pager.innerHTML = `
@@ -324,26 +385,11 @@ function renderDynamicTable(order){
 
   const rowsArray = order.items.map((item, rowIndex) => {
     const cells = order.columnsSnapshot.map(col => {
-      if (col.type === 'serial') return `<td ${widthStyle(col.width)}>${rowIndex + 1}</td>`;
       if (col.type === 'images') {
         const imgs = item.images || (item.image ? [item.image] : []);
         return `<td ${widthStyle(col.width)}>${renderImageSlider(imgs)}</td>`;
       }
-      if (col.type === 'field') return `<td ${widthStyle(col.width)}>${fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals)}</td>`;
-      if (col.type === 'orderfield') return `<td ${widthStyle(col.width)}>${order.customFields?.[col.fieldKey] ?? ''}</td>`;
-      if (col.type === 'remark') return `<td ${widthStyle(col.width)}>${item.comment || ''}</td>`;
-      if (col.type === 'itemcode') return `<td ${widthStyle(col.width)}>${item.scannerCode || ''}</td>`;
-      if (col.type === 'qty') return `<td ${widthStyle(col.width)}>${item.qty}</td>`;
-      if (col.type === 'formula') {
-        try {
-          const scope = { qty: Number(item.qty) || 0 };
-          extraFields.forEach(f => { scope[f.key] = Number(item.extra?.[f.key]) || 0; });
-          const result = math.evaluate(preprocessPercent(col.formula), scope);
-          const display = typeof result === 'number' ? (Number.isInteger(result) ? result : result.toFixed(2)) : String(result);
-          return `<td ${widthStyle(col.width)}>${display}</td>`;
-        } catch (e) { return `<td ${widthStyle(col.width)}>—</td>`; }
-      }
-      return `<td ${widthStyle(col.width)}></td>`;
+      return `<td ${widthStyle(col.width)}>${getColumnValue(col, item, order, extraFields, rowIndex)}</td>`;
     }).join('');
     return `<tr>${cells}</tr>`;
   });
