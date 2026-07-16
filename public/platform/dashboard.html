@@ -13,6 +13,7 @@
   <div class="tabs" id="topTabs">
     <button class="tab-btn" data-ttab="companies" onclick="switchTopTab('companies')">Companies</button>
     <button class="tab-btn" data-ttab="create" onclick="switchTopTab('create')">Create Company</button>
+    <button class="tab-btn" data-ttab="exhibitions" onclick="switchTopTab('exhibitions')">Exhibitions</button>
   </div>
 
   <div class="tab-panel" id="ttab-companies">
@@ -20,7 +21,7 @@
       <h3 style="margin-top:0">Companies <span class="muted" id="tenantCount"></span></h3>
       <input id="search" placeholder="Filter by name or slug…" style="margin-top:12px" oninput="renderList()">
       <div class="table-scroll" style="margin-top:10px"><table>
-        <thead><tr><th>Company</th><th>Slug</th><th>Plan</th><th>Users</th><th>Items</th><th>Orders</th><th>Buyers</th><th>Created</th></tr></thead>
+        <thead><tr><th>Company</th><th>Slug</th><th>Nature of Business</th><th>Plan</th><th>Users</th><th>Items</th><th>Orders</th><th>Buyers</th><th>Created</th></tr></thead>
         <tbody id="rows"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
       </table></div>
     </div>
@@ -34,6 +35,7 @@
       <div class="grid cols-2">
         <div><label>Company name</label><input id="newCompanyName" placeholder="Kaashvi Jewels"></div>
         <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
+        <div><label>Nature of business <span class="muted">(optional)</span></label><input id="newNatureOfBusiness" placeholder="e.g. Jewelry Wholesaler"></div>
         <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
         <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
         <div>
@@ -53,6 +55,47 @@
       <p class="muted">Share this one-time link with <b id="newAdminNameShow"></b> so they can set their own password. Valid for 7 days.</p>
       <input id="setupLinkBox" readonly onclick="this.select()">
       <button class="ghost" style="margin-top:10px" onclick="copySetupLink()">Copy link</button>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="ttab-exhibitions">
+    <div class="card" id="exhibitionListCard">
+      <h3 style="margin-top:0">Exhibitions <span class="muted">— set up centrally, then assign companies into each one</span></h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Companies</th><th></th></tr></thead>
+        <tbody id="platExhibitionRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table></div>
+    </div>
+    <div class="card" id="exhibitionCreateCard">
+      <h3 style="margin-top:0">Create exhibition</h3>
+      <div class="error" id="exCreateErr"></div>
+      <div class="grid cols-2">
+        <div><label>Name</label><input id="pexName" placeholder="Mumbai Jewellery Show 2026"></div>
+        <div><label>Location <span class="muted">(optional)</span></label><input id="pexLoc"></div>
+        <div><label>Start date <span class="muted">(optional)</span></label><input id="pexStart" type="date"></div>
+        <div><label>End date <span class="muted">(optional)</span></label><input id="pexEnd" type="date"></div>
+      </div>
+      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, createPlatformExhibition)">Create exhibition</button>
+    </div>
+
+    <div class="card" id="exhibitionDetailCard" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0" id="exhibitionDetailTitle"></h3>
+        <button class="ghost small" onclick="closeExhibitionDetail()">← Back to Exhibitions</button>
+      </div>
+      <h4>Companies in this exhibition</h4>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Company</th><th>Nature of Business</th><th>Valid till</th><th></th></tr></thead>
+        <tbody id="participantRows"></tbody>
+      </table></div>
+
+      <h4>Add companies</h4>
+      <p class="muted" style="margin-top:-6px">All companies added below get the same valid-till date — edit any one individually afterward in the table above.</p>
+      <div class="grid cols-2">
+        <div><label>Valid till <span class="muted">(optional — blank means no expiry set)</span></label><input id="bulkValidTill" type="date"></div>
+      </div>
+      <div id="companyCheckboxList" style="max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px"></div>
+      <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, addParticipants)">Add selected companies</button>
     </div>
   </div>
 
@@ -84,6 +127,12 @@
       <div class="grid cols-2">
         <div><label>Slug</label><input id="slugInput"></div>
         <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, saveSlug)">Save link</button></div>
+      </div>
+
+      <h4>Nature of business</h4>
+      <div class="grid cols-2">
+        <div><label>Nature of business <span class="muted">(optional — helps when assigning to exhibitions)</span></label><input id="natureOfBusinessInput" placeholder="e.g. Jewelry Wholesaler"></div>
+        <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, saveBusinessInfo)">Save</button></div>
       </div>
 
       <h4>Status</h4>
@@ -249,9 +298,104 @@ async function load(){
   try { tenants = await platformFetch('/tenants'); renderList(); }
   catch (e) { EXO.toast(e.message, 'error'); }
 }
+
+let platformExhibitions = [], currentExhibitionDetailId = null;
+async function loadPlatformExhibitions(){
+  try {
+    platformExhibitions = await platformFetch('/exhibitions');
+    document.getElementById('platExhibitionRows').innerHTML = platformExhibitions.map(e => `
+      <tr style="cursor:pointer" onclick="openExhibitionDetail('${e.id}')">
+        <td><b>${e.name}</b></td>
+        <td>${e.location||'—'}</td>
+        <td>${e.startDate||''}${e.endDate?' – '+e.endDate:''}</td>
+        <td>${e.participantCount}</td>
+        <td><button class="danger small" onclick="event.stopPropagation();deletePlatformExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Delete</button></td>
+      </tr>`).join('') || '<tr><td colspan="5" class="muted">No exhibitions yet — create one below.</td></tr>';
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function createPlatformExhibition(){
+  const err = document.getElementById('exCreateErr'); err.style.display = 'none';
+  const name = document.getElementById('pexName').value.trim();
+  if (!name) { err.textContent = 'Name is required'; err.style.display = 'block'; return; }
+  try {
+    await platformFetch('/exhibitions', { method: 'POST', body: JSON.stringify({
+      name, location: document.getElementById('pexLoc').value.trim(),
+      startDate: document.getElementById('pexStart').value, endDate: document.getElementById('pexEnd').value,
+    }) });
+    document.getElementById('pexName').value = document.getElementById('pexLoc').value = document.getElementById('pexStart').value = document.getElementById('pexEnd').value = '';
+    EXO.toast('Exhibition created');
+    loadPlatformExhibitions();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function deletePlatformExhibition(id, name){
+  if (!confirm(`Delete exhibition "${name}"? This removes it and every company's participation in it. Items and orders companies already created inside it are NOT deleted — they just won't be tagged to a live exhibition anymore. This cannot be undone.`)) return;
+  try {
+    await platformFetch('/exhibitions/' + id, { method: 'DELETE' });
+    EXO.toast('Exhibition deleted');
+    loadPlatformExhibitions();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+
+async function openExhibitionDetail(id){
+  currentExhibitionDetailId = id;
+  const ex = platformExhibitions.find(e => e.id === id);
+  document.getElementById('exhibitionDetailTitle').textContent = ex.name;
+  document.getElementById('exhibitionListCard').style.display = 'none';
+  document.getElementById('exhibitionCreateCard').style.display = 'none';
+  document.getElementById('exhibitionDetailCard').style.display = 'block';
+  await loadParticipants();
+}
+function closeExhibitionDetail(){
+  currentExhibitionDetailId = null;
+  document.getElementById('exhibitionListCard').style.display = 'block';
+  document.getElementById('exhibitionCreateCard').style.display = 'block';
+  document.getElementById('exhibitionDetailCard').style.display = 'none';
+}
+async function loadParticipants(){
+  const participants = await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants`);
+  document.getElementById('participantRows').innerHTML = participants.map(p => `
+    <tr>
+      <td>${p.tenantName}</td>
+      <td>${p.natureOfBusiness || '—'}</td>
+      <td><input type="date" value="${p.validTill||''}" onchange="updateParticipantValidTill('${p.tenantId}', this.value)" style="width:150px"></td>
+      <td><button class="danger small" onclick="removeParticipant('${p.tenantId}','${p.tenantName.replace(/'/g,"\\'")}')">Remove</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">No companies added yet</td></tr>';
+  const alreadyIn = new Set(participants.map(p => p.tenantId));
+  const available = tenants.filter(t => !alreadyIn.has(t.id));
+  document.getElementById('companyCheckboxList').innerHTML = available.map(t => `
+    <label style="display:block;padding:4px 0"><input type="checkbox" class="company-checkbox" value="${t.id}" style="width:auto;margin-right:8px">${t.name} <span class="muted">${t.natureOfBusiness ? '— ' + t.natureOfBusiness : ''}</span></label>
+  `).join('') || '<p class="muted" style="margin:0">Every company is already in this exhibition.</p>';
+}
+async function updateParticipantValidTill(tenantId, validTill){
+  try {
+    await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants/${tenantId}`, { method: 'PUT', body: JSON.stringify({ validTill }) });
+    EXO.toast('Updated');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function removeParticipant(tenantId, name){
+  if (!confirm(`Remove ${name} from this exhibition? Their items and orders stay exactly as they are — this exhibition just disappears from their switcher.`)) return;
+  try {
+    await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants/${tenantId}`, { method: 'DELETE' });
+    EXO.toast('Removed');
+    loadParticipants();
+    loadPlatformExhibitions();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function addParticipants(){
+  const tenantIds = [...document.querySelectorAll('.company-checkbox:checked')].map(c => c.value);
+  if (!tenantIds.length) { EXO.toast('Select at least one company', 'error'); return; }
+  const validTill = document.getElementById('bulkValidTill').value;
+  try {
+    const res = await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants`, { method: 'POST', body: JSON.stringify({ tenantIds, validTill }) });
+    EXO.toast(`Added ${res.added} compan${res.added===1?'y':'ies'}${res.skipped ? ` (${res.skipped} already in)` : ''}`);
+    loadParticipants();
+    loadPlatformExhibitions();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
 function switchTopTab(name){
   document.querySelectorAll('#topTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.ttab === name));
   document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'ttab-' + name));
+  if (name === 'exhibitions' && !platformExhibitions.length) loadPlatformExhibitions();
 }
 function renderList(){
   const q = document.getElementById('search').value.trim().toLowerCase();
@@ -261,13 +405,14 @@ function renderList(){
     <tr style="cursor:pointer" onclick="openDetail('${t.id}')">
       <td><b>${t.name}</b> ${t.active === false ? '<span class="badge cancelled">inactive</span>' : ''}</td>
       <td>${t.slug}</td>
+      <td>${t.natureOfBusiness || '—'}</td>
       <td>${t.plan}</td>
       <td>${t.userCount}</td>
       <td>${t.itemCount}</td>
       <td>${t.orderCount}</td>
       <td>${t.partyCount}</td>
       <td>${new Date(t.createdAt).toLocaleDateString()}</td>
-    </tr>`).join('') || '<tr><td colspan="8" class="muted">No companies yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="9" class="muted">No companies yet</td></tr>';
 }
 
 let lastTenantId = null;
@@ -276,6 +421,7 @@ async function createCompany(){
   const body = {
     companyName: document.getElementById('newCompanyName').value.trim(),
     slug: document.getElementById('newSlug').value.trim(),
+    natureOfBusiness: document.getElementById('newNatureOfBusiness').value.trim(),
     adminName: document.getElementById('newAdminName').value.trim(),
     email: document.getElementById('newAdminEmail').value.trim(),
     phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
@@ -312,6 +458,13 @@ async function saveSlug(){
     await platformFetch(`/tenants/${lastTenantId}/slug`, { method: 'PUT', body: JSON.stringify({ slug }) });
     EXO.toast('Company link updated.');
     openDetail(lastTenantId);
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function saveBusinessInfo(){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/business-info`, { method: 'PUT', body: JSON.stringify({ natureOfBusiness: document.getElementById('natureOfBusinessInput').value.trim() }) });
+    EXO.toast('Saved.');
     load();
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
@@ -379,6 +532,7 @@ async function openDetail(id){
   document.getElementById('detailTitle').textContent = tenant.name;
   document.getElementById('detailSlug').textContent = `/${tenant.slug} — plan: ${tenant.plan} — created ${new Date(tenant.createdAt).toLocaleString()} — ${counts.itemCount} items, ${counts.orderCount} orders, ${counts.partyCount} buyers, ${counts.exhibitionCount} exhibitions`;
   document.getElementById('slugInput').value = tenant.slug;
+  document.getElementById('natureOfBusinessInput').value = tenant.natureOfBusiness || '';
   document.getElementById('activeToggle').checked = tenant.active !== false;
   document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
 

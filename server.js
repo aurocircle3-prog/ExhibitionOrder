@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.22.0';
-const BUILD_TIME   = '2026-07-16T07:40:00Z';
+const APP_VERSION  = '1.23.0';
+const BUILD_TIME   = '2026-07-16T10:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -64,6 +64,7 @@ const tenantSchema = new mongoose.Schema({
   id: String,
   name: String,                       // "Kaashvi Jewels"
   slug: { type: String, unique: true, sparse: true }, // "kaashvi" -> kaashvi.orders.is
+  natureOfBusiness: { type: String, default: '' }, // e.g. "Jewelry Wholesaler" — helps platform admin pick relevant companies when assigning exhibition participants
   plan: { type: String, default: 'free' },
   logoUrl: String,
   // Which item fields appear per line on the order link sent to buyers, and
@@ -267,11 +268,26 @@ const imageSetSchema = new mongoose.Schema({
   images: [String], updatedAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Platform-level — not owned by any one tenant. AuroCircle creates these
+// centrally (a real trade show, e.g. "Mumbai Jewellery Show 2026") and
+// assigns companies into them via ExhibitionParticipant below. Every
+// company's actual items/orders stay fully private; this is purely the
+// shared "what event is this" label they're grouped under.
 const exhibitionSchema = new mongoose.Schema({
-  id: String, tenantId: String,
+  id: String,
   name: String, location: String, startDate: String, endDate: String,
   active: { type: Boolean, default: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
+// Which companies are in which exhibitions, and until when. Bulk-adding a
+// batch of companies to an exhibition gives them all the same validTill by
+// default, but each one can be edited individually afterward (e.g. one
+// client paid for a longer window than the rest).
+const exhibitionParticipantSchema = new mongoose.Schema({
+  id: String, exhibitionId: String, tenantId: String,
+  validTill: String, // date, platform-admin-controlled — expired means no new items/orders in this exhibition, but past data stays visible
+  addedAt: { type: String, default: () => new Date().toISOString() },
 });
 
 const Tenant     = mongoose.model('Tenant', tenantSchema);
@@ -281,6 +297,7 @@ const Item       = mongoose.model('Item', itemSchema);
 const Party      = mongoose.model('Party', partySchema);
 const Order      = mongoose.model('Order', orderSchema);
 const Exhibition = mongoose.model('Exhibition', exhibitionSchema);
+const ExhibitionParticipant = mongoose.model('ExhibitionParticipant', exhibitionParticipantSchema);
 const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
 const PasswordSetupToken = mongoose.model('PasswordSetupToken', passwordSetupTokenSchema);
 const ImageSet    = mongoose.model('ImageSet', imageSetSchema);
@@ -302,7 +319,7 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
     log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
@@ -338,6 +355,7 @@ const ItemDB       = makeCollectionOps(Item, 'items', { createdAt: -1 });
 const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
+const ExhibitionParticipantDB = makeCollectionOps(ExhibitionParticipant, 'exhibitionParticipants', { addedAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
 const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
 const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
@@ -596,7 +614,7 @@ app.get('/api/platform/tenants', platformAuth, async (req, res) => {
       OrderDB.count({ tenantId: t.id }),
       PartyDB.count({ tenantId: t.id }),
     ]);
-    return { id: t.id, name: t.name, slug: t.slug, plan: t.plan, active: t.active !== false, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
+    return { id: t.id, name: t.name, slug: t.slug, natureOfBusiness: t.natureOfBusiness || '', plan: t.plan, active: t.active !== false, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
   }));
   summaries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   res.json(summaries);
@@ -611,7 +629,7 @@ app.get('/api/platform/tenants/:id', platformAuth, async (req, res) => {
     ItemDB.count({ tenantId: tenant.id, active: true }),
     OrderDB.count({ tenantId: tenant.id }),
     PartyDB.count({ tenantId: tenant.id }),
-    ExhibitionDB.count({ tenantId: tenant.id, active: true }),
+    ExhibitionParticipantDB.count({ tenantId: tenant.id }),
     FieldDefDB.find({ tenantId: tenant.id, active: true }),
     OrderDB.find({ tenantId: tenant.id }),
   ]);
@@ -652,7 +670,7 @@ app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platform
 // directly to the platform admin to share manually; hook up real sending
 // later by replacing that one response field with an actual email call.)
 app.post('/api/platform/tenants', platformAuth, async (req, res) => {
-  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff } = req.body;
+  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness } = req.body;
   if (!companyName || !rawSlug || !adminName || !email)
     return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
   const slug = normalizeSlug(rawSlug);
@@ -661,7 +679,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
 
   const tenant = {
-    id: uuid(), name: companyName, slug, plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
+    id: uuid(), name: companyName, slug, natureOfBusiness: natureOfBusiness || '', plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
     settingsPermissions: { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
   };
@@ -731,6 +749,16 @@ app.put('/api/platform/tenants/:id/slug', platformAuth, async (req, res) => {
   res.json({ ok: true, slug });
 });
 
+app.put('/api/platform/tenants/:id/business-info', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const updates = {};
+  if (req.body.name !== undefined) updates.name = String(req.body.name).trim();
+  if (req.body.natureOfBusiness !== undefined) updates.natureOfBusiness = String(req.body.natureOfBusiness).trim();
+  await TenantDB.update({ id: tenant.id }, updates);
+  res.json({ ok: true });
+});
+
 app.put('/api/platform/tenants/:id/active', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
@@ -784,13 +812,92 @@ app.delete('/api/platform/tenants/:id', platformAuth, async (req, res) => {
   const tenantId = tenant.id;
   await Promise.all([
     UserDB.remove({ tenantId }), FieldDefDB.remove({ tenantId }), ItemDB.remove({ tenantId }),
-    PartyDB.remove({ tenantId }), OrderDB.remove({ tenantId }), ExhibitionDB.remove({ tenantId }),
+    PartyDB.remove({ tenantId }), OrderDB.remove({ tenantId }), ExhibitionParticipantDB.remove({ tenantId }),
     AuditLogDB.remove({ tenantId }), ImageSetDB.remove({ tenantId }), PasswordSetupTokenDB.remove({ tenantId }),
   ]);
   await deleteTenantFiles(tenantId);
   await TenantDB.remove({ id: tenantId });
 
   log.warn({ tenant: tenant.slug, tenantId, platformAdmin: req.platformAdmin.email }, 'Platform admin permanently deleted a company and all its data');
+  res.json({ ok: true });
+});
+
+// ── Exhibitions (platform-level) ─────────────────────────────────────────
+// AuroCircle creates these centrally and assigns companies into them —
+// companies can no longer create their own (see the removed /api/exhibitions
+// POST/PUT/DELETE routes above; company admins only get the read-only list
+// of what they've been added to).
+app.get('/api/platform/exhibitions', platformAuth, async (req, res) => {
+  const exhibitions = await ExhibitionDB.find({});
+  const participants = await ExhibitionParticipantDB.find({});
+  const countByExhibition = {};
+  participants.forEach(p => { countByExhibition[p.exhibitionId] = (countByExhibition[p.exhibitionId] || 0) + 1; });
+  const result = exhibitions.map(e => ({ ...e, participantCount: countByExhibition[e.id] || 0 }));
+  result.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  res.json(result);
+});
+app.post('/api/platform/exhibitions', platformAuth, async (req, res) => {
+  const { name, location, startDate, endDate } = req.body;
+  if (!name) return res.status(400).json({ error: 'Exhibition name is required' });
+  const exhibition = { id: uuid(), name, location: location || '', startDate: startDate || '', endDate: endDate || '', active: true, createdAt: new Date().toISOString() };
+  await ExhibitionDB.create(exhibition);
+  res.json(exhibition);
+});
+app.put('/api/platform/exhibitions/:id', platformAuth, async (req, res) => {
+  const updates = {};
+  ['name', 'location', 'startDate', 'endDate', 'active'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
+  await ExhibitionDB.update({ id: req.params.id }, updates);
+  res.json({ ok: true });
+});
+// Removes the exhibition and every company's participation in it. Doesn't
+// touch the items/orders companies already created inside it — those stay
+// exactly as they are, just no longer tagged to a live exhibition. Full
+// cascade cleanup of that data is a deliberately separate, later step, not
+// bundled into this since it's a much bigger, more destructive action.
+app.delete('/api/platform/exhibitions/:id', platformAuth, async (req, res) => {
+  await ExhibitionParticipantDB.remove({ exhibitionId: req.params.id });
+  await ExhibitionDB.remove({ id: req.params.id });
+  res.json({ ok: true });
+});
+
+// Which companies are in this exhibition, with each one's validTill and
+// enough tenant info (name, nature of business) to make sense of the list.
+app.get('/api/platform/exhibitions/:id/participants', platformAuth, async (req, res) => {
+  const participants = await ExhibitionParticipantDB.find({ exhibitionId: req.params.id });
+  const tenants = await TenantDB.find({});
+  const tenantById = {}; tenants.forEach(t => { tenantById[t.id] = t; });
+  const result = participants.map(p => {
+    const t = tenantById[p.tenantId];
+    return { participantId: p.id, tenantId: p.tenantId, tenantName: t?.name || '(deleted company)', natureOfBusiness: t?.natureOfBusiness || '', validTill: p.validTill, addedAt: p.addedAt };
+  });
+  result.sort((a, b) => a.tenantName.localeCompare(b.tenantName));
+  res.json(result);
+});
+// Bulk-add — a batch of companies all get the same validTill by default;
+// each can be edited individually afterward via the PUT route below.
+// Companies already in this exhibition are left untouched, not duplicated.
+app.post('/api/platform/exhibitions/:id/participants', platformAuth, async (req, res) => {
+  const exhibition = await ExhibitionDB.findOne({ id: req.params.id });
+  if (!exhibition) return res.status(404).json({ error: 'Exhibition not found' });
+  const tenantIds = Array.isArray(req.body.tenantIds) ? [...new Set(req.body.tenantIds.filter(Boolean))] : [];
+  if (!tenantIds.length) return res.status(400).json({ error: 'No companies selected' });
+  const validTill = req.body.validTill || '';
+  const existing = await ExhibitionParticipantDB.find({ exhibitionId: req.params.id });
+  const alreadyIn = new Set(existing.map(p => p.tenantId));
+  let added = 0;
+  for (const tenantId of tenantIds) {
+    if (alreadyIn.has(tenantId)) continue;
+    await ExhibitionParticipantDB.create({ id: uuid(), exhibitionId: req.params.id, tenantId, validTill, addedAt: new Date().toISOString() });
+    added++;
+  }
+  res.json({ ok: true, added, skipped: tenantIds.length - added });
+});
+app.put('/api/platform/exhibitions/:id/participants/:tenantId', platformAuth, async (req, res) => {
+  await ExhibitionParticipantDB.update({ exhibitionId: req.params.id, tenantId: req.params.tenantId }, { validTill: req.body.validTill || '' });
+  res.json({ ok: true });
+});
+app.delete('/api/platform/exhibitions/:id/participants/:tenantId', platformAuth, async (req, res) => {
+  await ExhibitionParticipantDB.remove({ exhibitionId: req.params.id, tenantId: req.params.tenantId });
   res.json({ ok: true });
 });
 
@@ -2101,32 +2208,18 @@ app.get('/api/orders/public/:token', async (req, res) => {
 });
 
 // ── EXHIBITIONS (optional grouping — one company can run several events) ─────
+// Lists exhibitions THIS company participates in — not exhibitions it
+// owns (companies can no longer create their own; AuroCircle assigns them
+// centrally). Each one carries its validTill for this specific company, so
+// the frontend can tell which are still open for new orders.
 app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
-  res.json(await ExhibitionDB.find({ tenantId: req.tenant.id }));
-});
-
-app.post('/api/exhibitions', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const { name, location, startDate, endDate } = req.body;
-  if (!name) return res.status(400).json({ error: 'Exhibition name is required' });
-  const exhibition = {
-    id: uuid(), tenantId: req.tenant.id, name, location: location || '',
-    startDate: startDate || '', endDate: endDate || '', active: true, createdAt: new Date().toISOString(),
-  };
-  await ExhibitionDB.create(exhibition);
-  res.json(exhibition);
-});
-
-app.put('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const updates = {};
-  ['name', 'location', 'startDate', 'endDate', 'active'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
-  await ExhibitionDB.update({ id: req.params.id, tenantId: req.tenant.id }, updates);
-  res.json({ ok: true });
-});
-
-app.delete('/api/exhibitions/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  await ExhibitionDB.remove({ id: req.params.id, tenantId: req.tenant.id });
-  logAudit(req, 'exhibition.delete', 'exhibition', req.params.id);
-  res.json({ ok: true });
+  const participants = await ExhibitionParticipantDB.find({ tenantId: req.tenant.id });
+  const exhibitions = await ExhibitionDB.find({});
+  const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
+  const result = participants
+    .map(p => byId[p.exhibitionId] && { ...byId[p.exhibitionId], validTill: p.validTill })
+    .filter(Boolean);
+  res.json(result);
 });
 
 // ── REPORTS ───────────────────────────────────────────────────────────────────
@@ -2285,10 +2378,18 @@ async function migrateExhibitionAssignment() {
     const orphanItems = (await ItemDB.find({ tenantId: tenant.id })).filter(i => !i.exhibitionId);
     const orphanOrders = (await OrderDB.find({ tenantId: tenant.id })).filter(o => !o.exhibitionId);
     if (!orphanItems.length && !orphanOrders.length) continue;
-    let general = await ExhibitionDB.findOne({ tenantId: tenant.id, name: 'General' });
+    // Does this tenant already have its own private "General" exhibition
+    // from an earlier run of this migration? Found via their own
+    // participation records — exhibitions aren't tenant-owned anymore, but
+    // each tenant still gets a PRIVATE one here (not shared with anyone
+    // else) purely to preserve their pre-existing data's isolation.
+    const myParticipants = await ExhibitionParticipantDB.find({ tenantId: tenant.id });
+    const myExhibitions = (await Promise.all(myParticipants.map(p => ExhibitionDB.findOne({ id: p.exhibitionId })))).filter(Boolean);
+    let general = myExhibitions.find(e => e.name === 'General');
     if (!general) {
-      general = { id: uuid(), tenantId: tenant.id, name: 'General', location: '', startDate: '', endDate: '', active: true, createdAt: new Date().toISOString() };
+      general = { id: uuid(), name: 'General', location: '', startDate: '', endDate: '', active: true, createdAt: new Date().toISOString() };
       await ExhibitionDB.create(general);
+      await ExhibitionParticipantDB.create({ id: uuid(), exhibitionId: general.id, tenantId: tenant.id, validTill: '', addedAt: new Date().toISOString() });
     }
     for (const item of orphanItems) await ItemDB.update({ id: item.id }, { exhibitionId: general.id });
     for (const order of orphanOrders) await OrderDB.update({ id: order.id }, { exhibitionId: general.id });

@@ -94,16 +94,12 @@
 
   <div class="tab-panel" id="tab-exhibitions">
     <div class="card">
-      <h3 style="margin-top:0">Exhibitions <span class="muted">— optional, group items/orders by event</span></h3>
+      <h3 style="margin-top:0">Exhibitions <span class="muted">— which shows AuroCircle has set your company up for</span></h3>
+      <p class="muted" style="margin-top:-4px">Exhibitions are set up centrally — contact AuroCircle to be added to one. Once added, it'll show up here and in Item Master's exhibition switcher.</p>
       <div class="table-scroll"><table>
-        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Valid till</th></tr></thead>
         <tbody id="exRows"></tbody>
       </table></div>
-      <div class="grid cols-3" style="margin-top:12px">
-        <div><label>Name</label><input id="exName"></div>
-        <div><label>Location</label><input id="exLoc"></div>
-        <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, addExhibition)">Add exhibition</button></div>
-      </div>
     </div>
   </div>
   <p class="muted" id="versionTag" style="text-align:center;margin-top:10px;font-size:11px"></p>
@@ -510,17 +506,8 @@ async function loadExhibitions(){
   const list = await EXO.apiFetch('/exhibitions');
   document.getElementById('exRows').innerHTML = list.map(e => `
     <tr><td>${e.name}</td><td>${e.location||'—'}</td><td>${e.startDate||''} ${e.endDate?'– '+e.endDate:''}</td>
-    <td><button class="danger small" onclick="removeExhibition('${e.id}')">Remove</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">None yet</td></tr>';
+    <td>${e.validTill || '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Not added to any exhibition yet</td></tr>';
 }
-async function addExhibition(){
-  const name = document.getElementById('exName').value.trim();
-  if (!name) return;
-  await EXO.apiFetch('/exhibitions', { method:'POST', body: JSON.stringify({ name, location: document.getElementById('exLoc').value.trim() }) });
-  document.getElementById('exName').value = document.getElementById('exLoc').value = '';
-  loadExhibitions();
-  EXO.toast('Exhibition added');
-}
-async function removeExhibition(id){ await EXO.apiFetch('/exhibitions/'+id, { method:'DELETE' }); loadExhibitions(); EXO.toast('Exhibition removed'); }
 
 load();
 EXO.showVersion('versionTag');

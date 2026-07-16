@@ -8,9 +8,8 @@
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <label style="margin:0;white-space:nowrap">Exhibition catalog:</label>
       <select id="exhibitionSelect" onchange="switchExhibition(this.value)" style="flex:1;min-width:180px"></select>
-      <button class="ghost small" onclick="newExhibitionPrompt()">+ New exhibition</button>
     </div>
-    <p class="muted" id="noExhibitionMsg" style="display:none;margin:10px 0 0">No exhibitions yet — create one above to start adding items. Each exhibition keeps its own separate item catalog.</p>
+    <p class="muted" id="noExhibitionMsg" style="display:none;margin:10px 0 0">Not added to any exhibition yet — contact AuroCircle to get set up. Once added, its catalog will appear here.</p>
   </div>
 
   <div class="tabs">
@@ -143,17 +142,6 @@ function switchExhibition(id){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
   resetForm();
   loadItems();
-}
-async function newExhibitionPrompt(){
-  const name = prompt('New exhibition name (e.g. "Mumbai Show 2026"):');
-  if (!name || !name.trim()) return;
-  try {
-    const ex = await EXO.apiFetch('/exhibitions', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
-    await loadExhibitions();
-    document.getElementById('exhibitionSelect').value = ex.id;
-    switchExhibition(ex.id);
-    EXO.toast(`"${ex.name}" created — you're now viewing its catalog`);
-  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
 function switchTab(name){
