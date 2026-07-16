@@ -442,7 +442,7 @@ async function lookupItem(){
   try {
     const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
     addToCart(item);
-    ExoOffline.cacheItems(tenantSlug, [item]); // fire-and-forget — belt-and-suspenders on top of the page-load cache refresh
+    ExoOffline.cacheOneItem(tenantSlug, item); // fire-and-forget — belt-and-suspenders on top of the page-load cache refresh
   } catch(e) {
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
     const cached = await ExoOffline.findItemByCode(tenantSlug, code.toUpperCase());

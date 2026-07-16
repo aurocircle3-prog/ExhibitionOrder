@@ -32,6 +32,32 @@
       t.onerror = () => reject(t.error);
     });
   }
+  // Wipes every existing entry for this tenant in the given store, then
+  // inserts the fresh set — a mirror of what's live, not an ever-growing
+  // merge. Plain put() alone only ever adds/updates; it never removes an
+  // item that's since been deleted or no longer belongs to the exhibition
+  // currently in view, so old codes kept scanning successfully offline long
+  // after they should have stopped working. Runs as one transaction so a
+  // scan mid-refresh never sees a half-cleared cache.
+  async function replaceAllForTenant(storeName, tenantSlug, rows) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(storeName, 'readwrite');
+      const store = t.objectStore(storeName);
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = e => {
+        const cursor = e.target.result;
+        if (cursor) {
+          if (cursor.value.tenantSlug === tenantSlug) cursor.delete();
+          cursor.continue();
+        } else {
+          rows.forEach(r => store.put(r));
+        }
+      };
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+    });
+  }
   async function getAll(storeName) {
     const db = await openDB();
     return reqp(db.transaction(storeName, 'readonly').objectStore(storeName).getAll());
@@ -48,7 +74,7 @@
 
   // ── Read caches, refreshed opportunistically whenever online ──
   async function cacheItems(tenantSlug, items) {
-    await putAll('items', items.map(it => ({ key: tenantSlug + '::' + it.id, tenantSlug, item: it })));
+    await replaceAllForTenant('items', tenantSlug, items.map(it => ({ key: tenantSlug + '::' + it.id, tenantSlug, item: it })));
   }
   async function countItems(tenantSlug) {
     const all = await getAll('items');
@@ -60,7 +86,7 @@
     return hit ? hit.item : null;
   }
   async function cacheParties(tenantSlug, parties) {
-    await putAll('parties', parties.map(p => ({ key: tenantSlug + '::' + p.id, tenantSlug, party: p })));
+    await replaceAllForTenant('parties', tenantSlug, parties.map(p => ({ key: tenantSlug + '::' + p.id, tenantSlug, party: p })));
   }
   async function searchPartiesOffline(tenantSlug, q) {
     const all = await getAll('parties');
@@ -156,5 +182,13 @@
     });
   }
 
-  window.ExoOffline = { cacheItems, countItems, findItemByCode, cacheParties, searchPartiesOffline, queue, getOutbox, removeFromOutbox, flushOutbox, getReadableOutbox };
+  // Non-destructive single-item upsert — used as a belt-and-suspenders
+  // cache immediately after a successful online scan. Deliberately doesn't
+  // go through cacheItems()'s full-replace logic, which would otherwise
+  // wipe out the rest of the bulk-cached catalog down to just this one item.
+  async function cacheOneItem(tenantSlug, item) {
+    await putAll('items', [{ key: tenantSlug + '::' + item.id, tenantSlug, item }]);
+  }
+
+  window.ExoOffline = { cacheItems, cacheOneItem, countItems, findItemByCode, cacheParties, searchPartiesOffline, queue, getOutbox, removeFromOutbox, flushOutbox, getReadableOutbox };
 })();
