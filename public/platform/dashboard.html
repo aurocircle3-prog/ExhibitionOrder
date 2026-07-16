@@ -217,7 +217,7 @@
         <button class="primary" style="margin-top:10px" onclick="EXO.busy(this, saveRowGrouping)">Save</button>
 
         <h4>Fields above the table <span class="muted">(optional — e.g. PO Number, Delivery Date, a total)</span></h4>
-        <div id="detailHeaderFieldRows"></div>
+        <div id="layoutDetailHeaderFieldRows"></div>
         <button class="ghost" style="margin-top:8px" onclick="addDetailHeaderField()">+ Add field</button>
 
         <h4>Columns</h4>
@@ -225,8 +225,8 @@
         <div id="detailColumnRows"></div>
         <button class="ghost" style="margin-top:10px" onclick="addDetailColumn()">+ Add column</button>
 
-        <h4>Fields below the table <span class="muted">(optional — e.g. terms, a total)</span></h4>
-        <div id="detailFooterFieldRows"></div>
+        <h4>Fields in the footer <span class="muted">(optional — e.g. terms, a total — shown together with the address/GST/social links)</span></h4>
+        <div id="layoutDetailFooterFieldRows"></div>
         <button class="ghost" style="margin-top:8px" onclick="addDetailFooterField()">+ Add field</button>
 
         <button class="primary" style="margin-top:14px;display:block" onclick="EXO.busy(this, saveDetailColumns)">Save layout</button>
@@ -779,7 +779,7 @@ function updateDetailFieldListEntry(which, id, key, value){
 function renderDetailFieldListEntries(which){
   const totalableFields = detailOrderFieldsSaved.filter(f => f.showTotal);
   const list = detailFieldListState(which);
-  const container = document.getElementById(which === 'header' ? 'detailHeaderFieldRows' : 'detailFooterFieldRows');
+  const container = document.getElementById(which === 'header' ? 'layoutDetailHeaderFieldRows' : 'layoutDetailFooterFieldRows');
   container.innerHTML = list.map(f => `
     <div class="grid cols-3" style="align-items:end;margin-top:8px">
       <div>

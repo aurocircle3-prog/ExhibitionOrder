@@ -241,8 +241,7 @@ async function load(){
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
       </div>
-      ${renderFooter(company)}
-      ${viewFooterFields?.length ? `<div class="card" style="margin-top:16px">${renderFieldList(viewFooterFields)}</div>` : ''}`;
+      ${renderFooter(company, viewFooterFields)}`;
     renderTablePage();
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
@@ -339,9 +338,10 @@ const SOCIAL_ICONS = {
   youtube: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M10 9.3l6 2.7-6 2.7z" fill="currentColor" stroke="none"/></svg>',
   website: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>',
 };
-function renderFooter(company){
+function renderFooter(company, footerFields){
   const f = company.footer || {};
-  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
+  const hasFooterFields = footerFields && footerFields.length;
+  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website || hasFooterFields;
   if (!hasContent) return '';
   const socialLinks = [
     f.instagram && { key: 'instagram', label: 'Instagram', url: f.instagram.startsWith('http') ? f.instagram : `https://instagram.com/${f.instagram.replace(/^@/, '')}` },
@@ -356,6 +356,7 @@ function renderFooter(company){
       ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${f.gstNumber}</p>` : ''}
       ${f.whatsappNumber ? `<p style="margin:8px 0"><a href="https://wa.me/${f.whatsappNumber.replace(/\D/g, '')}" target="_blank">💬 WhatsApp us</a></p>` : ''}
       ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${s.url}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
+      ${hasFooterFields ? `<div style="margin-top:${hasContent && (f.address||f.gstNumber||f.whatsappNumber||socialLinks.length) ? '14px;padding-top:14px;border-top:1px solid var(--line)' : '0'};display:flex;justify-content:center">${renderFieldList(footerFields)}</div>` : ''}
     </div>`;
 }
 

@@ -54,7 +54,7 @@
   <div class="tab-panel" id="tab-layout">
     <div class="card">
       <h3 style="margin-top:0">Fields above the table <span class="muted">(optional — e.g. PO Number, Delivery Date, a total)</span></h3>
-      <div id="headerFieldRows"></div>
+      <div id="layoutHeaderFieldRows"></div>
       <button class="ghost" style="margin-top:8px" onclick="addHeaderField()">+ Add field</button>
 
       <h3>Order View Layout <span class="muted">— build the table buyers see on the shared order link, column by column</span></h3>
@@ -62,8 +62,8 @@
       <div id="columnRows"></div>
       <button class="ghost" style="margin-top:10px" onclick="addColumn()">+ Add column</button>
 
-      <h3>Fields below the table <span class="muted">(optional — e.g. terms, a total)</span></h3>
-      <div id="footerFieldRows"></div>
+      <h3>Fields in the footer <span class="muted">(optional — e.g. terms, a total — shown together with your address/GST/social links)</span></h3>
+      <div id="layoutFooterFieldRows"></div>
       <button class="ghost" style="margin-top:8px" onclick="addFooterField()">+ Add field</button>
 
       <div class="error" id="colErr"></div>
@@ -281,7 +281,7 @@ function updateFieldListEntry(which, id, key, value){
 }
 function renderFieldListEntries(which){
   const list = fieldListState(which);
-  const container = document.getElementById(which === 'header' ? 'headerFieldRows' : 'footerFieldRows');
+  const container = document.getElementById(which === 'header' ? 'layoutHeaderFieldRows' : 'layoutFooterFieldRows');
   container.innerHTML = list.map(f => `
     <div class="grid cols-3" style="align-items:end;margin-top:8px">
       <div>
