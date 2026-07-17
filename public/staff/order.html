@@ -191,8 +191,9 @@ function isNetworkFailure(e){
 // lookups and buyer search still work if the connection drops mid-booth.
 async function refreshOfflineCache(){
   try {
+    const exhibitionId = EXO.currentExhibition()?.id;
     const [items, parties, me] = await Promise.all([
-      EXO.apiFetch('/items'), EXO.apiFetch('/parties'), EXO.apiFetch('/me'),
+      EXO.apiFetch('/items' + (exhibitionId ? '?exhibitionId=' + exhibitionId : '')), EXO.apiFetch('/parties'), EXO.apiFetch('/me'),
     ]);
     orderFields = me.tenant?.orderFields || [];
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
@@ -442,7 +443,8 @@ async function lookupItem(){
   document.getElementById('scanCode').value = '';
   if (!code) return;
   try {
-    const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
+    const exhibitionId = EXO.currentExhibition()?.id;
+    const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code) + (exhibitionId ? '?exhibitionId=' + exhibitionId : ''));
     addToCart(item);
     ExoOffline.cacheOneItem(tenantSlug, item); // fire-and-forget — belt-and-suspenders on top of the page-load cache refresh
   } catch(e) {
@@ -503,7 +505,7 @@ async function submitOrder(){
   const err = document.getElementById('scanErr'); err.style.display='none';
   if (!party) { err.textContent = 'Pick or create a buyer first'; err.style.display='block'; return; }
   if (!cart.length) { err.textContent = 'Scan at least one item'; err.style.display='block'; return; }
-  const body = { partyId: party.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim(), customFields: orderDetailValues };
+  const body = { partyId: party.id, exhibitionId: EXO.currentExhibition()?.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim(), customFields: orderDetailValues };
   try {
     lastOrder = await EXO.apiFetch('/orders', { method:'POST', body: JSON.stringify(body) });
     clearForm(); // done BEFORE showing the confirmation, so a stray extra tap on "Create order" can't resubmit the same items as a second order

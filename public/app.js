@@ -47,10 +47,8 @@
     const user = getUser();
     const items = links.map(l => `<a href="${l.href}" class="${l.key===active?'active':''}">${l.label}</a>`).join('');
     const switcherHtml = exhibitionSwitcher ? `
-      <select id="exoNavExhibitionSwitcher" onchange="EXO.switchExhibitionFromNav(this.value)" style="max-width:180px;margin:0 10px" onclick="event.stopPropagation()">
-        <option value="${exhibitionSwitcher.id}">${exhibitionSwitcher.name}</option>
-      </select>` : '';
-    if (exhibitionSwitcher) setTimeout(populateNavExhibitionSwitcher, 0);
+      <span class="muted" style="margin:0 8px;white-space:nowrap">📍 ${exhibitionSwitcher.name}</span>
+      <button class="ghost small" onclick="EXO.exitExhibition();return false;" style="margin-right:10px;white-space:nowrap">Change exhibition</button>` : '';
     return `<div class="topbar">
       <div class="brand">🎪 ${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</div>
       ${switcherHtml}
@@ -58,31 +56,16 @@
       <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>
     </div>`;
   }
-  // The switcher renders immediately from cache (so nav isn't blocked on a
-  // network call), then upgrades in place once the real current-exhibition
-  // list loads — swapping to another exhibition from anywhere in the app,
-  // not just Dashboard.
-  async function populateNavExhibitionSwitcher(){
-    const select = document.getElementById('exoNavExhibitionSwitcher');
-    if (!select) return;
-    try {
-      const exhibitions = await apiFetch('/exhibitions');
-      const current = exhibitions.filter(e => e.status === 'current');
-      const tenantSlug = getTenantSlug();
-      const currentId = localStorage.getItem('exo_current_exhibition_' + tenantSlug);
-      select.innerHTML = current.map(e => `<option value="${e.id}" ${e.id===currentId?'selected':''}>${e.name}</option>`).join('')
-        || '<option value="">— no current exhibitions —</option>';
-    } catch (e) { /* leave the cached single option in place on failure */ }
-  }
-  function switchExhibitionFromNav(id){
-    if (!id) return;
+  // Leaves the current exhibition and goes to see the full list again —
+  // admins land on Dashboard (Current/Completed, same as normal entry);
+  // staff with more than one current exhibition land on the picker, or
+  // straight back into their one current exhibition if there's only one.
+  function exitExhibition(){
     const tenantSlug = getTenantSlug();
-    const select = document.getElementById('exoNavExhibitionSwitcher');
-    const name = select?.selectedOptions[0]?.textContent || '';
-    localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
-    localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
+    localStorage.removeItem('exo_current_exhibition_' + tenantSlug);
+    localStorage.removeItem('exo_current_exhibition_name_' + tenantSlug);
     const user = getUser();
-    location.href = user && user.role === 'admin' ? '/admin/item-master.html' : '/staff/order.html';
+    location.href = user && user.role === 'admin' ? '/admin/dashboard.html' : '/staff/select-exhibition.html';
   }
   function currentExhibition(){
     const tenantSlug = getTenantSlug();
@@ -197,7 +180,7 @@
     finally { btn.disabled = false; btn.textContent = original; }
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, switchExhibitionFromNav, currentExhibition, ensureExhibitionSelected };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

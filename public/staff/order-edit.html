@@ -93,7 +93,7 @@ async function lookupItem(){
   document.getElementById('scanCode').value = '';
   if (!code) return;
   try {
-    const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code));
+    const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code) + (order.exhibitionId ? '?exhibitionId=' + order.exhibitionId : ''));
     addToCart(item);
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }

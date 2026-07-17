@@ -18,7 +18,8 @@ const user = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
 async function load(){
-  const orders = await EXO.apiFetch('/orders');
+  const exhibitionId = EXO.currentExhibition()?.id;
+  const orders = await EXO.apiFetch('/orders' + (exhibitionId ? '?exhibitionId=' + exhibitionId : ''));
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
       <td>${o.orderNo}</td>
