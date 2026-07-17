@@ -4,13 +4,7 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
-  <div class="card" id="exhibitionBar">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <label style="margin:0;white-space:nowrap">Exhibition catalog:</label>
-      <select id="exhibitionSelect" onchange="switchExhibition(this.value)" style="flex:1;min-width:180px"></select>
-    </div>
-    <p class="muted" id="noExhibitionMsg" style="display:none;margin:10px 0 0">Not added to any exhibition yet — contact AuroCircle to get set up. Once added, its catalog will appear here.</p>
-  </div>
+  <p class="muted" style="margin-top:0">Catalog for <b id="exhibitionNameLabel"></b> <span class="muted">— switch exhibitions from the dropdown in the top bar</span></p>
 
   <div class="tabs">
     <button class="tab-btn" data-tab="fields" onclick="switchTab('fields')">Fields</button>
@@ -111,37 +105,24 @@
 <script src="/app.js"></script>
 <script>
 EXO.requireRole('admin');
+EXO.requireCurrentExhibition();
 document.getElementById('nav').innerHTML = EXO.adminNav('items');
 let fields = [], items = [], editingId = null, editingFieldId = null;
-let exhibitions = [], currentExhibitionId = null;
 const tenantSlug = EXO.getTenantSlug();
+const currentExhibitionId = EXO.currentExhibition()?.id || null;
 
-async function loadExhibitions(){
-  exhibitions = await EXO.apiFetch('/exhibitions');
-  const select = document.getElementById('exhibitionSelect');
-  const bar = document.getElementById('noExhibitionMsg');
-  if (!exhibitions.length) {
-    select.innerHTML = '';
-    select.style.display = 'none';
-    bar.style.display = 'block';
-    currentExhibitionId = null;
-    return;
-  }
-  select.style.display = '';
-  bar.style.display = 'none';
-  // Restores the last exhibition this admin was looking at (per browser),
-  // falling back to whichever exhibition comes first if that one's gone or
-  // this is the first visit — if there's genuinely only one exhibition,
-  // that's automatically "the" selection with nothing to pick.
-  const saved = localStorage.getItem('exo_current_exhibition_' + tenantSlug);
-  currentExhibitionId = exhibitions.find(e => e.id === saved)?.id || exhibitions[0].id;
-  select.innerHTML = exhibitions.map(e => `<option value="${e.id}" ${e.id===currentExhibitionId?'selected':''}>${e.name}</option>`).join('');
-}
-function switchExhibition(id){
-  currentExhibitionId = id;
-  localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
-  resetForm();
-  loadItems();
+async function loadExhibitionLabel(){
+  document.getElementById('exhibitionNameLabel').textContent = EXO.currentExhibition()?.name || '';
+  try {
+    // Refresh the cached name in case it's changed since this was cached
+    // (e.g. renamed by AuroCircle) — cheap, and keeps the label accurate.
+    const exhibitions = await EXO.apiFetch('/exhibitions');
+    const ex = exhibitions.find(e => e.id === currentExhibitionId);
+    if (ex) {
+      document.getElementById('exhibitionNameLabel').textContent = ex.name;
+      localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, ex.name);
+    }
+  } catch (e) { /* keep the cached label on failure */ }
 }
 
 function switchTab(name){
@@ -280,7 +261,7 @@ async function bulkDeleteItems(){
 }
 async function deleteAllItems(){
   if (!items.length) { EXO.toast('No items to delete', 'error'); return; }
-  const exName = exhibitions.find(e => e.id === currentExhibitionId)?.name || 'this exhibition';
+  const exName = EXO.currentExhibition()?.name || 'this exhibition';
   const typed = prompt(`This permanently deletes ALL ${items.length} items in "${exName}" — cannot be undone. Type DELETE ALL to confirm:`);
   if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
   try {
@@ -388,7 +369,7 @@ async function importExcel(){
   try {
     const fd = new FormData(); fd.append('file', file); fd.append('exhibitionId', currentExhibitionId);
     const res = await EXO.apiFetch('/items/import/excel', { method:'POST', body: fd });
-    msg.textContent = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${exhibitions.find(e=>e.id===currentExhibitionId)?.name}".`;
+    msg.textContent = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${EXO.currentExhibition()?.name}".`;
     msg.style.display = 'block';
     document.getElementById('importFile').value = '';
     loadItems();
@@ -428,7 +409,7 @@ async function importBulkImages(){
   }
 
   try { await loadFields(); } catch (e) { document.getElementById('fieldRows').innerHTML = `<tr><td colspan="4" class="muted">Couldn't load fields: ${e.message}</td></tr>`; }
-  try { await loadExhibitions(); } catch (e) { document.getElementById('itemErr').textContent = `Couldn't load exhibitions: ${e.message}`; document.getElementById('itemErr').style.display = 'block'; }
+  try { await loadExhibitionLabel(); } catch (e) { /* label is cosmetic, not worth blocking the page over */ }
   try { await loadItems(); } catch (e) { document.getElementById('itemsBody').innerHTML = `<tr><td class="muted">Couldn't load items: ${e.message}</td></tr>`; }
   renderExistingPhotos();
 

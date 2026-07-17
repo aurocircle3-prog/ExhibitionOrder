@@ -37,7 +37,7 @@ function exhibitionCard(e){
       ${validTillNote}${closedNote}
       <p class="muted" style="margin:8px 0">${e.itemCount} item${e.itemCount===1?'':'s'} · ${e.orderCount} order${e.orderCount===1?'':'s'}</p>
       <div class="btn-row" style="margin-top:10px">
-        <button class="primary small" onclick="enterExhibition('${e.id}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
+        <button class="primary small" onclick="enterExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
         ${e.status === 'current'
           ? `<button class="ghost small" onclick="closeExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Mark completed</button>`
           : (e.closed ? `<button class="ghost small" onclick="reopenExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Reopen</button>` : '')}
@@ -58,8 +58,9 @@ async function load(){
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 }
 
-function enterExhibition(id){
+function enterExhibition(id, name){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
+  localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
   location.href = '/admin/item-master.html';
 }
 async function closeExhibition(id, name){

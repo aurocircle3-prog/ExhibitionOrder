@@ -43,26 +43,81 @@
     if (!localStorage.getItem('exo_token') || !user || !roles.includes(user.role)) { location.href = '/login.html'; return null; }
     return user;
   }
-  function navBar(links, active) {
+  function navBar(links, active, exhibitionSwitcher) {
     const user = getUser();
     const items = links.map(l => `<a href="${l.href}" class="${l.key===active?'active':''}">${l.label}</a>`).join('');
+    const switcherHtml = exhibitionSwitcher ? `
+      <select id="exoNavExhibitionSwitcher" onchange="EXO.switchExhibitionFromNav(this.value)" style="max-width:180px;margin:0 10px" onclick="event.stopPropagation()">
+        <option value="${exhibitionSwitcher.id}">${exhibitionSwitcher.name}</option>
+      </select>` : '';
+    if (exhibitionSwitcher) setTimeout(populateNavExhibitionSwitcher, 0);
     return `<div class="topbar">
       <div class="brand">🎪 ${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</div>
+      ${switcherHtml}
       <button class="nav-toggle" onclick="this.closest('.topbar').classList.toggle('nav-open')" aria-label="Menu">☰</button>
       <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>
     </div>`;
   }
+  // The switcher renders immediately from cache (so nav isn't blocked on a
+  // network call), then upgrades in place once the real current-exhibition
+  // list loads — swapping to another exhibition from anywhere in the app,
+  // not just Dashboard.
+  async function populateNavExhibitionSwitcher(){
+    const select = document.getElementById('exoNavExhibitionSwitcher');
+    if (!select) return;
+    try {
+      const exhibitions = await apiFetch('/exhibitions');
+      const current = exhibitions.filter(e => e.status === 'current');
+      const tenantSlug = getTenantSlug();
+      const currentId = localStorage.getItem('exo_current_exhibition_' + tenantSlug);
+      select.innerHTML = current.map(e => `<option value="${e.id}" ${e.id===currentId?'selected':''}>${e.name}</option>`).join('')
+        || '<option value="">— no current exhibitions —</option>';
+    } catch (e) { /* leave the cached single option in place on failure */ }
+  }
+  function switchExhibitionFromNav(id){
+    if (!id) return;
+    const tenantSlug = getTenantSlug();
+    const select = document.getElementById('exoNavExhibitionSwitcher');
+    const name = select?.selectedOptions[0]?.textContent || '';
+    localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
+    localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
+    location.href = '/admin/item-master.html';
+  }
+  function currentExhibition(){
+    const tenantSlug = getTenantSlug();
+    const id = localStorage.getItem('exo_current_exhibition_' + tenantSlug);
+    if (!id) return null;
+    return { id, name: localStorage.getItem('exo_current_exhibition_name_' + tenantSlug) || 'Exhibition' };
+  }
   function adminNav(active) {
-    return navBar([
+    const ex = currentExhibition();
+    const links = [
       { key: 'dashboard', href: '/admin/dashboard.html', label: 'Dashboard' },
-      { key: 'order', href: '/staff/order.html', label: 'Take Order' },
-      { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
-      { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
+      ...(ex ? [
+        { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
+        { key: 'order', href: '/staff/order.html', label: 'Take Order' },
+        { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
+      ] : []),
       { key: 'buyers', href: '/admin/buyers.html', label: 'Buyers' },
       { key: 'staff', href: '/admin/staff.html', label: 'Staff' },
       { key: 'reports', href: '/admin/reports.html', label: 'Reports' },
       { key: 'settings', href: '/admin/settings.html', label: 'Settings' },
-    ], active);
+    ];
+    return navBar(links, active, ex);
+  }
+  // Item Master, Take Order, and Orders are all exhibition-scoped now —
+  // this sends an admin who lands on one of those with no exhibition
+  // selected (direct link, bookmark, back button after leaving one) back
+  // to Dashboard to pick one, rather than showing a broken or empty page.
+  // Staff aren't included yet — their own entry flow is a separate,
+  // upcoming stage, and Dashboard is admin-only.
+  function requireCurrentExhibition(){
+    const user = getUser();
+    if (user && user.role === 'admin' && !currentExhibition()) {
+      location.href = '/admin/dashboard.html';
+      return false;
+    }
+    return true;
   }
   function staffNav(active) {
     const user = getUser();
@@ -123,7 +178,7 @@
     finally { btn.disabled = false; btn.textContent = original; }
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, switchExhibitionFromNav, currentExhibition, requireCurrentExhibition };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

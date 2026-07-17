@@ -124,6 +124,7 @@
 <script src="/app.js"></script>
 <script>
 const currentUser = EXO.requireRole('admin','staff');
+EXO.requireCurrentExhibition();
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
 let party = null, cart = [], lastOrder = null, orderFields = [];
 const tenantSlug = EXO.getTenantSlug();

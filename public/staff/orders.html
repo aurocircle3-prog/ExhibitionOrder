@@ -15,6 +15,7 @@
 <script src="/app.js"></script>
 <script>
 const user = EXO.requireRole('admin','staff');
+EXO.requireCurrentExhibition();
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
 async function load(){
