@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.34.1';
-const BUILD_TIME   = '2026-07-17T09:00:00Z';
+const APP_VERSION  = '1.35.0';
+const BUILD_TIME   = '2026-07-17T09:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1655,9 +1655,15 @@ const bulkImageUploader = multer({ storage: multer.memoryStorage(), limits: { fi
 
 function parseImageFilename(originalname) {
   const ext = (originalname.match(/\.[^.]+$/) || ['.jpg'])[0].toLowerCase();
-  const base = originalname.slice(0, originalname.length - ext.length);
-  const m = base.match(/^(.*)_([12])$/);
-  return { code: (m ? m[1] : base).trim(), slot: m ? Number(m[2]) : 0, ext };
+  const base = originalname.slice(0, originalname.length - ext.length).trim();
+  // Forgiving of common real-world naming variations — a space, underscore,
+  // or hyphen before the slot digit, optional zero-padding ("_1" or "_01"),
+  // and stray trailing whitespace before the extension (all previously
+  // caused a "_1"/"_2" file to be treated as an entirely unmatched code
+  // instead of being recognized as an extra photo for the base code).
+  const m = base.match(/^(.*)[\s_-]0*([12])$/);
+  const code = (m ? m[1] : base).trim();
+  return { code, slot: m ? Number(m[2]) : 0, ext };
 }
 
 app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'staff'), (req, res) => {
@@ -1667,11 +1673,21 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
 
     const items = await ItemDB.find({ tenantId: req.tenant.id, active: true });
     const codesInUse = new Set(items.map(it => String(it.fields?.imageCode || '').trim().toLowerCase()).filter(Boolean));
+    // Maps the lowercased code back to the item's actual, correctly-cased
+    // imageCode — so a file typed as "2167k_1.jpg" still gets grouped and
+    // saved under the item's real code "2167K", not a separate mismatched
+    // one, regardless of what case the uploader happened to type.
+    const canonicalCode = {};
+    items.forEach(it => {
+      const raw = String(it.fields?.imageCode || '').trim();
+      if (raw) canonicalCode[raw.toLowerCase()] = raw;
+    });
 
     const groups = {};
     req.files.forEach(file => {
       const { code, slot, ext } = parseImageFilename(file.originalname);
-      (groups[code] ??= []).push({ file, slot, ext });
+      const key = canonicalCode[code.toLowerCase()] || code; // normalize to the item's real casing when known
+      (groups[key] ??= []).push({ file, slot, ext });
     });
 
     let matched = 0, unmatchedCode = 0, full = 0;
