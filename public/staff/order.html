@@ -124,7 +124,6 @@
 <script src="/app.js"></script>
 <script>
 const currentUser = EXO.requireRole('admin','staff');
-EXO.requireCurrentExhibition();
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
 let party = null, cart = [], lastOrder = null, orderFields = [];
 const tenantSlug = EXO.getTenantSlug();
@@ -275,6 +274,8 @@ window.addEventListener('offline', updateSyncBanner);
 setInterval(() => { if (navigator.onLine) refreshOfflineCache(); trySync(); }, 20000); // periodic refresh + retry — 'online' doesn't always fire on flaky wifi
 
 (async function(){
+  if (!(await EXO.ensureExhibitionSelected())) return;
+  document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order'); // re-render now the switcher has something to show
   switchOrderTab('buyer');
   checkForDraft();
   await refreshOfflineCache();

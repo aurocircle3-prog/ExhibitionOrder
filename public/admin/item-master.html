@@ -105,7 +105,6 @@
 <script src="/app.js"></script>
 <script>
 EXO.requireRole('admin');
-EXO.requireCurrentExhibition();
 document.getElementById('nav').innerHTML = EXO.adminNav('items');
 let fields = [], items = [], editingId = null, editingFieldId = null;
 const tenantSlug = EXO.getTenantSlug();
@@ -392,6 +391,8 @@ async function importBulkImages(){
 }
 
 (async function init(){
+  if (!(await EXO.ensureExhibitionSelected())) return;
+  document.getElementById('nav').innerHTML = EXO.adminNav('items'); // re-render now the switcher has something to show
   // Field management (add/edit/delete/reorder) is platform-admin granted,
   // default-deny — checked FIRST, before any data loads or renders, and
   // fails CLOSED (hidden) if this check can't complete for any reason.

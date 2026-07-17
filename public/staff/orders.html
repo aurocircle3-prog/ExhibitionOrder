@@ -15,7 +15,6 @@
 <script src="/app.js"></script>
 <script>
 const user = EXO.requireRole('admin','staff');
-EXO.requireCurrentExhibition();
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
 async function load(){
@@ -53,5 +52,9 @@ async function changeStatus(id, select){
   try { await EXO.apiFetch('/orders/'+id+'/status', { method:'PUT', body: JSON.stringify({ status }) }); }
   catch(e) { EXO.toast(e.message, 'error'); load(); }
 }
-load();
+(async function(){
+  if (!(await EXO.ensureExhibitionSelected())) return;
+  document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders'); // re-render now the switcher has something to show
+  load();
+})();
 </script>

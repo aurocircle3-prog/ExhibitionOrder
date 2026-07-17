@@ -81,7 +81,8 @@
     const name = select?.selectedOptions[0]?.textContent || '';
     localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
     localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
-    location.href = '/admin/item-master.html';
+    const user = getUser();
+    location.href = user && user.role === 'admin' ? '/admin/item-master.html' : '/staff/order.html';
   }
   function currentExhibition(){
     const tenantSlug = getTenantSlug();
@@ -106,18 +107,36 @@
     return navBar(links, active, ex);
   }
   // Item Master, Take Order, and Orders are all exhibition-scoped now —
-  // this sends an admin who lands on one of those with no exhibition
-  // selected (direct link, bookmark, back button after leaving one) back
-  // to Dashboard to pick one, rather than showing a broken or empty page.
-  // Staff aren't included yet — their own entry flow is a separate,
-  // upcoming stage, and Dashboard is admin-only.
-  function requireCurrentExhibition(){
+  // this makes sure whoever lands on one of those has a current exhibition
+  // actually selected before the page tries to load anything scoped to it.
+  // Admins are sent back to Dashboard to pick one explicitly. Staff get
+  // handled automatically: one current exhibition -> just use it, several
+  // -> a short picker, none -> a plain "nothing assigned yet" message
+  // instead of a broken page.
+  async function ensureExhibitionSelected(){
+    if (currentExhibition()) return true;
     const user = getUser();
-    if (user && user.role === 'admin' && !currentExhibition()) {
-      location.href = '/admin/dashboard.html';
+    if (!user) return false; // requireRole will have already redirected to login
+    if (user.role === 'admin') { location.href = '/admin/dashboard.html'; return false; }
+    try {
+      const exhibitions = await apiFetch('/exhibitions');
+      const current = exhibitions.filter(e => e.status === 'current');
+      if (current.length === 1) {
+        const tenantSlug = getTenantSlug();
+        localStorage.setItem('exo_current_exhibition_' + tenantSlug, current[0].id);
+        localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, current[0].name);
+        return true;
+      }
+      if (current.length > 1) { location.href = '/staff/select-exhibition.html'; return false; }
+      document.body.innerHTML = `<div class="wrap" style="max-width:480px;margin:60px auto"><div class="card" style="text-align:center">
+        <h3>No current exhibitions</h3>
+        <p class="muted">You haven't been assigned to any exhibition that's currently open. Check with your admin.</p>
+        <a href="#" onclick="EXO.logout();return false;">Logout</a>
+      </div></div>`;
       return false;
+    } catch (e) {
+      return false; // couldn't reach the server — let the page's own error handling take it from here
     }
-    return true;
   }
   function staffNav(active) {
     const user = getUser();
@@ -126,7 +145,7 @@
       { key: 'orders', href: '/staff/orders.html', label: user && user.role === 'admin' ? 'Orders' : 'My Orders' },
     ];
     if (user && user.role === 'admin') links.push({ key: 'admin', href: '/admin/dashboard.html', label: '← Admin' });
-    return navBar(links, active);
+    return navBar(links, active, currentExhibition());
   }
   function clientNav(active) {
     return navBar([{ key: 'orders', href: '/client/orders.html', label: 'My Orders' }], active);
@@ -178,7 +197,7 @@
     finally { btn.disabled = false; btn.textContent = original; }
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, switchExhibitionFromNav, currentExhibition, requireCurrentExhibition };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, switchExhibitionFromNav, currentExhibition, ensureExhibitionSelected };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

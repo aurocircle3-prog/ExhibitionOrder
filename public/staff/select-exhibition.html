@@ -1,0 +1,47 @@
+<title>Select Exhibition — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div class="topbar"><div class="brand">🎪 <span id="companyNameLabel">Expo Orders</span></div>
+  <nav><a href="#" onclick="EXO.logout();return false;">Logout</a></nav>
+</div>
+<div class="wrap" style="max-width:560px;margin:0 auto">
+  <div class="card">
+    <h3 style="margin-top:0">Which exhibition are you working at?</h3>
+    <p class="muted" style="margin-top:-6px">More than one is currently open — pick one to start taking orders. You can switch later from the menu.</p>
+    <div id="exhibitionList"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+const user = EXO.requireRole('admin', 'staff');
+document.getElementById('companyNameLabel').textContent = localStorage.getItem('exo_tenant_name') || 'Expo Orders';
+const tenantSlug = EXO.getTenantSlug();
+
+async function load(){
+  const exhibitions = await EXO.apiFetch('/exhibitions');
+  const current = exhibitions.filter(e => e.status === 'current');
+  if (current.length <= 1) {
+    // Nothing to pick anymore (e.g. one got closed since this page loaded)
+    // — fall straight through instead of showing a pointless single-option list.
+    if (current.length === 1) {
+      localStorage.setItem('exo_current_exhibition_' + tenantSlug, current[0].id);
+      localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, current[0].name);
+    }
+    location.href = '/staff/order.html';
+    return;
+  }
+  document.getElementById('exhibitionList').innerHTML = current.map(e => `
+    <button class="ghost" style="display:block;width:100%;text-align:left;margin-top:10px;padding:14px" onclick="pick('${e.id}','${e.name.replace(/'/g,"\\'")}')">
+      <b>${e.name}</b>
+      ${e.location ? `<br><span class="muted">${e.location}</span>` : ''}
+    </button>`).join('');
+}
+function pick(id, name){
+  localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
+  localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
+  location.href = '/staff/order.html';
+}
+load();
+</script>
