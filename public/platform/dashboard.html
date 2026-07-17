@@ -727,22 +727,21 @@ function moveDetailCustomField(i, direction){
 }
 function renderDetailCustomFields(){
   document.getElementById('detailCustomFieldRows').innerHTML = detailCustomFields.map((f, i) => `
-    <div class="grid cols-3" style="margin-top:${i===0?0:10}px;align-items:end">
-      <div><label>Field name</label><input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
-      <div>
-        <label>Type</label>
+    <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
+      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
+      <div style="flex:1;min-width:100px">${i===0?'<label>Type</label>':''}
         <select onchange="updateDetailCustomFieldAt(${i},'type',this.value)">
           <option value="text" ${f.type==='text'?'selected':''}>Text</option>
           <option value="number" ${f.type==='number'?'selected':''}>Number</option>
         </select>
       </div>
       ${f.type === 'number'
-        ? `<div><label>Decimal places</label><input type="number" min="0" max="6" value="${f.decimals ?? 2}" oninput="updateDetailCustomFieldAt(${i},'decimals',this.value)"></div>`
-        : `<div></div>`}
-      <div style="grid-column:1/-1" class="btn-row">
-        <button class="ghost small" onclick="moveDetailCustomField(${i},-1)" ${i===0?'disabled':''}>↑ Move up</button>
-        <button class="ghost small" onclick="moveDetailCustomField(${i},1)" ${i===detailCustomFields.length-1?'disabled':''}>↓ Move down</button>
-        <button class="danger small" onclick="removeDetailCustomFieldAt(${i})">Remove</button>
+        ? `<div style="flex:0 0 90px">${i===0?'<label>Decimals</label>':''}<input type="number" min="0" max="6" value="${f.decimals ?? 2}" oninput="updateDetailCustomFieldAt(${i},'decimals',this.value)"></div>`
+        : ''}
+      <div style="display:flex;gap:4px">
+        <button class="ghost small" title="Move up" onclick="moveDetailCustomField(${i},-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="ghost small" title="Move down" onclick="moveDetailCustomField(${i},1)" ${i===detailCustomFields.length-1?'disabled':''}>↓</button>
+        <button class="danger small" title="Remove" onclick="removeDetailCustomFieldAt(${i})">✕</button>
       </div>
     </div>`).join('') || '<p class="muted">No order details fields yet.</p>';
 }
@@ -800,17 +799,15 @@ function renderDetailFieldListEntries(which){
   const list = detailFieldListState(which);
   const container = document.getElementById(which === 'header' ? 'layoutDetailHeaderFieldRows' : 'layoutDetailFooterFieldRows');
   container.innerHTML = list.map((f, i) => `
-    <div class="grid cols-3" style="align-items:end;margin-top:8px">
-      <div>
-        <label>Type</label>
+    <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
+      <div style="flex:1;min-width:130px">${i===0?'<label>Type</label>':''}
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','type',this.value)">
           <option value="orderfield" ${f.type==='orderfield'?'selected':''}>Order detail</option>
           <option value="total" ${f.type==='total'?'selected':''}>Total (of a column)</option>
-          <option value="fieldtotal" ${f.type==='fieldtotal'?'selected':''}>Total (of an Item Master field)</option>
+          <option value="fieldtotal" ${f.type==='fieldtotal'?'selected':''}>Total (of an Item field)</option>
         </select>
       </div>
-      <div>
-        <label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
+      <div style="flex:1;min-width:150px"><label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
             ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
@@ -819,14 +816,13 @@ function renderDetailFieldListEntries(which){
             : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>
-      <div>
-        <label>Label <span class="muted">(optional)</span></label>
+      <div style="flex:1;min-width:130px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
         <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
       </div>
-      <div style="grid-column:1/-1" class="btn-row">
-        <button class="ghost small" onclick="moveDetailFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑ Move up</button>
-        <button class="ghost small" onclick="moveDetailFieldListEntry('${which}','${f._id}',1)" ${i===list.length-1?'disabled':''}>↓ Move down</button>
-        <button class="danger small" onclick="removeDetailFieldListEntry('${which}','${f._id}')">Remove</button>
+      <div style="display:flex;gap:4px">
+        <button class="ghost small" title="Move up" onclick="moveDetailFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="ghost small" title="Move down" onclick="moveDetailFieldListEntry('${which}','${f._id}',1)" ${i===list.length-1?'disabled':''}>↓</button>
+        <button class="danger small" title="Remove" onclick="removeDetailFieldListEntry('${which}','${f._id}')">✕</button>
       </div>
     </div>`).join('') || '<p class="muted">None added.</p>';
 }

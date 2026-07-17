@@ -75,13 +75,12 @@
   }
   function adminNav(active) {
     const ex = currentExhibition();
-    const links = [
+    const links = ex ? [
+      { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
+      { key: 'order', href: '/staff/order.html', label: 'Take Order' },
+      { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
+    ] : [
       { key: 'dashboard', href: '/admin/dashboard.html', label: 'Dashboard' },
-      ...(ex ? [
-        { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
-        { key: 'order', href: '/staff/order.html', label: 'Take Order' },
-        { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
-      ] : []),
       { key: 'buyers', href: '/admin/buyers.html', label: 'Buyers' },
       { key: 'staff', href: '/admin/staff.html', label: 'Staff' },
       { key: 'reports', href: '/admin/reports.html', label: 'Reports' },
