@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.37.2';
-const BUILD_TIME   = '2026-07-21T12:45:00Z';
+const APP_VERSION  = '1.38.0';
+const BUILD_TIME   = '2026-07-21T13:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -67,6 +67,14 @@ const tenantSchema = new mongoose.Schema({
   natureOfBusiness: { type: String, default: '' }, // e.g. "Jewelry Wholesaler" — helps platform admin pick relevant companies when assigning exhibition participants
   plan: { type: String, default: 'free' },
   logoUrl: String,
+  // Colors/sizes support — off by default (invisible to every jewelry
+  // client), turned on per company by platform admin for garment-style
+  // catalogs. colorList/sizeList are ORDERED — chip display order in Take
+  // Order follows this list, not alphabetical, so a company can lead with
+  // its best-selling colors.
+  enableVariants: { type: Boolean, default: false },
+  colorList: { type: [String], default: [] },
+  sizeList: { type: [String], default: [] },
   // Which item fields appear per line on the order link sent to buyers, and
   // which of those (number fields) get summed into a total — admin-configured
   // in Settings > Order Form.
@@ -180,6 +188,11 @@ const itemSchema = new mongoose.Schema({
   scannerCode: String,                // denormalized from the fixed "itemCode" field, for fast scan lookup
   fields: { type: mongoose.Schema.Types.Mixed, default: {} }, // dynamic per-tenant fields
   images: [String],                   // up to 3, named from the "imageCode" field: {code}, {code}_1, {code}_2
+  // Which of the company's colors/sizes this specific style comes in —
+  // empty array means "all of them" (the common case; most styles come in
+  // the company's full range, only some need narrowing down).
+  availableColors: { type: [String], default: [] },
+  availableSizes: { type: [String], default: [] },
   active: { type: Boolean, default: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -775,6 +788,20 @@ app.put('/api/platform/tenants/:id/business-info', platformAuth, async (req, res
   if (req.body.natureOfBusiness !== undefined) updates.natureOfBusiness = String(req.body.natureOfBusiness).trim();
   await TenantDB.update({ id: tenant.id }, updates);
   res.json({ ok: true });
+});
+
+// Colors/sizes (variants) — off by default, invisible to every existing
+// jewelry client. Turning it on for a company unlocks the color/size
+// pickers in that company's own Item Master and the chip-based entry flow
+// in Take Order; every other company is completely unaffected.
+app.put('/api/platform/tenants/:id/variants-config', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const colorList = Array.isArray(req.body.colorList) ? req.body.colorList.map(c => String(c).trim()).filter(Boolean) : tenant.colorList;
+  const sizeList = Array.isArray(req.body.sizeList) ? req.body.sizeList.map(s => String(s).trim()).filter(Boolean) : tenant.sizeList;
+  const enableVariants = !!req.body.enableVariants;
+  await TenantDB.update({ id: tenant.id }, { enableVariants, colorList, sizeList });
+  res.json({ ok: true, enableVariants, colorList, sizeList });
 });
 
 app.put('/api/platform/tenants/:id/active', platformAuth, async (req, res) => {
@@ -1608,9 +1635,19 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId: exhibitionId || '', scannerCode, active: true }))
     return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists${exhibitionId ? ' in this exhibition' : ''}` });
   const imageCode = String(fields.imageCode || '').trim();
+  // Colors/sizes only apply if this company has the feature turned on —
+  // silently ignored otherwise, so a jewelry company's item payload
+  // (which will never include these) behaves identically to before.
+  let availableColors = [], availableSizes = [];
+  if (req.tenant.enableVariants) {
+    const colorSet = new Set(req.tenant.colorList || []), sizeSet = new Set(req.tenant.sizeList || []);
+    availableColors = Array.isArray(req.body.availableColors) ? req.body.availableColors.filter(c => colorSet.has(c)) : [];
+    availableSizes = Array.isArray(req.body.availableSizes) ? req.body.availableSizes.filter(s => sizeSet.has(s)) : [];
+  }
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
     scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
+    availableColors, availableSizes,
     active: true, createdAt: new Date().toISOString(),
   };
   await ItemDB.create(item);
@@ -1633,6 +1670,10 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     // Image Code changed — this item now belongs to a different (or no)
     // shared photo set, so swap its images to match rather than keep stale ones.
     if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
+  }
+  if (req.tenant.enableVariants) {
+    if (Array.isArray(req.body.availableColors)) { const s = new Set(req.tenant.colorList || []); updates.availableColors = req.body.availableColors.filter(c => s.has(c)); }
+    if (Array.isArray(req.body.availableSizes)) { const s = new Set(req.tenant.sizeList || []); updates.availableSizes = req.body.availableSizes.filter(x => s.has(x)); }
   }
   await ItemDB.update({ id: req.params.id }, updates);
   res.json({ ok: true });

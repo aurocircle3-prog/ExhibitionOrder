@@ -165,6 +165,7 @@
         <button class="tab-btn" data-ctab="orderdetails" onclick="switchConfigTab('orderdetails')">Order Details Fields</button>
         <button class="tab-btn" data-ctab="layout" onclick="switchConfigTab('layout')">Order View Layout</button>
         <button class="tab-btn" data-ctab="footer" onclick="switchConfigTab('footer')">Order Footer</button>
+        <button class="tab-btn" data-ctab="variants" onclick="switchConfigTab('variants')">Colors &amp; Sizes</button>
       </div>
 
       <div class="tab-panel" id="ctab-itemfields">
@@ -245,6 +246,31 @@
         </label>
         <div id="detailFooterFieldRows" style="margin-top:14px"></div>
         <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveDetailFooter)">Save footer</button>
+      </div>
+
+      <div class="tab-panel" id="ctab-variants">
+        <p class="muted" style="margin-top:0">Off by default — turn this on only for companies selling things like garments, where a style comes in multiple colors and sizes. Every other company is completely unaffected.</p>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:14px">
+          <input type="checkbox" id="variantsEnabled" style="width:auto"> <span>Enable colors and sizes for this company</span>
+        </label>
+        <div id="variantsFields" style="display:none">
+          <div class="grid cols-2">
+            <div>
+              <h4 style="margin-top:0">Colors</h4>
+              <p class="muted" style="margin-top:-6px">Order here is the order colors appear as chips in Take Order — lead with best-sellers.</p>
+              <div id="colorListRows"></div>
+              <button class="ghost small" onclick="addVariantEntry('color')">+ Add color</button>
+            </div>
+            <div>
+              <h4 style="margin-top:0">Sizes</h4>
+              <p class="muted" style="margin-top:-6px">Same order principle — smallest to largest is typical, but it's your call.</p>
+              <div id="sizeListRows"></div>
+              <button class="ghost small" onclick="addVariantEntry('size')">+ Add size</button>
+            </div>
+          </div>
+        </div>
+        <div class="error" id="variantsErr"></div>
+        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveVariantsConfig)">Save colors &amp; sizes</button>
       </div>
     </div>
 
@@ -598,6 +624,7 @@ async function openDetail(id){
   renderDetailFieldListEntries('footer');
   renderDetailColumns();
   loadDetailFooter(tenant);
+  loadVariantsConfig(tenant);
 
   document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
     <tr>
@@ -758,6 +785,62 @@ async function deleteCustomReport(id, name){
     EXO.toast('Report deleted');
     loadCustomReports(lastTenantId);
   } catch (e) { EXO.toast(e.message, 'error'); }
+}
+
+// ── Colors & Sizes (variants) ──────────────────────────────────────────
+let variantColorList = [], variantSizeList = [];
+function loadVariantsConfig(tenant){
+  document.getElementById('variantsEnabled').checked = !!tenant.enableVariants;
+  document.getElementById('variantsFields').style.display = tenant.enableVariants ? 'block' : 'none';
+  variantColorList = [...(tenant.colorList || [])];
+  variantSizeList = [...(tenant.sizeList || [])];
+  renderVariantList('color');
+  renderVariantList('size');
+}
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'variantsEnabled') document.getElementById('variantsFields').style.display = e.target.checked ? 'block' : 'none';
+});
+function addVariantEntry(kind){
+  (kind === 'color' ? variantColorList : variantSizeList).push('');
+  renderVariantList(kind);
+}
+function updateVariantEntry(kind, i, value){
+  (kind === 'color' ? variantColorList : variantSizeList)[i] = value;
+}
+function removeVariantEntry(kind, i){
+  const list = kind === 'color' ? variantColorList : variantSizeList;
+  list.splice(i, 1);
+  renderVariantList(kind);
+}
+function moveVariantEntry(kind, i, dir){
+  const list = kind === 'color' ? variantColorList : variantSizeList;
+  const j = i + dir;
+  if (j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  renderVariantList(kind);
+}
+function renderVariantList(kind){
+  const list = kind === 'color' ? variantColorList : variantSizeList;
+  const container = document.getElementById(kind === 'color' ? 'colorListRows' : 'sizeListRows');
+  container.innerHTML = list.map((v, i) => `
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 0">
+      <input value="${v}" placeholder="e.g. ${kind === 'color' ? 'Red' : 'M'}" oninput="updateVariantEntry('${kind}',${i},this.value)" style="flex:1">
+      <button class="ghost small" title="Move up" onclick="moveVariantEntry('${kind}',${i},-1)" ${i===0?'disabled':''}>↑</button>
+      <button class="ghost small" title="Move down" onclick="moveVariantEntry('${kind}',${i},1)" ${i===list.length-1?'disabled':''}>↓</button>
+      <button class="danger small" title="Remove" onclick="removeVariantEntry('${kind}',${i})">✕</button>
+    </div>`).join('') || `<p class="muted">No ${kind === 'color' ? 'colors' : 'sizes'} yet.</p>`;
+}
+async function saveVariantsConfig(){
+  const err = document.getElementById('variantsErr'); err.style.display = 'none';
+  const enableVariants = document.getElementById('variantsEnabled').checked;
+  const colorList = variantColorList.map(c => c.trim()).filter(Boolean);
+  const sizeList = variantSizeList.map(s => s.trim()).filter(Boolean);
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/variants-config`, { method: 'PUT', body: JSON.stringify({ enableVariants, colorList, sizeList }) });
+    EXO.toast('Colors & sizes saved');
+    variantColorList = colorList; variantSizeList = sizeList;
+    renderVariantList('color'); renderVariantList('size');
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 
 function closeDetail(){
