@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.35.0';
-const BUILD_TIME   = '2026-07-17T09:30:00Z';
+const APP_VERSION  = '1.36.0';
+const BUILD_TIME   = '2026-07-17T11:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -291,6 +291,21 @@ const exhibitionParticipantSchema = new mongoose.Schema({
   addedAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Platform-admin-authored, per-tenant custom report. rowType decides
+// whether the computed report has one row per order line item (detail) or
+// one row per order (summary, with numeric columns/formulas summed across
+// that order's items — same principle as "Show total" on Order View
+// Layout columns). Columns are Mixed, not a strict sub-schema, for the
+// same reason orderViewColumns is — different column types carry
+// different fields, and a strict schema has silently stripped
+// unrecognized fields before (see orderFieldsSnapshot's decimals bug).
+const reportDefSchema = new mongoose.Schema({
+  id: String, tenantId: String, name: String,
+  rowType: { type: String, default: 'item' }, // 'item' | 'order'
+  columns: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
 const Tenant     = mongoose.model('Tenant', tenantSchema);
 const User       = mongoose.model('User', userSchema);
 const FieldDef   = mongoose.model('FieldDef', fieldDefSchema);
@@ -299,6 +314,7 @@ const Party      = mongoose.model('Party', partySchema);
 const Order      = mongoose.model('Order', orderSchema);
 const Exhibition = mongoose.model('Exhibition', exhibitionSchema);
 const ExhibitionParticipant = mongoose.model('ExhibitionParticipant', exhibitionParticipantSchema);
+const ReportDef  = mongoose.model('ReportDef', reportDefSchema);
 const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
 const PasswordSetupToken = mongoose.model('PasswordSetupToken', passwordSetupTokenSchema);
 const ImageSet    = mongoose.model('ImageSet', imageSetSchema);
@@ -320,7 +336,7 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], reportDefs: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
     log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
@@ -357,6 +373,7 @@ const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
 const ExhibitionParticipantDB = makeCollectionOps(ExhibitionParticipant, 'exhibitionParticipants', { addedAt: -1 });
+const ReportDefDB = makeCollectionOps(ReportDef, 'reportDefs', { createdAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
 const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
 const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
@@ -828,6 +845,47 @@ app.delete('/api/platform/tenants/:id', platformAuth, async (req, res) => {
 // companies can no longer create their own (see the removed /api/exhibitions
 // POST/PUT/DELETE routes above; company admins only get the read-only list
 // of what they've been added to).
+// ── Custom reports (platform-admin authored, per tenant) ─────────────────
+app.get('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
+  const reports = await ReportDefDB.find({ tenantId: req.params.id });
+  res.json(reports);
+});
+app.post('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Report name is required' });
+  const rowType = req.body.rowType === 'order' ? 'order' : 'item';
+  try {
+    const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
+    const orderCustomFields = tenant.orderCustomFields || [];
+    const columns = validateReportColumns(req.body.columns, rowType, fieldDefs, orderCustomFields);
+    const report = { id: uuid(), tenantId: tenant.id, name, rowType, columns, createdAt: new Date().toISOString() };
+    await ReportDefDB.create(report);
+    res.json(report);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+app.put('/api/platform/tenants/:id/reports/:reportId', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const report = await ReportDefDB.findOne({ id: req.params.reportId, tenantId: tenant.id });
+  if (!report) return res.status(404).json({ error: 'Report not found' });
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Report name is required' });
+  const rowType = req.body.rowType === 'order' ? 'order' : 'item';
+  try {
+    const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
+    const orderCustomFields = tenant.orderCustomFields || [];
+    const columns = validateReportColumns(req.body.columns, rowType, fieldDefs, orderCustomFields);
+    await ReportDefDB.update({ id: report.id }, { name, rowType, columns });
+    res.json({ ok: true });
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+app.delete('/api/platform/tenants/:id/reports/:reportId', platformAuth, async (req, res) => {
+  await ReportDefDB.remove({ id: req.params.reportId, tenantId: req.params.id });
+  res.json({ ok: true });
+});
+
 app.get('/api/platform/exhibitions', platformAuth, async (req, res) => {
   const exhibitions = await ExhibitionDB.find({});
   const participants = await ExhibitionParticipantDB.find({});
@@ -2303,6 +2361,142 @@ app.put('/api/exhibitions/:id/reopen', resolveTenant, auth, requireRole('admin')
 // Shared by the tenant-scoped report routes and the platform-admin
 // equivalent below — single-sourced so the numbers can never disagree
 // between what a company admin sees and what the platform admin sees.
+// Built-in columns always available regardless of what fields a company
+// has configured — without these a report can't say which order/buyer/
+// item a row is even about. Some only make sense per row type.
+const REPORT_META_COLUMNS = {
+  item: [
+    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' },
+    { key: 'party_name', label: 'Buyer' }, { key: 'party_phone', label: 'Phone' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_code', label: 'Item Code' },
+    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark' },
+  ],
+  order: [
+    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' },
+    { key: 'party_name', label: 'Buyer' }, { key: 'party_phone', label: 'Phone' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
+  ],
+};
+function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields) {
+  const fieldByKey = {}; fieldDefs.forEach(f => { fieldByKey[f.key] = f; });
+  const orderFieldByKey = {}; orderCustomFields.forEach(f => { orderFieldByKey[f.key] = f; });
+  const metaKeys = new Set(REPORT_META_COLUMNS[rowType].map(m => m.key));
+  const allowedFormulaNames = new Set([
+    ...fieldDefs.filter(f => f.type === 'number').map(f => f.key),
+    ...orderCustomFields.filter(f => f.type === 'number').map(f => f.key),
+    'qty',
+  ]);
+  const out = [];
+  for (const raw of (Array.isArray(rawColumns) ? rawColumns : [])) {
+    if (!raw || !['meta', 'itemfield', 'orderfield', 'formula'].includes(raw.type))
+      throw Object.assign(new Error('Each report column needs a valid type'), { status: 400 });
+    const col = { id: raw.id || uuid(), type: raw.type };
+    if (raw.type === 'meta') {
+      if (!metaKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't a valid built-in column for this row type`), { status: 400 });
+      col.fieldKey = raw.fieldKey;
+      col.label = (raw.label || REPORT_META_COLUMNS[rowType].find(m => m.key === raw.fieldKey)?.label || '').trim().slice(0, 60) || raw.fieldKey;
+    } else if (raw.type === 'itemfield') {
+      const f = fieldByKey[raw.fieldKey];
+      if (!f) throw Object.assign(new Error(`"${raw.fieldKey}" isn't an Item Master field`), { status: 400 });
+      if (rowType === 'order' && f.type !== 'number') throw Object.assign(new Error(`"${f.label}" is text, not a number — order-level rows can only total numeric Item Master fields`), { status: 400 });
+      col.fieldKey = raw.fieldKey; col.unit = f.unit || ''; col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
+      col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+    } else if (raw.type === 'orderfield') {
+      const f = orderFieldByKey[raw.fieldKey];
+      if (!f) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields`), { status: 400 });
+      col.fieldKey = raw.fieldKey; col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
+      col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+    } else { // formula
+      const formula = String(raw.formula || '').trim();
+      if (!formula) throw Object.assign(new Error('Formula column needs a formula'), { status: 400 });
+      const check = validateFormula(formula, allowedFormulaNames);
+      if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
+      col.formula = formula;
+      col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+    }
+    out.push(col);
+  }
+  return out;
+}
+
+// The report row's value for one column, for one item within one order —
+// same numeric logic as the order view's getNumericColumnValue, just
+// living server-side so both the on-screen report and the Excel export
+// compute identically without needing a browser-loaded math library.
+function reportItemColumnValue(col, item, order) {
+  if (col.type === 'meta') {
+    switch (col.fieldKey) {
+      case 'order_no': return order.orderNo;
+      case 'order_date': return order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN') : '';
+      case 'party_name': return order.partyName || '';
+      case 'party_phone': return order.partyPhone || '';
+      case 'staff_name': return order.staffName || '';
+      case 'item_code': return item.scannerCode || '';
+      case 'item_name': return item.label || '';
+      case 'qty': return item.qty;
+      case 'remark': return item.comment || order.remark || '';
+      default: return '';
+    }
+  }
+  if (col.type === 'itemfield') {
+    const raw = item.extra?.[col.fieldKey];
+    return raw === '' || raw === undefined || raw === null ? '' : raw;
+  }
+  if (col.type === 'orderfield') return order.customFields?.[col.fieldKey] ?? '';
+  if (col.type === 'formula') {
+    try {
+      const scope = { qty: Number(item.qty) || 0 };
+      Object.entries(item.extra || {}).forEach(([k, v]) => { if (v !== '' && v != null && !isNaN(Number(v))) scope[k] = Number(v); });
+      Object.entries(order.customFields || {}).forEach(([k, v]) => { if (!(k in scope) && v !== '' && v != null && !isNaN(Number(v))) scope[k] = Number(v); });
+      const result = math.evaluate(preprocessPercent(col.formula), scope);
+      return typeof result === 'number' ? result : '';
+    } catch (e) { return ''; }
+  }
+  return '';
+}
+// Computes every row for a report definition, scoped to one exhibition.
+// 'item' rowType: one row per order line. 'order' rowType: one row per
+// order, with numeric itemfield/formula columns summed across that
+// order's lines — same "compute per piece, then add the results together"
+// principle used for merged-row formulas and column totals elsewhere,
+// applied here at the whole-order level instead of a merged-item level.
+async function computeReport(tenant, reportDef, exhibitionId) {
+  const q = { tenantId: tenant.id };
+  if (exhibitionId) q.exhibitionId = exhibitionId;
+  const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
+  const rows = [];
+  if (reportDef.rowType === 'item') {
+    for (const order of orders) {
+      for (const item of order.items || []) {
+        const row = {};
+        reportDef.columns.forEach(col => { row[col.id] = reportItemColumnValue(col, item, order); });
+        rows.push(row);
+      }
+    }
+  } else {
+    for (const order of orders) {
+      const row = {};
+      reportDef.columns.forEach(col => {
+        if (col.type === 'meta') {
+          row[col.id] = col.fieldKey === 'item_count' ? (order.items || []).length : reportItemColumnValue(col, {}, order);
+        } else if (col.type === 'orderfield') {
+          row[col.id] = order.customFields?.[col.fieldKey] ?? '';
+        } else {
+          // itemfield (numeric-only, enforced at save time) or formula — sum across every line in the order
+          let sum = 0, any = false;
+          (order.items || []).forEach(item => {
+            const v = reportItemColumnValue(col, item, order);
+            if (typeof v === 'number') { sum += v; any = true; }
+          });
+          row[col.id] = any ? sum : '';
+        }
+      });
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
 async function getReportsForTenant(tenantId) {
   const orders = (await OrderDB.find({ tenantId })).filter(o => !o.deleted);
   const byParty = {}, byItem = {}, byStaff = {};
@@ -2322,6 +2516,39 @@ async function getReportsForTenant(tenantId) {
     byStaff: Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount),
   };
 }
+
+// ── Custom reports (client-facing) ────────────────────────────────────────
+app.get('/api/reports/custom', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const reports = await ReportDefDB.find({ tenantId: req.tenant.id });
+  res.json(reports.map(r => ({ id: r.id, name: r.name, rowType: r.rowType })));
+});
+app.get('/api/reports/custom/:id', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const report = await ReportDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!report) return res.status(404).json({ error: 'Report not found' });
+  const rows = await computeReport(req.tenant, report, req.query.exhibitionId);
+  res.json({ name: report.name, rowType: report.rowType, columns: report.columns.map(c => ({ id: c.id, label: c.label, unit: c.unit, decimals: c.decimals })), rows });
+});
+app.get('/api/reports/custom/:id/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const report = await ReportDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!report) return res.status(404).json({ error: 'Report not found' });
+  try {
+    const rows = await computeReport(req.tenant, report, req.query.exhibitionId);
+    const headers = report.columns.map(c => c.label);
+    const dataRows = rows.map(row => report.columns.map(c => {
+      const v = row[c.id];
+      if (typeof v === 'number' && c.decimals != null) return Number(v.toFixed(c.decimals));
+      return v ?? '';
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+    ws['!cols'] = headers.map(() => ({ wch: 18 }));
+    XLSX.utils.book_append_sheet(wb, ws, report.name.slice(0, 31) || 'Report');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', `attachment; filename="${report.name.replace(/[^\w\- ]/g, '')}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   res.json((await getReportsForTenant(req.tenant.id)).byParty);
