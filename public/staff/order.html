@@ -97,12 +97,17 @@
       <h3 style="margin-top:0">Scan items</h3>
       <div class="error" id="scanErr"></div>
       <div class="grid cols-2">
-        <input id="scanCode" placeholder="Scan or type item code, then Enter" autofocus onkeydown="if(event.key==='Enter')lookupItem()">
+        <div style="position:relative">
+          <input id="scanCode" placeholder="Scan, or type a code or name…" autofocus autocomplete="off"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();lookupItem();}" oninput="renderSearchSuggestions(this.value)">
+          <div id="searchSuggestions" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:var(--card-bg,#fff);border:0.5px solid var(--line);border-radius:8px;margin-top:2px;max-height:260px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.08)"></div>
+        </div>
         <div class="btn-row">
           <button class="primary" onclick="lookupItem()">Add item</button>
           <button class="ghost" id="cameraBtn" onclick="cameraScan()" style="display:none">📷 Scan with camera</button>
         </div>
       </div>
+      <div id="variantPicker" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"></div>
     </div>
     <div class="card">
       <h3 style="margin-top:0">Cart <span class="muted" id="cartTotal"></span></h3>
@@ -189,12 +194,16 @@ function isNetworkFailure(e){
 
 // Warms the offline cache (items + parties) whenever we're online, so scan
 // lookups and buyer search still work if the connection drops mid-booth.
+let catalogItems = [], enableVariants = false, variantCategories = [];
 async function refreshOfflineCache(){
   try {
     const exhibitionId = EXO.currentExhibition()?.id;
     const [items, parties, me] = await Promise.all([
       EXO.apiFetch('/items' + (exhibitionId ? '?exhibitionId=' + exhibitionId : '')), EXO.apiFetch('/parties'), EXO.apiFetch('/me'),
     ]);
+    catalogItems = items;
+    enableVariants = !!me.tenant?.enableVariants;
+    variantCategories = me.tenant?.variantCategories || [];
     orderFields = me.tenant?.orderFields || [];
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];
@@ -437,40 +446,167 @@ async function createParty(){
   }
 }
 
+function renderSearchSuggestions(q){
+  const box = document.getElementById('searchSuggestions');
+  q = q.trim().toLowerCase();
+  if (!q) { box.style.display = 'none'; return; }
+  const matches = catalogItems.filter(it =>
+    it.scannerCode?.toLowerCase().includes(q) || String(it.fields?.itemName || '').toLowerCase().includes(q)
+  ).slice(0, 8);
+  if (!matches.length) { box.style.display = 'none'; return; }
+  box.innerHTML = matches.map(it => `
+    <div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
+      <b>${it.fields?.itemName || it.scannerCode}</b> <span class="muted">${it.scannerCode}</span>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+function selectSearchItem(id){
+  document.getElementById('searchSuggestions').style.display = 'none';
+  document.getElementById('scanCode').value = '';
+  const item = catalogItems.find(it => it.id === id);
+  if (item) handleFoundItem(item);
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#scanCode') && !e.target.closest('#searchSuggestions')) document.getElementById('searchSuggestions').style.display = 'none';
+});
+
 async function lookupItem(){
   const err = document.getElementById('scanErr'); err.style.display='none';
+  document.getElementById('searchSuggestions').style.display = 'none';
   const code = document.getElementById('scanCode').value.trim();
   document.getElementById('scanCode').value = '';
   if (!code) return;
   try {
     const exhibitionId = EXO.currentExhibition()?.id;
     const item = await EXO.apiFetch('/items/scan/' + encodeURIComponent(code) + (exhibitionId ? '?exhibitionId=' + exhibitionId : ''));
-    addToCart(item);
+    handleFoundItem(item);
     ExoOffline.cacheOneItem(tenantSlug, item); // fire-and-forget — belt-and-suspenders on top of the page-load cache refresh
   } catch(e) {
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
     const cached = await ExoOffline.findItemByCode(tenantSlug, code.toUpperCase());
-    if (cached) { addToCart(cached); return; }
+    if (cached) { handleFoundItem(cached); return; }
     err.textContent = 'Not in the offline item cache — connect once to refresh it, or check the code.';
     err.style.display='block';
   }
 }
-function addToCart(item){
-  const existing = cart.find(c => c.itemId === item.id);
-  if (existing) { existing.qty += 1; renderCart(); return; }
+// A found item either goes straight into the cart (no variants configured
+// for it, or the company doesn't use them) or opens the color/size picker
+// — never both, so a garment company's items don't get a stray plain
+// cart line before the picker's even been used.
+function handleFoundItem(item){
+  const hasVariants = enableVariants && item.variantSelections && Object.values(item.variantSelections).some(v => v && v.length);
+  if (hasVariants) openVariantPicker(item);
+  else addToCart(item);
+}
+// ── Variant picker (color/size chip entry) ──────────────────────────────
+let pendingVariantItem = null, pendingCats = [], pendingExtraPicks = {}, pendingPicks = {};
+function openVariantPicker(item){
+  pendingVariantItem = item;
+  // Only categories this specific item actually comes in — an item
+  // narrowed to just 2 colors shouldn't show the company's full 10.
+  pendingCats = variantCategories
+    .map(cat => ({ ...cat, values: item.variantSelections?.[cat.key] || [] }))
+    .filter(cat => cat.values.length);
+  pendingExtraPicks = {}; pendingPicks = {};
+  // Categories beyond the first two apply uniformly to everything added
+  // in this session (e.g. one Material choice covers every color/size
+  // combo picked below) rather than multiplying out a 3rd dimension of chips.
+  pendingCats.slice(2).forEach(cat => { pendingExtraPicks[cat.key] = cat.values[0]; });
+  renderVariantPicker();
+  document.getElementById('variantPicker').style.display = 'block';
+  document.getElementById('variantPicker').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function closeVariantPicker(){
+  document.getElementById('variantPicker').style.display = 'none';
+  pendingVariantItem = null; pendingCats = []; pendingPicks = {}; pendingExtraPicks = {};
+}
+function toggleVariantPrimary(value){
+  pendingPicks[value] = pendingPicks[value] ? null : {};
+  renderVariantPicker();
+}
+function setVariantQty(primaryValue, secondaryValue, qty){
+  if (!pendingPicks[primaryValue]) pendingPicks[primaryValue] = {};
+  pendingPicks[primaryValue][secondaryValue] = qty;
+}
+function renderVariantPicker(){
+  const box = document.getElementById('variantPicker');
+  if (!pendingVariantItem || !pendingCats.length) { box.innerHTML = ''; return; }
+  const [primaryCat, secondaryCat] = pendingCats;
+  const extraCats = pendingCats.slice(2);
+  box.innerHTML = `
+    <p style="margin:0 0 8px"><b>${pendingVariantItem.fields?.itemName || pendingVariantItem.scannerCode}</b> <span class="muted">${pendingVariantItem.scannerCode}</span></p>
+    ${extraCats.map(cat => `
+      <div style="margin-bottom:10px">
+        <label>${cat.label}</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+          ${cat.values.map(v => `<button type="button" onclick="pendingExtraPicks['${cat.key}']='${v.replace(/'/g,"\\'")}';renderVariantPicker()" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingExtraPicks[cat.key]===v?'var(--brand)':'var(--line)'};background:${pendingExtraPicks[cat.key]===v?'var(--brand)':'#fff'};color:${pendingExtraPicks[cat.key]===v?'#fff':'inherit'}">${v}</button>`).join('')}
+        </div>
+      </div>`).join('')}
+    <label>${primaryCat.label} <span class="muted">— tap to enter ${secondaryCat ? secondaryCat.label.toLowerCase() + ' quantities' : 'a quantity'}</span></label>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+      ${primaryCat.values.map(v => `<button type="button" onclick="toggleVariantPrimary('${v.replace(/'/g,"\\'")}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingPicks[v]?'var(--brand)':'var(--line)'};background:${pendingPicks[v]?'var(--brand)':'#fff'};color:${pendingPicks[v]?'#fff':'inherit'}">${v}${pendingPicks[v]&&Object.values(pendingPicks[v]).some(Boolean)?' · '+Object.values(pendingPicks[v]).reduce((s,n)=>s+(Number(n)||0),0):''}</button>`).join('')}
+    </div>
+    ${primaryCat.values.filter(v => pendingPicks[v]).map(v => `
+      <div style="border:0.5px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:8px">
+        <p style="font-size:13px;font-weight:500;margin:0 0 8px">${v}</p>
+        ${secondaryCat ? `
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px">
+          ${secondaryCat.values.map(sv => `
+            <div style="text-align:center">
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">${sv}</label>
+              <input type="number" min="0" placeholder="0" value="${pendingPicks[v][sv]||''}" oninput="setVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',this.value)" style="width:100%;padding:5px 4px;text-align:center;font-size:13px">
+            </div>`).join('')}
+        </div>` : `
+        <input type="number" min="0" placeholder="Qty" value="${pendingPicks[v]['_qty']||''}" oninput="setVariantQty('${v.replace(/'/g,"\\'")}','_qty',this.value)" style="width:100px">`}
+      </div>`).join('')}
+    <div class="btn-row" style="margin-top:12px">
+      <button class="primary" onclick="confirmVariantPicks()">Add to cart</button>
+      <button class="ghost" onclick="closeVariantPicker()">Cancel</button>
+    </div>`;
+}
+function confirmVariantPicks(){
+  const [primaryCat, secondaryCat] = pendingCats;
+  const extraCats = pendingCats.slice(2);
+  let anyAdded = false;
+  Object.keys(pendingPicks).forEach(primaryValue => {
+    const qtyMap = pendingPicks[primaryValue];
+    if (!qtyMap) return;
+    Object.keys(qtyMap).forEach(secKey => {
+      const qty = Number(qtyMap[secKey]) || 0;
+      if (qty <= 0) return;
+      const variantTags = { [primaryCat.key]: primaryValue };
+      if (secondaryCat) variantTags[secondaryCat.key] = secKey;
+      extraCats.forEach(cat => { variantTags[cat.key] = pendingExtraPicks[cat.key]; });
+      addToCart(pendingVariantItem, variantTags, qty);
+      anyAdded = true;
+    });
+  });
+  if (!anyAdded) { EXO.toast('Enter at least one quantity', 'error'); return; }
+  closeVariantPicker();
+}
+function addToCart(item, variantTags, qty){
+  variantTags = variantTags || {};
+  qty = qty || 1;
+  // Two lines are "the same" only if both the item AND every variant tag
+  // match — different colors/sizes of the same item are genuinely
+  // separate lines, not one line to bump the quantity on.
+  const tagsMatch = a => JSON.stringify(a || {}) === JSON.stringify(variantTags);
+  const existing = cart.find(c => c.itemId === item.id && tagsMatch(c.variantTags));
+  if (existing) { existing.qty += qty; renderCart(); return; }
   const extra = {};
   orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
-  cart.push({ itemId: item.id, label: item.fields.productName || item.scannerCode, code: item.scannerCode, qty: 1, extra, comment: '' });
+  const tagLabel = Object.values(variantTags).filter(Boolean).join(' / ');
+  cart.push({ lineId: 'l'+Date.now()+Math.random().toString(36).slice(2,6), itemId: item.id, label: item.fields?.itemName || item.fields?.productName || item.scannerCode, code: item.scannerCode, qty, extra, comment: '', variantTags, tagLabel });
   renderCart();
 }
-function changeQty(id, delta){
-  const line = cart.find(c => c.itemId === id);
+function changeQty(lineId, delta){
+  const line = cart.find(c => c.lineId === lineId);
   line.qty = Math.max(1, line.qty + delta);
   renderCart();
 }
-function updateExtra(id, key, value){ const line = cart.find(c => c.itemId === id); if (line) line.extra[key] = value; }
-function updateComment(id, value){ const line = cart.find(c => c.itemId === id); if (line) line.comment = value; }
-function removeLine(id){ cart = cart.filter(c => c.itemId !== id); renderCart(); }
+function updateExtra(lineId, key, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.extra[key] = value; }
+function updateComment(lineId, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.comment = value; }
+function removeLine(lineId){ cart = cart.filter(c => c.lineId !== lineId); renderCart(); }
 function renderCart(){
   const itemCount = cart.reduce((s,c)=>s+c.qty,0);
   document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
@@ -486,11 +622,11 @@ function renderCart(){
   const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
     <tr>
-      <td>${c.label}<br><span class="muted">${c.code}</span></td>
-      ${orderFields.map(f => `<td><input style="width:80px" value="${c.extra?.[f.key] ?? ''}" oninput="updateExtra('${c.itemId}','${f.key}',this.value)"></td>`).join('')}
-      <td><input style="width:140px" placeholder="Optional note" value="${c.comment || ''}" oninput="updateComment('${c.itemId}',this.value)"></td>
-      <td class="qty-ctrl"><button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button></td>
-      <td><button class="danger small" onclick="removeLine('${c.itemId}')">✕</button></td>
+      <td>${c.label}<br><span class="muted">${c.code}${c.tagLabel ? ' · ' + c.tagLabel : ''}</span></td>
+      ${orderFields.map(f => `<td><input style="width:80px" value="${c.extra?.[f.key] ?? ''}" oninput="updateExtra('${c.lineId}','${f.key}',this.value)"></td>`).join('')}
+      <td><input style="width:140px" placeholder="Optional note" value="${c.comment || ''}" oninput="updateComment('${c.lineId}',this.value)"></td>
+      <td class="qty-ctrl"><button class="ghost small" onclick="changeQty('${c.lineId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.lineId}',1)">+</button></td>
+      <td><button class="danger small" onclick="removeLine('${c.lineId}')">✕</button></td>
     </tr>`).join('');
   document.getElementById('cartRows').innerHTML = `
     <div class="table-scroll"><table>
@@ -505,7 +641,7 @@ async function submitOrder(){
   const err = document.getElementById('scanErr'); err.style.display='none';
   if (!party) { err.textContent = 'Pick or create a buyer first'; err.style.display='block'; return; }
   if (!cart.length) { err.textContent = 'Scan at least one item'; err.style.display='block'; return; }
-  const body = { partyId: party.id, exhibitionId: EXO.currentExhibition()?.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment })), remark: document.getElementById('remark').value.trim(), customFields: orderDetailValues };
+  const body = { partyId: party.id, exhibitionId: EXO.currentExhibition()?.id, items: cart.map(c => ({ itemId: c.itemId, qty: c.qty, extra: c.extra, comment: c.comment, variantTags: c.variantTags })), remark: document.getElementById('remark').value.trim(), customFields: orderDetailValues };
   try {
     lastOrder = await EXO.apiFetch('/orders', { method:'POST', body: JSON.stringify(body) });
     clearForm(); // done BEFORE showing the confirmation, so a stray extra tap on "Create order" can't resubmit the same items as a second order

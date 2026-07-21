@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.43.0';
-const BUILD_TIME   = '2026-07-21T17:00:00Z';
+const APP_VERSION  = '1.44.0';
+const BUILD_TIME   = '2026-07-21T18:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -2234,10 +2234,25 @@ async function buildOrderLines(tenant, items) {
       }
     }
     const extra = normalizeFieldValues(fieldDefs, rawExtra);
+    // Only keep tags for categories the tenant actually has, and only
+    // values this specific item is actually available in — same
+    // "validate against the real list" principle as everywhere else tags
+    // are set, not just trusting whatever the client sent.
+    let variantTags;
+    if (tenant.enableVariants && line.variantTags && typeof line.variantTags === 'object') {
+      variantTags = {};
+      (tenant.variantCategories || []).forEach(cat => {
+        const val = line.variantTags[cat.key];
+        if (val && (item.variantSelections?.[cat.key] || []).includes(val)) variantTags[cat.key] = val;
+      });
+    }
+    const hasTags = variantTags && Object.keys(variantTags).length;
+    const baseLabel = item.fields?.itemName || item.fields?.productName || item.scannerCode || item.id;
     lineItems.push({
-      itemId: item.id, label: item.fields?.itemName || item.fields?.productName || item.scannerCode || item.id,
+      itemId: item.id, label: hasTags ? `${baseLabel} (${Object.values(variantTags).join(' / ')})` : baseLabel,
       scannerCode: item.scannerCode, images: item.images || [],
       qty, extra, comment: typeof line.comment === 'string' ? line.comment.trim().slice(0, 500) : '',
+      ...(hasTags ? { variantTags } : {}),
     });
   }
   const fieldTotals = {};
