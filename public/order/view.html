@@ -287,7 +287,7 @@ async function load(){
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
         ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
-      ${renderFooter(company)}`;
+      ${renderFooter(company, order)}`;
     renderTablePage();
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
@@ -439,12 +439,14 @@ const SOCIAL_ICONS = {
   youtube: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M10 9.3l6 2.7-6 2.7z" fill="currentColor" stroke="none"/></svg>',
   website: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>',
 };
-function renderFooter(company){
+function renderFooter(company, order){
   const f = company.footer || {};
   const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
   if (!hasContent) return '';
+  const waMessageTemplate = f.whatsappMessage || 'Would like to discuss about order No – {orderNo}';
+  const waMessage = waMessageTemplate.replace(/\{orderNo\}/g, order?.orderNo || '');
   const socialLinks = [
-    f.whatsappNumber && { key: 'whatsapp', label: 'WhatsApp', url: `https://wa.me/${f.whatsappNumber.replace(/\D/g, '')}` },
+    f.whatsappNumber && { key: 'whatsapp', label: 'WhatsApp', url: `https://wa.me/${f.whatsappNumber.replace(/\D/g, '')}?text=${encodeURIComponent(waMessage)}` },
     f.instagram && { key: 'instagram', label: 'Instagram', url: f.instagram.startsWith('http') ? f.instagram : `https://instagram.com/${f.instagram.replace(/^@/, '')}` },
     f.facebook && { key: 'facebook', label: 'Facebook', url: f.facebook.startsWith('http') ? f.facebook : `https://facebook.com/${f.facebook}` },
     f.twitter && { key: 'twitter', label: 'Twitter/X', url: f.twitter.startsWith('http') ? f.twitter : `https://twitter.com/${f.twitter.replace(/^@/, '')}` },

@@ -87,6 +87,12 @@
 
       <div id="footerFieldRows" style="margin-top:14px"></div>
 
+      <div style="margin-top:12px">
+        <label>WhatsApp message <span class="muted">— shown pre-filled when a buyer taps the WhatsApp icon on their order link</span></label>
+        <input id="footer_whatsappMessage" placeholder="Would like to discuss about order No – {orderNo}">
+        <p class="muted" style="margin:4px 0 0">Use <code>{orderNo}</code> anywhere in the message — it gets replaced with that order's actual number.</p>
+      </div>
+
       <div class="error" id="footerErr"></div>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveFooter)">Save footer</button>
     </div>
@@ -97,7 +103,7 @@
       <h3 style="margin-top:0">Exhibitions <span class="muted">— which shows AuroCircle has set your company up for</span></h3>
       <p class="muted" style="margin-top:-4px">Exhibitions are set up centrally — contact AuroCircle to be added to one. Once added, it'll show up here and in Item Master's exhibition switcher.</p>
       <div class="table-scroll"><table>
-        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Valid till</th></tr></thead>
+        <thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Valid till</th><th>Order numbers</th></tr></thead>
         <tbody id="exRows"></tbody>
       </table></div>
     </div>
@@ -471,6 +477,7 @@ const FOOTER_FIELD_DEFS = [
 function loadFooter(tenant){
   const f = tenant.footer || { show: {} };
   document.getElementById('show_logo').checked = !!f.show?.logo;
+  document.getElementById('footer_whatsappMessage').value = f.whatsappMessage || '';
   if (tenant.logoUrl) {
     document.getElementById('logoPreview').src = tenant.logoUrl;
     document.getElementById('logoPreview').style.display = 'inline-block';
@@ -515,7 +522,7 @@ async function uploadLogo(){
 }
 async function saveFooter(){
   const err = document.getElementById('footerErr'); err.style.display = 'none';
-  const body = { show: { logo: document.getElementById('show_logo').checked } };
+  const body = { show: { logo: document.getElementById('show_logo').checked }, whatsappMessage: document.getElementById('footer_whatsappMessage').value.trim() };
   for (const def of FOOTER_FIELD_DEFS) {
     if (def.type === 'phone') {
       const num = document.getElementById(`footer_${def.key}`).value.trim();
@@ -532,11 +539,43 @@ async function saveFooter(){
 }
 
 // ── Exhibitions ──
+let exhibitionsList = [], editingOrderNumId = null;
 async function loadExhibitions(){
-  const list = await EXO.apiFetch('/exhibitions');
-  document.getElementById('exRows').innerHTML = list.map(e => `
+  exhibitionsList = await EXO.apiFetch('/exhibitions');
+  renderExhibitionRows();
+}
+function renderExhibitionRows(){
+  document.getElementById('exRows').innerHTML = exhibitionsList.map(e => `
     <tr><td>${e.name}</td><td>${e.location||'—'}</td><td>${e.startDate||''} ${e.endDate?'– '+e.endDate:''}</td>
-    <td>${e.validTill || '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Not added to any exhibition yet</td></tr>';
+    <td>${e.validTill || '—'}</td>
+    <td>${editingOrderNumId === e.id ? renderOrderNumEditor(e) : renderOrderNumSummary(e)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Not added to any exhibition yet</td></tr>';
+}
+function renderOrderNumSummary(e){
+  const sample = `${e.orderNumberPrefix}${e.orderNumberStart}${e.orderNumberSuffix}`;
+  return `<span class="muted">e.g. ${sample}</span> <button class="ghost small" onclick="editOrderNumConfig('${e.id}')">Edit</button>`;
+}
+function renderOrderNumEditor(e){
+  return `
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <input id="onPrefix_${e.id}" value="${e.orderNumberPrefix}" placeholder="Prefix" style="width:70px">
+      <input id="onStart_${e.id}" type="number" min="1" value="${e.orderNumberStart}" placeholder="Start" style="width:80px">
+      <input id="onSuffix_${e.id}" value="${e.orderNumberSuffix}" placeholder="Suffix" style="width:70px">
+      <button class="primary small" onclick="saveOrderNumConfig('${e.id}')">Save</button>
+      <button class="ghost small" onclick="editingOrderNumId=null;renderExhibitionRows()">Cancel</button>
+    </div>
+    ${e.orderNumberInUse ? `<p class="muted" style="margin:4px 0 0">Orders already exist here — prefix/suffix apply going forward; the starting number only takes effect if nothing's been numbered yet.</p>` : ''}`;
+}
+function editOrderNumConfig(id){ editingOrderNumId = id; renderExhibitionRows(); }
+async function saveOrderNumConfig(id){
+  const prefix = document.getElementById('onPrefix_'+id).value.trim();
+  const suffix = document.getElementById('onSuffix_'+id).value.trim();
+  const start = Number(document.getElementById('onStart_'+id).value);
+  try {
+    await EXO.apiFetch('/exhibitions/'+id+'/order-number-config', { method: 'PUT', body: JSON.stringify({ prefix, suffix, start }) });
+    EXO.toast('Order numbering saved');
+    editingOrderNumId = null;
+    loadExhibitions();
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
 load();

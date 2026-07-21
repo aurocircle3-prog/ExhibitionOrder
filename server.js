@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.42.0';
-const BUILD_TIME   = '2026-07-21T16:05:00Z';
+const APP_VERSION  = '1.43.0';
+const BUILD_TIME   = '2026-07-21T17:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -303,6 +303,16 @@ const exhibitionParticipantSchema = new mongoose.Schema({
   id: String, exhibitionId: String, tenantId: String,
   validTill: String, // date, platform-admin-controlled — expired means no new items/orders in this exhibition, but past data stays visible
   closed: { type: Boolean, default: false }, // company admin's own manual close/reopen — independent of validTill, private to this company only
+  // Order numbering for this company's orders within this exhibition —
+  // client-admin configured, not platform admin, since each company wants
+  // its own scheme (a shared exhibition's order numbers are never mixed
+  // across companies anyway, they're already tenant-scoped). orderSeq is
+  // the running counter, separate per participant so two exhibitions for
+  // the same company don't share one sequence.
+  orderNumberPrefix: { type: String, default: 'EX' },
+  orderNumberSuffix: { type: String, default: '' },
+  orderNumberStart: { type: Number, default: 1000 },
+  orderNumberSeq: { type: Number, default: null },
   addedAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -1464,7 +1474,7 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 // field is stored regardless of its show/hide toggle — a company can type
 // in its GST number to have on file without necessarily publishing it —
 // the public order route below is what actually filters by `show`.
-const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website'];
+const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
 async function saveFooterForTenant(tenantId, body) {
   const footer = { show: {} };
@@ -2238,15 +2248,44 @@ async function buildOrderLines(tenant, items) {
   return { lineItems, fieldTotals, orderFields };
 }
 
-// Atomically claims the next order number for a tenant. Uses Mongo's $inc
-// (a true atomic increment — safe for two staff submitting in the same
-// instant) instead of the old "count orders, then create" approach. If a
-// tenant predates this field (orderSeq missing), seeds it once from the
-// existing order count so numbering keeps incrementing rather than
-// restarting — that one-time seed has a small race window of its own, but
-// only on the very first order after upgrade, which is an acceptable trade
-// vs. the previous always-racy behavior.
-async function nextOrderNo(tenant) {
+// Atomically claims the next order number. If the order belongs to an
+// exhibition, uses that exhibition participant's own prefix/suffix/start
+// config and its own running sequence (client-admin configured, per
+// exhibition) — so two exhibitions for the same company can have
+// completely independent numbering. Orders with no exhibition (the
+// legacy/no-exhibition bucket) keep using the original tenant-wide EX-
+// prefixed sequence, unchanged.
+async function nextOrderNo(tenant, exhibitionId) {
+  if (exhibitionId) {
+    const participant = useMongoose
+      ? await ExhibitionParticipant.findOne({ tenantId: tenant.id, exhibitionId })
+      : db.get('exhibitionParticipants').find({ tenantId: tenant.id, exhibitionId }).value();
+    if (participant) {
+      const prefix = participant.orderNumberPrefix ?? 'EX';
+      const suffix = participant.orderNumberSuffix ?? '';
+      const start = participant.orderNumberStart ?? 1000;
+      if (useMongoose) {
+        let p = participant;
+        if (p.orderNumberSeq == null) {
+          p = await ExhibitionParticipant.findOneAndUpdate({ id: p.id }, { $set: { orderNumberSeq: start - 1 } }, { new: true });
+        }
+        const updated = await ExhibitionParticipant.findOneAndUpdate({ id: p.id }, { $inc: { orderNumberSeq: 1 } }, { new: true });
+        return `${prefix}${updated.orderNumberSeq}${suffix}`;
+      }
+      // lowdb — dev-only, single Node process, no real concurrency to race against.
+      if (participant.orderNumberSeq == null) {
+        db.get('exhibitionParticipants').find({ id: participant.id }).assign({ orderNumberSeq: start - 1 }).write();
+      }
+      const p2 = db.get('exhibitionParticipants').find({ id: participant.id }).value();
+      const next = p2.orderNumberSeq + 1;
+      db.get('exhibitionParticipants').find({ id: participant.id }).assign({ orderNumberSeq: next }).write();
+      return `${prefix}${next}${suffix}`;
+    }
+    // Falls through to the tenant-wide sequence below if somehow there's
+    // no participant record for this exhibition (shouldn't normally
+    // happen — an order can't be placed in an exhibition the tenant isn't
+    // actually part of — but better to still number the order than fail).
+  }
   if (useMongoose) {
     let t = await Tenant.findOne({ id: tenant.id });
     if (t.orderSeq == null) {
@@ -2280,7 +2319,7 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   // Order Form config below. Qty is the only quantity that's always tracked.
   const { lineItems, fieldTotals, orderFields } = await buildOrderLines(req.tenant, items);
   if (!lineItems.length) return res.status(400).json({ error: 'No valid items in this order' });
-  const orderNo = await nextOrderNo(req.tenant);
+  const orderNo = await nextOrderNo(req.tenant, exhibitionId);
 
   const order = {
     id: uuid(), orderNo, tenantId: req.tenant.id,
@@ -2422,6 +2461,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
   const rawFooter = tenant?.footer || { show: {} };
   const footer = {};
   for (const key of FOOTER_TEXT_FIELDS) if (rawFooter.show?.[key] && rawFooter[key]) footer[key] = rawFooter[key];
+  if (footer.whatsappNumber && rawFooter.whatsappMessage) footer.whatsappMessage = rawFooter.whatsappMessage;
   const showLogo = !!(rawFooter.show?.logo && tenant?.logoUrl);
   res.json({
     order: { ...order, columnsSnapshot: columns },
@@ -2460,7 +2500,8 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
       // being offered for new items/orders, but stays fully viewable.
       const expired = !!(p.validTill && p.validTill < today);
       const status = (p.closed || expired) ? 'completed' : 'current';
-      return { ...ex, validTill: p.validTill, closed: !!p.closed, status, itemCount: itemCountByEx[ex.id] || 0, orderCount: orderCountByEx[ex.id] || 0 };
+      return { ...ex, validTill: p.validTill, closed: !!p.closed, status, itemCount: itemCountByEx[ex.id] || 0, orderCount: orderCountByEx[ex.id] || 0,
+        orderNumberPrefix: p.orderNumberPrefix ?? 'EX', orderNumberSuffix: p.orderNumberSuffix ?? '', orderNumberStart: p.orderNumberStart ?? 1000, orderNumberInUse: p.orderNumberSeq != null };
     })
     .filter(Boolean);
   res.json(result);
@@ -2479,6 +2520,29 @@ app.put('/api/exhibitions/:id/reopen', resolveTenant, auth, requireRole('admin')
   if (!p) return res.status(404).json({ error: 'Not participating in that exhibition' });
   await ExhibitionParticipantDB.update({ id: p.id }, { closed: false });
   res.json({ ok: true });
+});
+
+// Order numbering — prefix/suffix/starting number, per exhibition, set by
+// the company's own admin (not platform admin — each company wants its
+// own scheme even within a shared exhibition). Changing the starting
+// number only actually resets anything if no order has been placed yet
+// under this config (orderNumberSeq still null) — after that, it just
+// changes where future numbers pick up from, since silently renumbering
+// past orders would break references already sent to buyers.
+app.put('/api/exhibitions/:id/order-number-config', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const p = await ExhibitionParticipantDB.findOne({ exhibitionId: req.params.id, tenantId: req.tenant.id });
+  if (!p) return res.status(404).json({ error: 'Not participating in that exhibition' });
+  const prefix = String(req.body.prefix ?? 'EX').slice(0, 20);
+  const suffix = String(req.body.suffix ?? '').slice(0, 20);
+  const start = Number(req.body.start);
+  if (!Number.isFinite(start) || start < 1) return res.status(400).json({ error: 'Starting number must be a positive number' });
+  const updates = { orderNumberPrefix: prefix, orderNumberSuffix: suffix, orderNumberStart: start };
+  // Only actually rewind/advance the live sequence if nothing's been
+  // numbered under it yet — otherwise leave orderNumberSeq alone so
+  // existing orders' numbers stay meaningful and nothing collides.
+  if (p.orderNumberSeq == null) updates.orderNumberSeq = null;
+  await ExhibitionParticipantDB.update({ id: p.id }, updates);
+  res.json({ ok: true, ...updates });
 });
 
 // ── REPORTS ───────────────────────────────────────────────────────────────────
