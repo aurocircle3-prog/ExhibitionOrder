@@ -283,18 +283,19 @@ async function load(){
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
         ${resolvedHeaderFields.length ? `<div style="margin-bottom:14px">${renderFieldList(resolvedHeaderFields)}</div>` : ''}
-        <div class="table-scroll desktop-order-view"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
+        <div class="table-scroll desktop-order-view" id="tableViewWrap"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
           <tbody id="orderRowsBody"></tbody>
         </table></div>
         <div class="mobile-order-view" id="orderMobileCards"></div>
+        <div id="clubbedItems" style="display:none"></div>
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
         ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
       ${renderFooter(company, order)}`;
-    renderTablePage();
+    decideAndRenderItems(order);
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
   }
@@ -412,6 +413,62 @@ function renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages
 // long table; this keeps the page manageable to scroll through, especially
 // on a phone. Just re-slices the already-rendered row HTML and updates the
 // tbody in place, so paging doesn't re-fetch or re-build anything.
+// Clubbed variant layout — used automatically whenever an order actually
+// has variant tags (garment-style companies only; every other order keeps
+// using the normal table/mobile-card view, completely unaffected). Groups
+// by item first, then by the first variant tag (color), then spreads the
+// second tag (size) as quantity chips — so one photo covers every
+// color/size combination of that item instead of repeating per row.
+function decideAndRenderItems(order){
+  const items = order.items || [];
+  const hasTags = items.some(it => it.variantTags && Object.keys(it.variantTags).length);
+  if (!hasTags) { renderTablePage(); return; }
+  document.getElementById('tableViewWrap').style.display = 'none';
+  document.getElementById('orderMobileCards').style.display = 'none';
+  document.getElementById('orderPagination').innerHTML = '';
+  document.getElementById('clubbedItems').style.display = 'block';
+  renderClubbedItems(items);
+}
+function buildClubbedGroups(items){
+  const groups = {}, order = [];
+  items.forEach(it => {
+    const tags = it.variantTags || {};
+    const tagKeys = Object.keys(tags); // insertion order matches the tenant's own category order
+    const primaryVal = tagKeys[0] ? tags[tagKeys[0]] : null;
+    const secondaryVal = tagKeys[1] ? tags[tagKeys[1]] : null;
+    const cleanLabel = it.extra?.itemName || String(it.label || '').replace(/\s*\([^)]*\)\s*$/, '');
+    const itemKey = cleanLabel + '::' + it.itemId;
+    if (!groups[itemKey]) { groups[itemKey] = { label: cleanLabel, code: it.scannerCode, images: it.images || [], colors: {}, colorOrder: [], total: 0 }; order.push(itemKey); }
+    const g = groups[itemKey];
+    const colorKey = primaryVal || '';
+    if (!g.colors[colorKey]) { g.colors[colorKey] = { sizes: {}, sizeOrder: [] }; g.colorOrder.push(colorKey); }
+    const c = g.colors[colorKey];
+    const sizeKey = secondaryVal || 'Qty';
+    if (!(sizeKey in c.sizes)) { c.sizes[sizeKey] = 0; c.sizeOrder.push(sizeKey); }
+    c.sizes[sizeKey] += Number(it.qty) || 0;
+    g.total += Number(it.qty) || 0;
+  });
+  return order.map(k => groups[k]);
+}
+function renderClubbedItems(items){
+  const groups = buildClubbedGroups(items);
+  document.getElementById('clubbedItems').innerHTML = groups.map(g => `
+    <div class="clubbed-card">
+      ${g.images[0] ? `<img class="clubbed-photo" src="${g.images[0]}" onerror="this.style.visibility='hidden'">` : '<div class="clubbed-photo"></div>'}
+      <div class="clubbed-header">
+        <p style="margin:0;font-weight:600">${g.label}</p>
+        ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${g.code}</p>` : ''}
+      </div>
+      <div class="clubbed-groups">
+        ${g.colorOrder.map(colorKey => `
+          ${colorKey ? `<p class="clubbed-color-label">${colorKey}</p>` : ''}
+          <div class="clubbed-size-chips">
+            ${g.colors[colorKey].sizeOrder.map(sizeKey => `<span class="clubbed-size-chip">${sizeKey === 'Qty' ? '' : sizeKey + ' '}×${g.colors[colorKey].sizes[sizeKey]}</span>`).join('')}
+          </div>`).join('')}
+        <div class="clubbed-total"><span class="muted">Total qty</span><span style="font-weight:600">${g.total}</span></div>
+      </div>
+    </div>`).join('');
+}
 function renderTablePage(){
   const totalPages = Math.max(1, Math.ceil(allRowsHtml.length / PAGE_SIZE));
   currentPage = Math.min(Math.max(1, currentPage), totalPages);
