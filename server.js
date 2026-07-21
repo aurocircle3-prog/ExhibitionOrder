@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.39.0';
-const BUILD_TIME   = '2026-07-21T14:15:00Z';
+const APP_VERSION  = '1.40.0';
+const BUILD_TIME   = '2026-07-21T14:45:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1651,6 +1651,14 @@ function resolveVariantSelections(tenant, rawSelections) {
   });
   return out;
 }
+// Tags are required, same as the fixed Barcode/Item Name fields — every
+// category the company has defined needs at least one value ticked.
+function validateVariantSelectionsComplete(tenant, resolved) {
+  if (!tenant.enableVariants) return null;
+  const missing = (tenant.variantCategories || []).filter(cat => !(resolved[cat.key] || []).length);
+  if (missing.length) return `Select at least one ${missing.map(c => c.label).join(', ')}`;
+  return null;
+}
 
 app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { fields: rawFields, exhibitionId } = req.body;
@@ -1672,6 +1680,8 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   // on — silently ignored otherwise, so a jewelry company's item payload
   // (which will never include these) behaves identically to before.
   const variantSelections = resolveVariantSelections(req.tenant, req.body.variantSelections);
+  const variantErr = validateVariantSelectionsComplete(req.tenant, variantSelections);
+  if (variantErr) return res.status(400).json({ error: variantErr });
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
     scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
@@ -1700,7 +1710,10 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
   }
   if (req.tenant.enableVariants && req.body.variantSelections) {
-    updates.variantSelections = resolveVariantSelections(req.tenant, req.body.variantSelections);
+    const resolved = resolveVariantSelections(req.tenant, req.body.variantSelections);
+    const variantErr = validateVariantSelectionsComplete(req.tenant, resolved);
+    if (variantErr) return res.status(400).json({ error: variantErr });
+    updates.variantSelections = resolved;
   }
   await ItemDB.update({ id: req.params.id }, updates);
   res.json({ ok: true });
