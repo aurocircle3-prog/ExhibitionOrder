@@ -309,18 +309,20 @@ function renderItemsTable(list){
   currentItemsList = list;
   const visibleIds = list.map(it => it.id);
   const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.has(id));
-  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  const tagCols = enableVariants ? variantCategories : [];
+  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}${tagCols.map(c=>`<th>${c.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
   document.getElementById('itemsBody').innerHTML = list.map(it => `
     <tr>
       <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
       <td class="thumb-cell"><img src="${it.images?.[0]||''}" onerror="this.style.visibility='hidden'"></td>
       ${fields.map(f=>`<td>${it.fields[f.key] ?? ''}</td>`).join('')}
+      ${tagCols.map(c=>`<td>${(it.variantSelections?.[c.key]||[]).join(', ') || '—'}</td>`).join('')}
       <td>${(it.images||[]).length}/3</td>
       <td>
         <button class="ghost small" onclick="editItem('${it.id}')">Edit</button>
         <button class="danger small" onclick="deleteItem('${it.id}')">Delete</button>
       </td>
-    </tr>`).join('') || `<tr><td colspan="${fields.length+4}" class="muted">No items yet — add one below.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="${fields.length+tagCols.length+4}" class="muted">No items yet — add one below.</td></tr>`;
 }
 function searchItems(q){
   q = q.toLowerCase();
