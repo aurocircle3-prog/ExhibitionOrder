@@ -427,7 +427,7 @@ function decideAndRenderItems(order){
   document.getElementById('orderMobileCards').style.display = 'none';
   document.getElementById('orderPagination').innerHTML = '';
   document.getElementById('clubbedItems').style.display = 'block';
-  renderClubbedItems(items);
+  renderClubbedItems(items, order);
 }
 function buildClubbedGroups(items){
   const groups = {}, order = [];
@@ -438,8 +438,9 @@ function buildClubbedGroups(items){
     const secondaryVal = tagKeys[1] ? tags[tagKeys[1]] : null;
     const cleanLabel = it.extra?.itemName || String(it.label || '').replace(/\s*\([^)]*\)\s*$/, '');
     const itemKey = cleanLabel + '::' + it.itemId;
-    if (!groups[itemKey]) { groups[itemKey] = { label: cleanLabel, code: it.scannerCode, images: it.images || [], colors: {}, colorOrder: [], total: 0 }; order.push(itemKey); }
+    if (!groups[itemKey]) { groups[itemKey] = { label: cleanLabel, code: it.scannerCode, images: it.images || [], colors: {}, colorOrder: [], total: 0, lines: [] }; order.push(itemKey); }
     const g = groups[itemKey];
+    g.lines.push(it);
     const colorKey = primaryVal || '';
     if (!g.colors[colorKey]) { g.colors[colorKey] = { sizes: {}, sizeOrder: [] }; g.colorOrder.push(colorKey); }
     const c = g.colors[colorKey];
@@ -450,14 +451,41 @@ function buildClubbedGroups(items){
   });
   return order.map(k => groups[k]);
 }
-function renderClubbedItems(items){
+// Any configured column that isn't itself a tag/qty/serial — MRP, a
+// formula, a remark, another Item Master field. These don't vary by
+// color/size for a given style (MRP is MRP regardless of size), so they
+// show once per card rather than once per chip. The one exception is a
+// formula column: since it can depend on qty, it's summed across every
+// line in the group — same "per line, then add" principle as Show Total
+// elsewhere, so a weight- or amount-type formula still reflects the
+// item's full clubbed quantity, not just its first line.
+function extraCardFields(group, order){
+  return (order.columnsSnapshot || [])
+    .filter(c => !['varianttag', 'qty', 'serial', 'images'].includes(c.type))
+    .map(col => {
+      let value;
+      if (col.type === 'formula') {
+        let sum = 0, any = false;
+        group.lines.forEach(line => { const n = getNumericColumnValue(col, line, order); if (n !== null) { sum += n; any = true; } });
+        value = any ? (Number.isInteger(sum) ? String(sum) : sum.toFixed(2)) : null;
+      } else {
+        value = getColumnValue(col, group.lines[0], order, null, 0);
+      }
+      return value ? { label: col.label, value } : null;
+    })
+    .filter(Boolean);
+}
+function renderClubbedItems(items, order){
   const groups = buildClubbedGroups(items);
-  document.getElementById('clubbedItems').innerHTML = groups.map(g => `
+  document.getElementById('clubbedItems').innerHTML = groups.map(g => {
+    const extras = extraCardFields(g, order);
+    return `
     <div class="clubbed-card">
       ${g.images[0] ? `<img class="clubbed-photo" src="${g.images[0]}" onerror="this.style.visibility='hidden'">` : '<div class="clubbed-photo"></div>'}
       <div class="clubbed-header">
         <p style="margin:0;font-weight:600">${g.label}</p>
         ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${g.code}</p>` : ''}
+        ${extras.length ? `<p class="muted" style="margin:4px 0 0;font-size:12px">${extras.map(e => `${e.label}: ${e.value}`).join(' · ')}</p>` : ''}
       </div>
       <div class="clubbed-groups">
         ${g.colorOrder.map(colorKey => `
@@ -467,7 +495,8 @@ function renderClubbedItems(items){
           </div>`).join('')}
         <div class="clubbed-total"><span class="muted">Total qty</span><span style="font-weight:600">${g.total}</span></div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function renderTablePage(){
   const totalPages = Math.max(1, Math.ceil(allRowsHtml.length / PAGE_SIZE));
