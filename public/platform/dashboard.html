@@ -695,6 +695,17 @@ function renderReportColumns(){
   // Order-level rows can only total NUMERIC Item Master fields (nothing
   // meaningful to sum for text) — same rule the server enforces.
   const itemFieldOptions = rowType === 'order' ? numericFields : detailFields;
+  // A dropdown with nothing explicitly selected still visually shows its
+  // first option — but until the user actually interacts with it, nothing
+  // gets recorded in reportColumns, so it silently saves as blank even
+  // though it looks filled in. Fixing that here, on every render, catches
+  // it regardless of whether the column just got added or just changed
+  // type or row type just changed underneath it.
+  reportColumns.forEach(c => {
+    if (c.type === 'meta' && !metaOptions.some(m => m.key === c.fieldKey)) c.fieldKey = metaOptions[0]?.key || '';
+    if (c.type === 'itemfield' && !itemFieldOptions.some(f => f.key === c.fieldKey)) c.fieldKey = itemFieldOptions[0]?.key || '';
+    if (c.type === 'orderfield' && !detailOrderFieldDefs.some(f => f.key === c.fieldKey)) c.fieldKey = detailOrderFieldDefs[0]?.key || '';
+  });
   document.getElementById('reportColumnRows').innerHTML = reportColumns.map((c, i) => `
     <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
       <div style="flex:1;min-width:150px">${i===0?'<label>Column type</label>':''}
@@ -729,6 +740,7 @@ async function saveCustomReport(){
   const name = document.getElementById('reportName').value.trim();
   if (!name) { err.textContent = 'Report name is required'; err.style.display = 'block'; return; }
   if (!reportColumns.length) { err.textContent = 'Add at least one column'; err.style.display = 'block'; return; }
+  renderReportColumns(); // self-heals any column whose dropdown was never explicitly touched
   const rowType = document.getElementById('reportRowType').value;
   const payload = { name, rowType, columns: reportColumns.map(c => ({ id: c.id, type: c.type, fieldKey: c.fieldKey, formula: c.formula, label: c.label })) };
   try {
