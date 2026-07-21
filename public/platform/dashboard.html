@@ -1115,6 +1115,16 @@ function validateDetailFormula(expr){
   } catch (e) { return 'Invalid formula syntax'; }
 }
 function renderDetailColumns(){
+  // Same self-heal as the report builder's column picker: a dropdown that
+  // visually shows its first option still saves a blank fieldKey unless
+  // the user explicitly touches it — fixing that here catches it
+  // regardless of how the column got into that state (just added, or
+  // just switched type).
+  detailColumns.forEach(c => {
+    if (c.type === 'field' && !detailFields.some(f => f.key === c.fieldKey)) c.fieldKey = detailFields[0]?.key || '';
+    if (c.type === 'orderfield' && !detailOrderFieldDefs.some(f => f.key === c.fieldKey)) c.fieldKey = detailOrderFieldDefs[0]?.key || '';
+    if (c.type === 'varianttag' && !variantCategories.some(v => v.key === c.fieldKey)) c.fieldKey = variantCategories[0]?.key || '';
+  });
   document.getElementById('detailColumnRows').innerHTML = detailColumns.map((c, i) => {
     const formulaError = c.type === 'formula' ? validateDetailFormula(c.formula || '') : '';
     return `
@@ -1125,6 +1135,7 @@ function renderDetailColumns(){
           <select onchange="updateDetailColumn('${c._id}','type',this.value)">
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
             <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
+            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
@@ -1140,8 +1151,13 @@ function renderDetailColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
       </div>
+      ${c.type === 'varianttag' ? `
+        <div style="margin-top:10px">
+          <label>Which tag</label>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('')}</select>
+        </div>` : ''}
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>

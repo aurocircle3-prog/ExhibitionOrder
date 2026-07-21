@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.44.0';
-const BUILD_TIME   = '2026-07-21T18:00:00Z';
+const APP_VERSION  = '1.45.0';
+const BUILD_TIME   = '2026-07-21T18:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1375,7 +1375,7 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
 
   const columns = [];
   for (const raw of (Array.isArray(list) ? list : [])) {
-    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield', 'itemcode', 'qty'].includes(raw.type)) {
+    if (!raw || !['images', 'field', 'formula', 'serial', 'remark', 'orderfield', 'itemcode', 'qty', 'varianttag'].includes(raw.type)) {
       throw Object.assign(new Error('Each column needs a valid type'), { status: 400 });
     }
     const width = Number(raw.width);
@@ -1392,6 +1392,11 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
       col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
       if (f.type === 'number') col.showTotal = !!raw.showTotal;
+    } else if (raw.type === 'varianttag') {
+      const cat = (tenant.variantCategories || []).find(c => c.key === raw.fieldKey);
+      if (!cat) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of this company's variant tags — add it in Extra Tags first`), { status: 400 });
+      col.fieldKey = raw.fieldKey;
+      col.label = (raw.label || cat.label || '').trim().slice(0, 60) || cat.label;
     } else if (raw.type === 'orderfield') {
       if (!allowedOrderFieldKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields — add it there first`), { status: 400 });
       const f = orderCustomFields.find(x => x.key === raw.fieldKey);

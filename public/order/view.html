@@ -334,6 +334,7 @@ function getColumnValue(col, item, order, extraFields, rowIndex){
   if (col.type === 'orderfield') return order.customFields?.[col.fieldKey] ?? '';
   if (col.type === 'remark') return item.comment || '';
   if (col.type === 'itemcode') return item.scannerCode || '';
+  if (col.type === 'varianttag') return item.variantTags?.[col.fieldKey] || '';
   if (col.type === 'qty') return String(item.qty);
   if (col.type === 'formula') {
     const result = getNumericColumnValue(col, item, order, rowIndex);

@@ -131,6 +131,7 @@ async function load(){
   document.getElementById('name').value = me.tenant.name || '';
   document.getElementById('slugShow').textContent = me.tenant.slug;
   document.getElementById('showImages').checked = me.tenant.orderShowImages !== false;
+  variantCategories = me.tenant.enableVariants ? (me.tenant.variantCategories || []) : [];
   await loadOrderFields(me.tenant.orderFields || []);
   customFields = (me.tenant.orderCustomFields || []).map(f => ({ ...f }));
   renderCustomFields();
@@ -259,7 +260,7 @@ async function saveCustomFields(){
 }
 
 
-let columns = [];
+let columns = [], variantCategories = [];
 let availableFields = [];
 let headerFields = [], footerFields = [];
 // Shared by both the "above the table" and "below the table" builders —
@@ -374,6 +375,13 @@ function validateFormulaClient(expr){
   } catch (e) { return 'Invalid formula syntax'; }
 }
 function renderColumns(){
+  // Same self-heal as elsewhere: a dropdown that visually shows its first
+  // option still saves a blank fieldKey unless explicitly touched.
+  columns.forEach(c => {
+    if (c.type === 'field' && !availableFields.some(f => f.key === c.fieldKey)) c.fieldKey = availableFields[0]?.key || '';
+    if (c.type === 'orderfield' && !orderFieldDefs.some(f => f.key === c.fieldKey)) c.fieldKey = orderFieldDefs[0]?.key || '';
+    if (c.type === 'varianttag' && !variantCategories.some(v => v.key === c.fieldKey)) c.fieldKey = variantCategories[0]?.key || '';
+  });
   document.getElementById('columnRows').innerHTML = columns.map((c, i) => {
     const formulaError = c.type === 'formula' ? validateFormulaClient(c.formula || '') : '';
     const typeLabel = { field: 'Heading', images: 'Photo', remark: 'Remark', serial: 'Sr. No.', formula: 'Amount' };
@@ -385,6 +393,7 @@ function renderColumns(){
           <select onchange="updateColumn('${c._id}','type',this.value)">
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
             <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
+            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
@@ -400,8 +409,13 @@ function renderColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
+        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
       </div>
+      ${c.type === 'varianttag' ? `
+        <div style="margin-top:10px">
+          <label>Which tag</label>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('')}</select>
+        </div>` : ''}
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
