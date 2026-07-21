@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.40.0';
-const BUILD_TIME   = '2026-07-21T14:45:00Z';
+const APP_VERSION  = '1.41.0';
+const BUILD_TIME   = '2026-07-21T15:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1889,9 +1889,13 @@ app.get('/api/items/template/excel', resolveTenant, auth, async (req, res) => {
   try {
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     const headers = fieldDefs.map(fieldHeaderLabel);
+    // One column per variant category (Color, Size, whatever's defined) —
+    // comma-separated, required just like the fixed fields are, so bulk
+    // imports can't silently skip past them the way they were before.
+    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`) : [];
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers]);
-    ws['!cols'] = headers.map(() => ({ wch: 18 }));
+    const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
+    ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
     XLSX.utils.book_append_sheet(wb, ws, 'Item Master');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Disposition', 'attachment; filename="Item_Master_Template.xlsx"');
@@ -1904,13 +1908,18 @@ app.get('/api/items/export/excel', resolveTenant, auth, requireRole('admin', 'st
   try {
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     const headers = fieldDefs.map(fieldHeaderLabel);
+    const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
+    const categoryHeaders = categories.map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`);
     const q = { tenantId: req.tenant.id, active: true };
     if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
     const items = await ItemDB.find(q);
-    const rows = items.map(it => fieldDefs.map(f => it.fields?.[f.key] ?? ''));
+    const rows = items.map(it => [
+      ...fieldDefs.map(f => it.fields?.[f.key] ?? ''),
+      ...categories.map(c => (it.variantSelections?.[c.key] || []).join(', ')),
+    ]);
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = headers.map(() => ({ wch: 18 }));
+    const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders], ...rows]);
+    ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
     XLSX.utils.book_append_sheet(wb, ws, 'Items');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Disposition', 'attachment; filename="Items_Export.xlsx"');
@@ -1937,8 +1946,14 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
       const labelToKey = {};
       fieldDefs.forEach(f => { labelToKey[f.label.trim().toLowerCase()] = f.key; });
       const scannerField = fieldDefs.find(f => f.isScannerKey);
+      // Tag columns use the same "(...)" -stripping header match as regular
+      // fields — the parenthetical just documents the valid values inline
+      // in the sheet, it doesn't need special parsing.
+      const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
+      const labelToCategory = {};
+      categories.forEach(c => { labelToCategory[c.label.trim().toLowerCase()] = c; });
 
-      let created = 0, updated = 0, skipped = 0;
+      let created = 0, updated = 0, skipped = 0, tagWarnings = [];
       for (const row of rows) {
         const rawFields = {};
         Object.keys(row).forEach(header => {
@@ -1949,16 +1964,45 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         const scannerCode = scannerField ? String(fields[scannerField.key] || '').trim() : '';
         if (!scannerCode) { skipped++; continue; }
         if (validateRequiredFields(fieldDefs, fields)) { skipped++; continue; }
+
+        // Match each tag column's comma-separated text against that
+        // category's own value list — case/whitespace-insensitive, same
+        // reasoning as everywhere else typed input meets a fixed list.
+        // Unrecognized values are dropped (not silently accepted as new
+        // values) and reported; a category left with nothing matched
+        // fails the same "required" check the chip UI enforces.
+        const variantSelections = {};
+        let rowHasUnmatched = false;
+        Object.keys(row).forEach(header => {
+          const cat = labelToCategory[baseLabelFromHeader(header)];
+          if (!cat || row[header] === '') return;
+          const typed = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
+          const canonicalByLower = {}; cat.values.forEach(v => { canonicalByLower[v.toLowerCase()] = v; });
+          const matched = [], unmatched = [];
+          typed.forEach(v => { const c = canonicalByLower[v.toLowerCase()]; if (c) matched.push(c); else unmatched.push(v); });
+          if (matched.length) variantSelections[cat.key] = [...new Set(matched)];
+          if (unmatched.length) { rowHasUnmatched = true; tagWarnings.push(`"${scannerCode}": ${cat.label} value(s) not recognized — ${unmatched.join(', ')}`); }
+        });
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
+        // Validated against the MERGED result, not just this row's own tag
+        // columns — a row updating only some other field, with the tag
+        // columns left blank, shouldn't be rejected as "missing tags" when
+        // the existing item already has valid ones that will be preserved.
+        const mergedTags = req.tenant.enableVariants
+          ? { ...(existing?.variantSelections || {}), ...variantSelections }
+          : {};
+        const completenessErr = validateVariantSelectionsComplete(req.tenant, mergedTags);
+        if (completenessErr) { skipped++; tagWarnings.push(`"${scannerCode}": skipped — ${completenessErr}`); continue; }
+
         if (existing) {
-          await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields } });
+          await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields }, variantSelections: mergedTags });
           updated++;
         } else {
-          await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, images: [], active: true, createdAt: new Date().toISOString() });
+          await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, variantSelections: mergedTags, images: [], active: true, createdAt: new Date().toISOString() });
           created++;
         }
       }
-      res.json({ ok: true, created, updated, skipped, total: rows.length });
+      res.json({ ok: true, created, updated, skipped, total: rows.length, tagWarnings: tagWarnings.slice(0, 20) });
     } catch (err) { res.status(500).json({ error: 'Could not read that file — please use the template format. (' + err.message + ')' }); }
   });
 });
