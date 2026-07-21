@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.38.0';
-const BUILD_TIME   = '2026-07-21T13:30:00Z';
+const APP_VERSION  = '1.39.0';
+const BUILD_TIME   = '2026-07-21T14:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -67,14 +67,15 @@ const tenantSchema = new mongoose.Schema({
   natureOfBusiness: { type: String, default: '' }, // e.g. "Jewelry Wholesaler" — helps platform admin pick relevant companies when assigning exhibition participants
   plan: { type: String, default: 'free' },
   logoUrl: String,
-  // Colors/sizes support — off by default (invisible to every jewelry
-  // client), turned on per company by platform admin for garment-style
-  // catalogs. colorList/sizeList are ORDERED — chip display order in Take
-  // Order follows this list, not alphabetical, so a company can lead with
-  // its best-selling colors.
+  // Variant tags — off by default, invisible to every existing jewelry
+  // client. Turned on per company by platform admin for catalogs where a
+  // style comes in multiple variations (garments: Color, Size, Material —
+  // but not hardcoded to those; platform admin names and defines however
+  // many categories this specific company needs). Each category's value
+  // list is ORDERED — chip display order in Take Order and Item Master
+  // follows this list, not alphabetical.
   enableVariants: { type: Boolean, default: false },
-  colorList: { type: [String], default: [] },
-  sizeList: { type: [String], default: [] },
+  variantCategories: { type: [{ key: String, label: String, values: [String] }], default: [] },
   // Which item fields appear per line on the order link sent to buyers, and
   // which of those (number fields) get summed into a total — admin-configured
   // in Settings > Order Form.
@@ -188,11 +189,12 @@ const itemSchema = new mongoose.Schema({
   scannerCode: String,                // denormalized from the fixed "itemCode" field, for fast scan lookup
   fields: { type: mongoose.Schema.Types.Mixed, default: {} }, // dynamic per-tenant fields
   images: [String],                   // up to 3, named from the "imageCode" field: {code}, {code}_1, {code}_2
-  // Which of the company's colors/sizes this specific style comes in —
-  // empty array means "all of them" (the common case; most styles come in
-  // the company's full range, only some need narrowing down).
-  availableColors: { type: [String], default: [] },
-  availableSizes: { type: [String], default: [] },
+  // Which values this specific style is available in, per variant
+  // category — keyed by category key, e.g. {color: ['Red','Blue'], size:
+  // ['S','M']}. An empty or missing array for a category means "all of
+  // that category's values" (the common case — most styles come in the
+  // company's full range, only some need narrowing down).
+  variantSelections: { type: mongoose.Schema.Types.Mixed, default: {} },
   active: { type: Boolean, default: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -797,11 +799,24 @@ app.put('/api/platform/tenants/:id/business-info', platformAuth, async (req, res
 app.put('/api/platform/tenants/:id/variants-config', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  const colorList = Array.isArray(req.body.colorList) ? req.body.colorList.map(c => String(c).trim()).filter(Boolean) : tenant.colorList;
-  const sizeList = Array.isArray(req.body.sizeList) ? req.body.sizeList.map(s => String(s).trim()).filter(Boolean) : tenant.sizeList;
   const enableVariants = !!req.body.enableVariants;
-  await TenantDB.update({ id: tenant.id }, { enableVariants, colorList, sizeList });
-  res.json({ ok: true, enableVariants, colorList, sizeList });
+  let variantCategories = tenant.variantCategories || [];
+  try {
+    if (Array.isArray(req.body.categories)) {
+      const usedKeys = new Set();
+      variantCategories = req.body.categories.map((c, i) => {
+        const label = String(c.label || '').trim();
+        if (!label) throw Object.assign(new Error('Every category needs a name'), { status: 400 });
+        let key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `category_${i}`;
+        while (usedKeys.has(key)) key = key + '_2'; // two categories reducing to the same key (e.g. "Size" and "size!") — keep both, just disambiguate
+        usedKeys.add(key);
+        const values = Array.isArray(c.values) ? [...new Set(c.values.map(v => String(v).trim()).filter(Boolean))] : [];
+        return { key, label, values };
+      });
+    }
+  } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
+  await TenantDB.update({ id: tenant.id }, { enableVariants, variantCategories });
+  res.json({ ok: true, enableVariants, variantCategories });
 });
 
 app.put('/api/platform/tenants/:id/active', platformAuth, async (req, res) => {
@@ -1619,6 +1634,24 @@ function validateRequiredFields(fieldDefs, fields) {
   return null;
 }
 
+// Validates a {categoryKey: [values]} map against the tenant's own
+// variantCategories definitions — unknown categories are dropped, and
+// values not in that category's own list are dropped too (silently, for
+// the UI tick-path where this can't happen anyway; Excel import does its
+// own stricter checking with warnings, see importItemsFromExcel).
+function resolveVariantSelections(tenant, rawSelections) {
+  if (!tenant.enableVariants || !rawSelections || typeof rawSelections !== 'object') return {};
+  const out = {};
+  (tenant.variantCategories || []).forEach(cat => {
+    const raw = rawSelections[cat.key];
+    if (!Array.isArray(raw)) return;
+    const valueSet = new Set(cat.values);
+    const picked = raw.filter(v => valueSet.has(v));
+    if (picked.length) out[cat.key] = picked;
+  });
+  return out;
+}
+
 app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { fields: rawFields, exhibitionId } = req.body;
   if (!rawFields || typeof rawFields !== 'object') return res.status(400).json({ error: 'fields object is required' });
@@ -1635,19 +1668,14 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId: exhibitionId || '', scannerCode, active: true }))
     return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists${exhibitionId ? ' in this exhibition' : ''}` });
   const imageCode = String(fields.imageCode || '').trim();
-  // Colors/sizes only apply if this company has the feature turned on —
-  // silently ignored otherwise, so a jewelry company's item payload
+  // Variant selections only apply if this company has the feature turned
+  // on — silently ignored otherwise, so a jewelry company's item payload
   // (which will never include these) behaves identically to before.
-  let availableColors = [], availableSizes = [];
-  if (req.tenant.enableVariants) {
-    const colorSet = new Set(req.tenant.colorList || []), sizeSet = new Set(req.tenant.sizeList || []);
-    availableColors = Array.isArray(req.body.availableColors) ? req.body.availableColors.filter(c => colorSet.has(c)) : [];
-    availableSizes = Array.isArray(req.body.availableSizes) ? req.body.availableSizes.filter(s => sizeSet.has(s)) : [];
-  }
+  const variantSelections = resolveVariantSelections(req.tenant, req.body.variantSelections);
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
     scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
-    availableColors, availableSizes,
+    variantSelections,
     active: true, createdAt: new Date().toISOString(),
   };
   await ItemDB.create(item);
@@ -1671,9 +1699,8 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     // shared photo set, so swap its images to match rather than keep stale ones.
     if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
   }
-  if (req.tenant.enableVariants) {
-    if (Array.isArray(req.body.availableColors)) { const s = new Set(req.tenant.colorList || []); updates.availableColors = req.body.availableColors.filter(c => s.has(c)); }
-    if (Array.isArray(req.body.availableSizes)) { const s = new Set(req.tenant.sizeList || []); updates.availableSizes = req.body.availableSizes.filter(x => s.has(x)); }
+  if (req.tenant.enableVariants && req.body.variantSelections) {
+    updates.variantSelections = resolveVariantSelections(req.tenant, req.body.variantSelections);
   }
   await ItemDB.update({ id: req.params.id }, updates);
   res.json({ ok: true });

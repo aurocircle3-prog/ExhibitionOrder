@@ -249,28 +249,16 @@
       </div>
 
       <div class="tab-panel" id="ctab-variants">
-        <p class="muted" style="margin-top:0">Off by default — turn this on only for companies selling things like garments, where a style comes in multiple colors and sizes. Every other company is completely unaffected.</p>
+        <p class="muted" style="margin-top:0">Off by default — turn this on only for companies where a style comes in multiple variations (garments: Color, Size, Material — name and define however many categories this company actually needs). Every other company is completely unaffected.</p>
         <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:14px">
-          <input type="checkbox" id="variantsEnabled" style="width:auto"> <span>Enable colors and sizes for this company</span>
+          <input type="checkbox" id="variantsEnabled" style="width:auto"> <span>Enable variant tags for this company</span>
         </label>
         <div id="variantsFields" style="display:none">
-          <div class="grid cols-2">
-            <div>
-              <h4 style="margin-top:0">Colors</h4>
-              <p class="muted" style="margin-top:-6px">Order here is the order colors appear as chips in Take Order — lead with best-sellers.</p>
-              <div id="colorListRows"></div>
-              <button class="ghost small" onclick="addVariantEntry('color')">+ Add color</button>
-            </div>
-            <div>
-              <h4 style="margin-top:0">Sizes</h4>
-              <p class="muted" style="margin-top:-6px">Same order principle — smallest to largest is typical, but it's your call.</p>
-              <div id="sizeListRows"></div>
-              <button class="ghost small" onclick="addVariantEntry('size')">+ Add size</button>
-            </div>
-          </div>
+          <div id="variantCategoryList"></div>
+          <button class="ghost small" onclick="addVariantCategory()">+ Add category</button>
         </div>
         <div class="error" id="variantsErr"></div>
-        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveVariantsConfig)">Save colors &amp; sizes</button>
+        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveVariantsConfig)">Save variant tags</button>
       </div>
     </div>
 
@@ -787,59 +775,68 @@ async function deleteCustomReport(id, name){
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
-// ── Colors & Sizes (variants) ──────────────────────────────────────────
-let variantColorList = [], variantSizeList = [];
+// ── Variant tags ────────────────────────────────────────────────────────
+let variantCategories = [];
+function variantCid(){ return 'v' + Math.random().toString(36).slice(2, 10); }
 function loadVariantsConfig(tenant){
   document.getElementById('variantsEnabled').checked = !!tenant.enableVariants;
   document.getElementById('variantsFields').style.display = tenant.enableVariants ? 'block' : 'none';
-  variantColorList = [...(tenant.colorList || [])];
-  variantSizeList = [...(tenant.sizeList || [])];
-  renderVariantList('color');
-  renderVariantList('size');
+  variantCategories = (tenant.variantCategories || []).map(c => ({ ...c, _id: variantCid(), values: [...(c.values || [])] }));
+  renderVariantCategories();
 }
 document.addEventListener('change', e => {
   if (e.target && e.target.id === 'variantsEnabled') document.getElementById('variantsFields').style.display = e.target.checked ? 'block' : 'none';
 });
-function addVariantEntry(kind){
-  (kind === 'color' ? variantColorList : variantSizeList).push('');
-  renderVariantList(kind);
+function addVariantCategory(){
+  variantCategories.push({ _id: variantCid(), label: '', values: [] });
+  renderVariantCategories();
 }
-function updateVariantEntry(kind, i, value){
-  (kind === 'color' ? variantColorList : variantSizeList)[i] = value;
+function removeVariantCategory(id){ variantCategories = variantCategories.filter(c => c._id !== id); renderVariantCategories(); }
+function moveVariantCategory(id, dir){
+  const i = variantCategories.findIndex(c => c._id === id), j = i + dir;
+  if (i === -1 || j < 0 || j >= variantCategories.length) return;
+  [variantCategories[i], variantCategories[j]] = [variantCategories[j], variantCategories[i]];
+  renderVariantCategories();
 }
-function removeVariantEntry(kind, i){
-  const list = kind === 'color' ? variantColorList : variantSizeList;
-  list.splice(i, 1);
-  renderVariantList(kind);
-}
-function moveVariantEntry(kind, i, dir){
-  const list = kind === 'color' ? variantColorList : variantSizeList;
+function updateVariantCategoryLabel(id, label){ const c = variantCategories.find(x => x._id === id); if (c) c.label = label; }
+function addVariantValue(catId){ const c = variantCategories.find(x => x._id === catId); if (c) { c.values.push(''); renderVariantCategories(); } }
+function updateVariantValue(catId, i, value){ const c = variantCategories.find(x => x._id === catId); if (c) c.values[i] = value; }
+function removeVariantValue(catId, i){ const c = variantCategories.find(x => x._id === catId); if (c) { c.values.splice(i, 1); renderVariantCategories(); } }
+function moveVariantValue(catId, i, dir){
+  const c = variantCategories.find(x => x._id === catId); if (!c) return;
   const j = i + dir;
-  if (j < 0 || j >= list.length) return;
-  [list[i], list[j]] = [list[j], list[i]];
-  renderVariantList(kind);
+  if (j < 0 || j >= c.values.length) return;
+  [c.values[i], c.values[j]] = [c.values[j], c.values[i]];
+  renderVariantCategories();
 }
-function renderVariantList(kind){
-  const list = kind === 'color' ? variantColorList : variantSizeList;
-  const container = document.getElementById(kind === 'color' ? 'colorListRows' : 'sizeListRows');
-  container.innerHTML = list.map((v, i) => `
-    <div style="display:flex;align-items:center;gap:6px;padding:4px 0">
-      <input value="${v}" placeholder="e.g. ${kind === 'color' ? 'Red' : 'M'}" oninput="updateVariantEntry('${kind}',${i},this.value)" style="flex:1">
-      <button class="ghost small" title="Move up" onclick="moveVariantEntry('${kind}',${i},-1)" ${i===0?'disabled':''}>↑</button>
-      <button class="ghost small" title="Move down" onclick="moveVariantEntry('${kind}',${i},1)" ${i===list.length-1?'disabled':''}>↓</button>
-      <button class="danger small" title="Remove" onclick="removeVariantEntry('${kind}',${i})">✕</button>
-    </div>`).join('') || `<p class="muted">No ${kind === 'color' ? 'colors' : 'sizes'} yet.</p>`;
+function renderVariantCategories(){
+  document.getElementById('variantCategoryList').innerHTML = variantCategories.map((cat, ci) => `
+    <div style="border:0.5px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input placeholder="Category name, e.g. Color" value="${cat.label}" oninput="updateVariantCategoryLabel('${cat._id}',this.value)" style="flex:1;font-weight:500">
+        <button class="ghost small" title="Move up" onclick="moveVariantCategory('${cat._id}',-1)" ${ci===0?'disabled':''}>↑</button>
+        <button class="ghost small" title="Move down" onclick="moveVariantCategory('${cat._id}',1)" ${ci===variantCategories.length-1?'disabled':''}>↓</button>
+        <button class="danger small" onclick="removeVariantCategory('${cat._id}')">Remove category</button>
+      </div>
+      ${cat.values.map((v, i) => `
+        <div style="display:flex;align-items:center;gap:6px;padding:3px 0">
+          <input value="${v}" placeholder="value" oninput="updateVariantValue('${cat._id}',${i},this.value)" style="flex:1">
+          <button class="ghost small" title="Move up" onclick="moveVariantValue('${cat._id}',${i},-1)" ${i===0?'disabled':''}>↑</button>
+          <button class="ghost small" title="Move down" onclick="moveVariantValue('${cat._id}',${i},1)" ${i===cat.values.length-1?'disabled':''}>↓</button>
+          <button class="danger small" title="Remove" onclick="removeVariantValue('${cat._id}',${i})">✕</button>
+        </div>`).join('') || '<p class="muted" style="margin:4px 0">No values yet.</p>'}
+      <button class="ghost small" style="margin-top:6px" onclick="addVariantValue('${cat._id}')">+ Add value</button>
+    </div>`).join('') || '<p class="muted">No categories yet — add one, e.g. "Color".</p>';
 }
 async function saveVariantsConfig(){
   const err = document.getElementById('variantsErr'); err.style.display = 'none';
   const enableVariants = document.getElementById('variantsEnabled').checked;
-  const colorList = variantColorList.map(c => c.trim()).filter(Boolean);
-  const sizeList = variantSizeList.map(s => s.trim()).filter(Boolean);
+  const categories = variantCategories.map(c => ({ label: c.label.trim(), values: c.values.map(v => v.trim()).filter(Boolean) })).filter(c => c.label);
   try {
-    await platformFetch(`/tenants/${lastTenantId}/variants-config`, { method: 'PUT', body: JSON.stringify({ enableVariants, colorList, sizeList }) });
-    EXO.toast('Colors & sizes saved');
-    variantColorList = colorList; variantSizeList = sizeList;
-    renderVariantList('color'); renderVariantList('size');
+    const res = await platformFetch(`/tenants/${lastTenantId}/variants-config`, { method: 'PUT', body: JSON.stringify({ enableVariants, categories }) });
+    EXO.toast('Variant tags saved');
+    variantCategories = res.variantCategories.map(c => ({ ...c, _id: variantCid() }));
+    renderVariantCategories();
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 
