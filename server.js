@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.41.0';
-const BUILD_TIME   = '2026-07-21T15:15:00Z';
+const APP_VERSION  = '1.41.1';
+const BUILD_TIME   = '2026-07-21T15:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -1069,9 +1069,10 @@ app.get('/api/platform/tenants/:id/items/template', platformAuth, async (req, re
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const headers = fieldDefs.map(fieldHeaderLabel);
+  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`) : [];
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([headers]);
-  ws['!cols'] = headers.map(() => ({ wch: 18 }));
+  const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
+  ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
   XLSX.utils.book_append_sheet(wb, ws, 'Item Master');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Disposition', `attachment; filename="${tenant.slug}_Item_Master_Template.xlsx"`);
