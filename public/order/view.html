@@ -153,7 +153,12 @@ document.addEventListener('touchend', e => {
 function groupItemsByName(items, decimalsByKey, order, columnsSnapshot){
   const orderKeys = [], groups = {};
   items.forEach(item => {
-    const key = item.extra?.itemName || item.label;
+    // Variant tags are part of the identity here, not just the name — two
+    // lines of "Denim Shirt" in Red/S and Red/M are different things and
+    // must stay as separate rows; merging them would leave no way to say
+    // which quantity was which combination. Only genuine duplicates (same
+    // item, same tags) collapse together.
+    const key = (item.extra?.itemName || item.label) + '::' + JSON.stringify(item.variantTags || {});
     if (!groups[key]) { groups[key] = []; orderKeys.push(key); }
     groups[key].push(item);
   });
@@ -168,6 +173,7 @@ function groupItemsByName(items, decimalsByKey, order, columnsSnapshot){
       images: [...new Set(group.flatMap(g => g.images || []))],
       qty: group[0].qty, // the set's quantity — scanned components of one set share the same qty, not summed
       comment: [...new Set(group.map(g => g.comment).filter(Boolean))].join(', '),
+      variantTags: group[0].variantTags, // identical across the group by the grouping key above
       extra: {},
     };
     const allKeys = new Set(group.flatMap(g => Object.keys(g.extra || {})));
