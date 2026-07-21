@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.37.0';
-const BUILD_TIME   = '2026-07-21T12:00:00Z';
+const APP_VERSION  = '1.37.1';
+const BUILD_TIME   = '2026-07-21T12:20:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -2366,14 +2366,14 @@ app.put('/api/exhibitions/:id/reopen', resolveTenant, auth, requireRole('admin')
 // item a row is even about. Some only make sense per row type.
 const REPORT_META_COLUMNS = {
   item: [
-    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' },
-    { key: 'party_name', label: 'Buyer' }, { key: 'party_phone', label: 'Phone' },
+    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
+    { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
     { key: 'staff_name', label: 'Staff' }, { key: 'item_code', label: 'Item Code' },
     { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark' },
   ],
   order: [
-    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' },
-    { key: 'party_name', label: 'Buyer' }, { key: 'party_phone', label: 'Phone' },
+    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
+    { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
     { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
   ],
 };
@@ -2428,8 +2428,11 @@ function reportItemColumnValue(col, item, order) {
     switch (col.fieldKey) {
       case 'order_no': return order.orderNo;
       case 'order_date': return order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN') : '';
+      case 'order_status': return order.status || '';
       case 'party_name': return order.partyName || '';
+      case 'party_contact': return order.partyContactPerson || '';
       case 'party_phone': return order.partyPhone || '';
+      case 'party_email': return order.partyEmail || '';
       case 'staff_name': return order.staffName || '';
       case 'item_code': return item.scannerCode || '';
       case 'item_name': return item.label || '';
