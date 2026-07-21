@@ -406,7 +406,12 @@ async function importExcel(){
   try {
     const fd = new FormData(); fd.append('file', file); fd.append('exhibitionId', currentExhibitionId);
     const res = await EXO.apiFetch('/items/import/excel', { method:'POST', body: fd });
-    msg.textContent = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${EXO.currentExhibition()?.name}".`;
+    let text = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${EXO.currentExhibition()?.name}".`;
+    if (res.tagWarnings && res.tagWarnings.length) {
+      text += '\n\nTag issues found:\n' + res.tagWarnings.map(w => '• ' + w).join('\n');
+    }
+    msg.textContent = text;
+    msg.style.whiteSpace = 'pre-line';
     msg.style.display = 'block';
     document.getElementById('importFile').value = '';
     loadItems();
