@@ -5,9 +5,22 @@
 <div id="nav"></div>
 <div class="wrap">
   <div class="tabs">
+    <button class="tab-btn" data-tab="custom" onclick="switchTab('custom')">Custom Reports</button>
     <button class="tab-btn" data-tab="party" onclick="switchTab('party')">Party-wise</button>
     <button class="tab-btn" data-tab="item" onclick="switchTab('item')">Item-wise</button>
     <button class="tab-btn" data-tab="staff" onclick="switchTab('staff')">Staff-wise</button>
+  </div>
+
+  <div class="tab-panel" id="tab-custom">
+    <div class="card">
+      <h3 style="margin-top:0">Custom Reports</h3>
+      <div class="grid cols-2">
+        <div><label>Exhibition</label><select id="reportExhibition" onchange="loadReportData()"></select></div>
+        <div><label>Report</label><select id="reportPicker" onchange="loadReportData()"></select></div>
+      </div>
+      <p class="muted" id="noCustomReportsMsg" style="display:none">No custom reports have been set up for your company yet — contact AuroCircle to get one built.</p>
+      <div id="customReportResult" style="margin-top:14px"></div>
+    </div>
   </div>
 
   <div class="tab-panel" id="tab-party">
@@ -42,6 +55,54 @@ function switchTab(name){
   localStorage.setItem('exo_reports_tab', name);
 }
 
+let customReportList = [];
+async function loadCustomReportsTab(){
+  const [exhibitions, reports] = await Promise.all([
+    EXO.apiFetch('/exhibitions'), EXO.apiFetch('/reports/custom'),
+  ]);
+  customReportList = reports;
+  const exSelect = document.getElementById('reportExhibition');
+  // Every exhibition the company's ever been part of — current or
+  // completed — since a report is just as useful for a show that already
+  // wrapped up as one that's still running.
+  exSelect.innerHTML = exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('')
+    || '<option value="">— no exhibitions yet —</option>';
+  const repSelect = document.getElementById('reportPicker');
+  document.getElementById('noCustomReportsMsg').style.display = reports.length ? 'none' : 'block';
+  repSelect.parentElement.style.display = reports.length ? 'block' : 'none';
+  repSelect.innerHTML = reports.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+  if (exhibitions.length && reports.length) loadReportData();
+}
+async function loadReportData(){
+  const exId = document.getElementById('reportExhibition').value;
+  const repId = document.getElementById('reportPicker').value;
+  const box = document.getElementById('customReportResult');
+  if (!exId || !repId) { box.innerHTML = ''; return; }
+  box.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const data = await EXO.apiFetch(`/reports/custom/${repId}?exhibitionId=${exId}`);
+    const headers = data.columns.map(c => c.label);
+    const fmtVal = (v, c) => {
+      if (typeof v === 'number') return c.decimals != null ? v.toFixed(c.decimals) + (c.unit ? ' ' + c.unit : '') : String(v);
+      return v ?? '';
+    };
+    box.innerHTML = `
+      <div class="btn-row" style="justify-content:flex-end;margin-bottom:8px">
+        <button class="ghost small" onclick="downloadReportExcel()">⬇ Download Excel</button>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+        <tbody>${data.rows.map(row => `<tr>${data.columns.map(c => `<td>${fmtVal(row[c.id], c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${headers.length}" class="muted">No data for this exhibition yet</td></tr>`}</tbody>
+      </table></div>`;
+  } catch (e) { box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`; }
+}
+function downloadReportExcel(){
+  const exId = document.getElementById('reportExhibition').value;
+  const repId = document.getElementById('reportPicker').value;
+  const p = new URLSearchParams({ token: localStorage.getItem('exo_token'), tenant: EXO.getTenantSlug(), exhibitionId: exId });
+  location.href = `/api/reports/custom/${repId}/export?${p.toString()}`;
+}
+
 (async function(){
   const [byParty, byItem, byStaff] = await Promise.all([
     EXO.apiFetch('/reports/party-wise'), EXO.apiFetch('/reports/item-wise'), EXO.apiFetch('/reports/staff-wise')
@@ -49,6 +110,7 @@ function switchTab(name){
   document.getElementById('partyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
   document.getElementById('itemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
   document.getElementById('staffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
-  switchTab(localStorage.getItem('exo_reports_tab') || 'party');
+  await loadCustomReportsTab();
+  switchTab(localStorage.getItem('exo_reports_tab') || 'custom');
 })();
 </script>

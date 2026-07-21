@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.36.0';
-const BUILD_TIME   = '2026-07-17T11:15:00Z';
+const APP_VERSION  = '1.37.0';
+const BUILD_TIME   = '2026-07-21T12:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -846,11 +846,11 @@ app.delete('/api/platform/tenants/:id', platformAuth, async (req, res) => {
 // POST/PUT/DELETE routes above; company admins only get the read-only list
 // of what they've been added to).
 // ── Custom reports (platform-admin authored, per tenant) ─────────────────
-app.get('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
+app.get('/api/platform/tenants/:id/custom-reports', platformAuth, async (req, res) => {
   const reports = await ReportDefDB.find({ tenantId: req.params.id });
   res.json(reports);
 });
-app.post('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
+app.post('/api/platform/tenants/:id/custom-reports', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const name = String(req.body.name || '').trim();
@@ -865,7 +865,7 @@ app.post('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => 
     res.json(report);
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
-app.put('/api/platform/tenants/:id/reports/:reportId', platformAuth, async (req, res) => {
+app.put('/api/platform/tenants/:id/custom-reports/:reportId', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const report = await ReportDefDB.findOne({ id: req.params.reportId, tenantId: tenant.id });
@@ -881,7 +881,7 @@ app.put('/api/platform/tenants/:id/reports/:reportId', platformAuth, async (req,
     res.json({ ok: true });
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
-app.delete('/api/platform/tenants/:id/reports/:reportId', platformAuth, async (req, res) => {
+app.delete('/api/platform/tenants/:id/custom-reports/:reportId', platformAuth, async (req, res) => {
   await ReportDefDB.remove({ id: req.params.reportId, tenantId: req.params.id });
   res.json({ ok: true });
 });

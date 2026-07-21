@@ -256,7 +256,31 @@
     </div>
 
     <div class="tab-panel" id="dtab-reports">
-      <h4 style="margin-top:0">Party-wise orders</h4>
+      <h4 style="margin-top:0">Custom Reports</h4>
+      <p class="muted" style="margin-top:-6px">Reports this company can view and download from their own Reports page, scoped to whichever exhibition they pick there.</p>
+      <div id="customReportList"></div>
+      <button class="ghost small" onclick="newCustomReport()">+ New report</button>
+
+      <div id="reportBuilderCard" style="display:none;margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:10px">
+        <div class="grid cols-2">
+          <div><label>Report name</label><input id="reportName" placeholder="e.g. Melting Detail Report"></div>
+          <div><label>Row type</label>
+            <select id="reportRowType" onchange="renderReportColumns()">
+              <option value="item">One row per item (detail)</option>
+              <option value="order">One row per order (summary — numeric columns get summed across the order)</option>
+            </select>
+          </div>
+        </div>
+        <div id="reportColumnRows" style="margin-top:14px"></div>
+        <button class="ghost small" onclick="addReportColumn()">+ Add column</button>
+        <div class="error" id="reportBuilderErr"></div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="primary" onclick="EXO.busy(this, saveCustomReport)">Save report</button>
+          <button class="ghost" onclick="cancelReportEdit()">Cancel</button>
+        </div>
+      </div>
+
+      <h4>Party-wise orders</h4>
       <div class="table-scroll"><table><thead><tr><th>Buyer</th><th>Phone</th><th>Orders</th></tr></thead><tbody id="reportPartyRows"></tbody></table></div>
       <h4>Item-wise orders</h4>
       <div class="table-scroll"><table><thead><tr><th>Item</th><th>Scan code</th><th>Qty ordered</th></tr></thead><tbody id="reportItemRows"></tbody></table></div>
@@ -587,11 +611,143 @@ async function openDetail(id){
     document.getElementById('reportItemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
     document.getElementById('reportStaffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
   }).catch(() => {});
+  loadCustomReports(id);
 
   document.getElementById('detailCard').style.display = 'block';
   switchDetailTab('users');
   document.getElementById('detailCard').scrollIntoView({ behavior: 'smooth' });
 }
+
+// ── Custom report builder ──────────────────────────────────────────────
+const REPORT_META_COLUMNS = {
+  item: [
+    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' },
+    { key: 'party_name', label: 'Buyer' }, { key: 'party_phone', label: 'Phone' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_code', label: 'Item Code' },
+    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark' },
+  ],
+  order: [
+    { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' },
+    { key: 'party_name', label: 'Buyer' }, { key: 'party_phone', label: 'Phone' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
+  ],
+};
+let customReports = [], reportColumns = [], editingReportId = null;
+function reportCid(){ return 'r' + Math.random().toString(36).slice(2, 10); }
+
+async function loadCustomReports(tenantId){
+  try {
+    customReports = await platformFetch('/tenants/' + tenantId + '/custom-reports');
+    renderCustomReportList();
+  } catch (e) { /* non-fatal — the rest of the Reports tab still works */ }
+}
+function renderCustomReportList(){
+  document.getElementById('customReportList').innerHTML = customReports.map(r => `
+    <div class="btn-row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)">
+      <span><b>${r.name}</b> <span class="muted">— ${r.rowType === 'order' ? 'one row per order' : 'one row per item'}</span></span>
+      <span class="btn-row">
+        <button class="ghost small" onclick="editCustomReport('${r.id}')">Edit</button>
+        <button class="danger small" onclick="deleteCustomReport('${r.id}','${r.name.replace(/'/g,"\\'")}')">Delete</button>
+      </span>
+    </div>`).join('') || '<p class="muted">No custom reports yet for this company.</p>';
+}
+function newCustomReport(){
+  editingReportId = null;
+  document.getElementById('reportName').value = '';
+  document.getElementById('reportRowType').value = 'item';
+  reportColumns = [];
+  document.getElementById('reportBuilderErr').style.display = 'none';
+  document.getElementById('reportBuilderCard').style.display = 'block';
+  renderReportColumns();
+  document.getElementById('reportBuilderCard').scrollIntoView({ behavior: 'smooth' });
+}
+function editCustomReport(id){
+  const r = customReports.find(x => x.id === id);
+  if (!r) return;
+  editingReportId = id;
+  document.getElementById('reportName').value = r.name;
+  document.getElementById('reportRowType').value = r.rowType;
+  reportColumns = r.columns.map(c => ({ ...c, _id: c.id }));
+  document.getElementById('reportBuilderErr').style.display = 'none';
+  document.getElementById('reportBuilderCard').style.display = 'block';
+  renderReportColumns();
+  document.getElementById('reportBuilderCard').scrollIntoView({ behavior: 'smooth' });
+}
+function cancelReportEdit(){
+  document.getElementById('reportBuilderCard').style.display = 'none';
+  editingReportId = null; reportColumns = [];
+}
+function addReportColumn(){
+  reportColumns.push({ _id: reportCid(), type: 'meta', fieldKey: '', label: '' });
+  renderReportColumns();
+}
+function updateReportColumn(id, key, value){
+  const col = reportColumns.find(c => c._id === id);
+  if (!col) return;
+  col[key] = value;
+  if (key === 'type') renderReportColumns();
+}
+function removeReportColumn(id){ reportColumns = reportColumns.filter(c => c._id !== id); renderReportColumns(); }
+function renderReportColumns(){
+  const rowType = document.getElementById('reportRowType').value;
+  const metaOptions = REPORT_META_COLUMNS[rowType];
+  const numericFields = detailFields.filter(f => f.type === 'number');
+  // Order-level rows can only total NUMERIC Item Master fields (nothing
+  // meaningful to sum for text) — same rule the server enforces.
+  const itemFieldOptions = rowType === 'order' ? numericFields : detailFields;
+  document.getElementById('reportColumnRows').innerHTML = reportColumns.map((c, i) => `
+    <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
+      <div style="flex:1;min-width:150px">${i===0?'<label>Column type</label>':''}
+        <select onchange="updateReportColumn('${c._id}','type',this.value)">
+          <option value="meta" ${c.type==='meta'?'selected':''}>Built-in field</option>
+          <option value="itemfield" ${c.type==='itemfield'?'selected':''}>Item Master field</option>
+          <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order Detail field</option>
+          <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
+        </select>
+      </div>
+      ${c.type !== 'formula' ? `
+      <div style="flex:1;min-width:150px">${i===0?'<label>Which field</label>':''}
+        <select onchange="updateReportColumn('${c._id}','fieldKey',this.value)">
+          ${c.type === 'meta'
+            ? metaOptions.map(m => `<option value="${m.key}" ${c.fieldKey===m.key?'selected':''}>${m.label}</option>`).join('')
+            : c.type === 'itemfield'
+            ? (itemFieldOptions.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— none available —</option>')
+            : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
+        </select>
+      </div>` : `
+      <div style="flex:2;min-width:220px">${i===0?`<label>Formula <span class="muted">— e.g. <code>net_weight * melting</code>. Available: ${[...numericFields.map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(none yet)'}</span></label>`:''}
+        <input placeholder="net_weight * melting" value="${c.formula||''}" oninput="updateReportColumn('${c._id}','formula',this.value)">
+      </div>`}
+      <div style="flex:1;min-width:120px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
+        <input placeholder="defaults to field name" value="${c.label||''}" oninput="updateReportColumn('${c._id}','label',this.value)">
+      </div>
+      <button class="danger small" title="Remove" onclick="removeReportColumn('${c._id}')">✕</button>
+    </div>`).join('') || '<p class="muted">No columns yet — add at least one.</p>';
+}
+async function saveCustomReport(){
+  const err = document.getElementById('reportBuilderErr'); err.style.display = 'none';
+  const name = document.getElementById('reportName').value.trim();
+  if (!name) { err.textContent = 'Report name is required'; err.style.display = 'block'; return; }
+  if (!reportColumns.length) { err.textContent = 'Add at least one column'; err.style.display = 'block'; return; }
+  const rowType = document.getElementById('reportRowType').value;
+  const payload = { name, rowType, columns: reportColumns.map(c => ({ id: c.id, type: c.type, fieldKey: c.fieldKey, formula: c.formula, label: c.label })) };
+  try {
+    if (editingReportId) await platformFetch(`/tenants/${lastTenantId}/custom-reports/${editingReportId}`, { method: 'PUT', body: JSON.stringify(payload) });
+    else await platformFetch(`/tenants/${lastTenantId}/custom-reports`, { method: 'POST', body: JSON.stringify(payload) });
+    EXO.toast('Report saved');
+    cancelReportEdit();
+    loadCustomReports(lastTenantId);
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function deleteCustomReport(id, name){
+  if (!confirm(`Delete report "${name}"? This cannot be undone.`)) return;
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/custom-reports/${id}`, { method: 'DELETE' });
+    EXO.toast('Report deleted');
+    loadCustomReports(lastTenantId);
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+
 function closeDetail(){
   document.getElementById('detailCard').style.display = 'none';
   document.getElementById('topTabs').style.display = 'flex';
