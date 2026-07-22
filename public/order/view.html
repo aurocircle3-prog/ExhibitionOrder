@@ -17,6 +17,16 @@
 </div>
 
 <script>
+// This page is public and unauthenticated — anyone with the link can open
+// it, and every value shown here (item names, field values, buyer info)
+// originated from staff entry or an Excel import, not from something this
+// page itself controls. Without escaping, a value like <img src=x
+// onerror=...> typed into an Item Name would execute in every buyer's
+// browser who opens the order link. Every interpolated string that isn't
+// a literal constant needs to go through this.
+function esc(v){
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 let lightboxImages = [], lightboxIndex = 0;
 function openLightbox(images, index){
   if (!images || !images.length) return;
@@ -83,7 +93,7 @@ function fmt(val, unit, decimals){
 // how short they are.
 function renderFieldList(fields){
   if (!fields || !fields.length) return '';
-  return `<div style="display:flex;flex-wrap:wrap;gap:6px 28px">${fields.map(f => `<div class="muted">${f.label}: <b style="color:var(--ink)">${fmt(f.value, f.unit, f.decimals)}</b></div>`).join('')}</div>`;
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px 28px">${fields.map(f => `<div class="muted">${esc(f.label)}: <b style="color:var(--ink)">${esc(fmt(f.value, f.unit, f.decimals))}</b></div>`).join('')}</div>`;
 }
 // Same percent-notation support as the server (see preprocessPercent there)
 // — applied here too since formulas are actually EVALUATED client-side.
@@ -109,7 +119,7 @@ function renderImageSlider(images, size){
   sliderImagesRegistry.push(images);
   return `
     <div class="img-slider" data-slider-id="${sliderId}" data-index="0" style="position:relative;display:inline-block">
-      <img src="${images[0]}" style="max-width:${size}px;max-height:${size}px;width:auto;height:auto;object-fit:contain;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
+      <img src="${esc(images[0])}" style="max-width:${size}px;max-height:${size}px;width:auto;height:auto;object-fit:contain;border-radius:10px;background:#f0f0f0;display:block;cursor:pointer" onclick="const i=+this.closest('.img-slider').dataset.index; openLightbox(sliderImagesRegistry[${sliderId}], i)">
     </div>
     ${images.length > 1 ? `<div class="muted" style="font-size:11px;text-align:center;margin-top:2px" id="slider-count-${sliderId}">1 of ${images.length}</div>` : ''}`;
 }
@@ -219,8 +229,8 @@ async function load(){
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
     const { order, company, rowGrouping, viewHeaderFields, viewFooterFields } = res;
-    const logoHtml = company.logoUrl ? `<img src="${company.logoUrl}" alt="" style="height:28px;vertical-align:-8px;margin-right:8px;border-radius:4px;object-fit:contain">` : '🎪 ';
-    document.getElementById('companyName').innerHTML = logoHtml + (company.name || 'Expo Orders');
+    const logoHtml = company.logoUrl ? `<img src="${esc(company.logoUrl)}" alt="" style="height:28px;vertical-align:-8px;margin-right:8px;border-radius:4px;object-fit:contain">` : '🎪 ';
+    document.getElementById('companyName').innerHTML = logoHtml + esc(company.name || 'Expo Orders');
 
     if (rowGrouping === 'itemName') {
       const decimalsByKey = {};
@@ -241,7 +251,7 @@ async function load(){
 
     const columnTotals = computeColumnTotals(order, isDynamic);
     const fieldTotalRows = columnTotals.map(t =>
-      `<div class="cart-row" style="border-bottom:none"><span class="muted">${t.label}</span><span>${fmt(t.value, t.unit, t.decimals)}</span></div>`
+      `<div class="cart-row" style="border-bottom:none"><span class="muted">${esc(t.label)}</span><span>${esc(fmt(t.value, t.unit, t.decimals))}</span></div>`
     ).join('');
     // "Total" type header/footer fields were sent unresolved (just a label
     // + which column) — fill in the actual number from the totals just
@@ -279,7 +289,7 @@ async function load(){
 
     box.innerHTML = `
       <div class="card">
-        <p class="muted" style="margin:0 0 4px">Order <b>${order.orderNo}</b> · <span class="badge ${order.status}">${order.status}</span></p>
+        <p class="muted" style="margin:0 0 4px">Order <b>${esc(order.orderNo)}</b> · <span class="badge ${esc(order.status)}">${esc(order.status)}</span></p>
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
         ${resolvedHeaderFields.length ? `<div style="margin-bottom:14px">${renderFieldList(resolvedHeaderFields)}</div>` : ''}
@@ -291,13 +301,13 @@ async function load(){
         <div id="clubbedItems" style="display:none"></div>
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
-        ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${order.remark}</p>` : ''}
+        ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${esc(order.remark)}</p>` : ''}
         ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
       ${renderFooter(company, order)}`;
     decideAndRenderItems(order);
   } catch (e) {
-    box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`;
+    box.innerHTML = `<div class="error" style="display:block">${esc(e.message)}</div>`;
   }
 }
 
@@ -337,11 +347,11 @@ function getNumericColumnValue(col, item, order, rowIndex){
 
 function getColumnValue(col, item, order, extraFields, rowIndex){
   if (col.type === 'serial') return String(rowIndex + 1);
-  if (col.type === 'field') return fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals);
-  if (col.type === 'orderfield') return order.customFields?.[col.fieldKey] ?? '';
-  if (col.type === 'remark') return item.comment || '';
-  if (col.type === 'itemcode') return item.scannerCode || '';
-  if (col.type === 'varianttag') return item.variantTags?.[col.fieldKey] || '';
+  if (col.type === 'field') return esc(fmt(item.extra?.[col.fieldKey], col.unit || '', col.decimals));
+  if (col.type === 'orderfield') return esc(order.customFields?.[col.fieldKey] ?? '');
+  if (col.type === 'remark') return esc(item.comment || '');
+  if (col.type === 'itemcode') return esc(item.scannerCode || '');
+  if (col.type === 'varianttag') return esc(item.variantTags?.[col.fieldKey] || '');
   if (col.type === 'qty') return String(item.qty);
   if (col.type === 'formula') {
     const result = getNumericColumnValue(col, item, order, rowIndex);
@@ -391,12 +401,12 @@ function renderMobileCards(order, isDynamic, extraFields, hasRemarks, showImages
     if (isDynamic) {
       detailLines = order.columnsSnapshot
         .filter(col => col.type !== 'serial' && col.type !== 'images')
-        .map(col => ({ label: col.label, value: getColumnValue(col, item, order, extraFields, rowIndex) }));
+        .map(col => ({ label: esc(col.label), value: getColumnValue(col, item, order, extraFields, rowIndex) }));
     } else {
       detailLines = [
-        { label: 'Item', value: item.label },
-        ...extraFields.map(f => ({ label: f.label, value: fmt(item.extra?.[f.key], f.unit, f.decimals) })),
-        ...(hasRemarks ? [{ label: 'Remark', value: item.comment || '' }] : []),
+        { label: 'Item', value: esc(item.label) },
+        ...extraFields.map(f => ({ label: esc(f.label), value: esc(fmt(item.extra?.[f.key], f.unit, f.decimals)) })),
+        ...(hasRemarks ? [{ label: 'Remark', value: esc(item.comment || '') }] : []),
         { label: 'Qty', value: String(item.qty) },
       ];
     }
@@ -471,15 +481,15 @@ function extraCardFields(group, order){
       } else {
         value = getColumnValue(col, group.lines[0], order, null, 0);
       }
-      return value ? { label: col.label, value } : null;
+      return value ? { label: esc(col.label), value } : null;
     })
     .filter(Boolean);
 }
 function tagChipsHtml(g){
   return g.colorOrder.map(colorKey => `
-    ${colorKey ? `<p class="clubbed-color-label">${colorKey}</p>` : ''}
+    ${colorKey ? `<p class="clubbed-color-label">${esc(colorKey)}</p>` : ''}
     <div class="clubbed-size-chips">
-      ${g.colors[colorKey].sizeOrder.map(sizeKey => `<span class="clubbed-size-chip">${sizeKey === 'Qty' ? '' : sizeKey + ' '}×${g.colors[colorKey].sizes[sizeKey]}</span>`).join('')}
+      ${g.colors[colorKey].sizeOrder.map(sizeKey => `<span class="clubbed-size-chip">${sizeKey === 'Qty' ? '' : esc(sizeKey) + ' '}×${g.colors[colorKey].sizes[sizeKey]}</span>`).join('')}
     </div>`).join('');
 }
 function renderClubbedItems(items, order){
@@ -494,8 +504,8 @@ function renderClubbedItems(items, order){
         <div style="display:flex;gap:10px;align-items:flex-start">
           ${g.images.length ? renderImageSlider(g.images, 64) : ''}
           <div>
-            <p style="margin:0;font-weight:600">${g.label}</p>
-            ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${g.code}</p>` : ''}
+            <p style="margin:0;font-weight:600">${esc(g.label)}</p>
+            ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${esc(g.code)}</p>` : ''}
           </div>
         </div>
       </td>
@@ -510,8 +520,8 @@ function renderClubbedItems(items, order){
     <div class="clubbed-card">
       <div class="clubbed-photo-wrap">${g.images.length ? renderImageSlider(g.images, 90) : '<div class="clubbed-photo"></div>'}</div>
       <div class="clubbed-header">
-        <p style="margin:0;font-weight:600">${g.label}</p>
-        ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${g.code}</p>` : ''}
+        <p style="margin:0;font-weight:600">${esc(g.label)}</p>
+        ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${esc(g.code)}</p>` : ''}
         ${extras.length ? `<p class="muted" style="margin:4px 0 0;font-size:12px">${extras.map(e => `${e.label}: ${e.value}`).join(' · ')}</p>` : ''}
       </div>
       <div class="clubbed-groups">
@@ -523,7 +533,7 @@ function renderClubbedItems(items, order){
 
   document.getElementById('clubbedItems').innerHTML = `
     <div class="table-scroll desktop-order-view"><table>
-      <thead><tr><th>Item</th><th>Tags</th>${otherCols.map(c => `<th>${c.label}</th>`).join('')}<th>Qty</th></tr></thead>
+      <thead><tr><th>Item</th><th>Tags</th>${otherCols.map(c => `<th>${esc(c.label)}</th>`).join('')}<th>Qty</th></tr></thead>
       <tbody>${desktopRows}</tbody>
     </table></div>
     <div class="mobile-order-view">${mobileCards}</div>`;
@@ -578,9 +588,9 @@ function renderFooter(company, order){
   ].filter(Boolean);
   return `
     <div class="card" style="text-align:center;margin-top:16px">
-      ${f.address ? `<p class="muted" style="margin:4px 0">${f.address}</p>` : ''}
-      ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${f.gstNumber}</p>` : ''}
-      ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${s.url}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
+      ${f.address ? `<p class="muted" style="margin:4px 0">${esc(f.address)}</p>` : ''}
+      ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${esc(f.gstNumber)}</p>` : ''}
+      ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${esc(s.url)}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
     </div>`;
 }
 
@@ -592,15 +602,15 @@ function renderLegacyTable(order){
   const hasRemarks = order.items.some(i => i.comment);
 
   const headerCells = (showImages ? '<th>Photo</th>' : '') + '<th>Item</th>'
-    + extraFields.map(f => `<th>${f.label}</th>`).join('')
+    + extraFields.map(f => `<th>${esc(f.label)}</th>`).join('')
     + (hasRemarks ? '<th>Remark</th>' : '') + '<th>Qty</th>';
 
   const rowsArray = order.items.map(i => {
     const imgs = i.images || (i.image ? [i.image] : []);
     const photoCell = showImages ? `<td>${renderImageSlider(imgs)}</td>` : '';
-    const extraCells = extraFields.map(f => `<td>${fmt(i.extra?.[f.key], f.unit, f.decimals)}</td>`).join('');
-    const remarkCell = hasRemarks ? `<td>${i.comment || ''}</td>` : '';
-    return `<tr>${photoCell}<td>${i.label}</td>${extraCells}${remarkCell}<td>${i.qty}</td></tr>`;
+    const extraCells = extraFields.map(f => `<td>${esc(fmt(i.extra?.[f.key], f.unit, f.decimals))}</td>`).join('');
+    const remarkCell = hasRemarks ? `<td>${esc(i.comment || '')}</td>` : '';
+    return `<tr>${photoCell}<td>${esc(i.label)}</td>${extraCells}${remarkCell}<td>${i.qty}</td></tr>`;
   });
 
   return { headerCells, rowsArray };
@@ -614,7 +624,7 @@ function renderDynamicTable(order){
   const extraFields = order.orderFieldsSnapshot || [];
   const widthStyle = w => `style="width:${w}ch"`;
 
-  const headerCells = order.columnsSnapshot.map(col => `<th ${widthStyle(col.width)}>${col.label}</th>`).join('');
+  const headerCells = order.columnsSnapshot.map(col => `<th ${widthStyle(col.width)}>${esc(col.label)}</th>`).join('');
 
   const rowsArray = order.items.map((item, rowIndex) => {
     const cells = order.columnsSnapshot.map(col => {

@@ -1,4 +1,6 @@
 const express    = require('express');
+const helmet     = require('helmet');
+const rateLimit  = require('express-rate-limit');
 const path       = require('path');
 const fs         = require('fs');
 const cors       = require('cors');
@@ -35,10 +37,14 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.49.5';
-const BUILD_TIME   = '2026-07-22T11:30:00Z';
+const APP_VERSION  = '1.50.0';
+const BUILD_TIME   = '2026-07-22T12:15:00Z';
 
 if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    log.error('JWT_SECRET env var is not set. Refusing to start in production with a guessable default secret — set JWT_SECRET on Render and redeploy.');
+    process.exit(1);
+  }
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
 }
 
@@ -475,9 +481,46 @@ const RESERVED_FIELD_LABELS = FIXED_FIELDS.map(f => f.label.toLowerCase());
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.set('trust proxy', true); // Render sits behind a proxy — needed for req.ip to be the real client IP
-app.use(cors());
+app.use(helmet({
+  // This app relies on inline onclick handlers and inline <script> blocks
+  // throughout every page — a default CSP blocks both and would break the
+  // app immediately. Disabling CSP specifically (not helmet as a whole)
+  // still gets every other protection: X-Frame-Options (clickjacking),
+  // X-Content-Type-Options (MIME sniffing), HSTS, etc. Revisiting this to
+  // build a real CSP (moving inline handlers to addEventListener, adding
+  // nonces) is a larger, separate project, not a same-day patch.
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+// Scoped rather than wide open — every company has its own subdomain
+// (kaashvi.expoorders.com), so this can't be a static list of origins.
+// Risk here is already low (bearer tokens in an Authorization header, not
+// cookies, so there's no session to ride via CSRF) but scoping this is
+// still better than reflecting any origin back unconditionally.
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // same-origin requests, curl, server-to-server — no Origin header at all
+    try {
+      const host = new URL(origin).hostname;
+      const allowed = host === 'localhost' || host === '127.0.0.1'
+        || host.endsWith('.expoorders.com') || host === 'expoorders.com'
+        || host.endsWith('.onrender.com'); // fallback before the custom domain's fully live
+      cb(null, allowed);
+    } catch { cb(null, false); }
+  },
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting — login/password routes are the classic brute-force
+// target, and unauthenticated order creation could otherwise be hammered
+// to spam junk orders. Keyed by IP (trust proxy above makes req.ip the
+// real client address, not Render's proxy). Deliberately not applied
+// globally — most routes are already behind auth() + a valid JWT, which
+// is a much stronger gate than a request-rate window.
+const loginLimiter = rateLimit({ windowMs: 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts — please wait a minute and try again.' } });
+const orderLimiter = rateLimit({ windowMs: 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many orders submitted too quickly — please wait a minute and try again.' } });
 
 // Request logging — one line per request, written after the response finishes
 // so it can include status + duration. Placed early so it wraps every route,
@@ -601,6 +644,12 @@ function fileUrl(file, localDir) {
 // image-naming convention, capped at 3 images per item.
 const IMAGE_SLOT_SUFFIXES = ['', '_1', '_2'];
 function makeItemImageUploader(tenantId, imageCode, startIndex) {
+  // imageCode is admin-entered free text — used directly as part of a
+  // filename (local disk) or S3 key (R2). Without restricting it, a value
+  // like "../../other-tenant/x" could escape the intended directory on
+  // local disk, or collide with another tenant's key prefix on R2. Only
+  // characters that are safe in both contexts survive.
+  imageCode = String(imageCode).replace(/[^A-Za-z0-9_-]/g, '_');
   let slot = startIndex;
   const nameFor = ext => `${imageCode}${IMAGE_SLOT_SUFFIXES[slot++] ?? '_' + slot}${ext}`;
   if (useR2) {
@@ -655,7 +704,7 @@ app.get('/api/companies/check-slug', async (req, res) => {
 // exception is password reset below — a company admin locked out has no
 // other way back in, and this keeps that capability narrow (password only,
 // nothing else about the account) rather than opening general user editing.
-app.post('/api/platform/login', async (req, res) => {
+app.post('/api/platform/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
   const admin = await PlatformAdminDB.findOne({ email: String(email).trim().toLowerCase() });
@@ -1119,7 +1168,7 @@ app.get('/api/auth/setup-token/:token', async (req, res) => {
   if (!user || !tenant) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
   res.json({ name: user.name, companyName: tenant.name, companySlug: tenant.slug });
 });
-app.post('/api/auth/set-password', async (req, res) => {
+app.post('/api/auth/set-password', loginLimiter, async (req, res) => {
   const { token, password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   const entry = await PasswordSetupTokenDB.findOne({ token });
@@ -1139,7 +1188,7 @@ app.post('/api/companies/register', async (req, res) => {
 });
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
-app.post('/api/auth/login', resolveTenant, async (req, res) => {
+app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
   const { loginId, password } = req.body;
   if (!loginId || !password) return res.status(400).json({ error: 'Login ID and password are required' });
   const user = await UserDB.findOne({ tenantId: req.tenant.id, loginId: String(loginId).toLowerCase() });
@@ -1873,7 +1922,8 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
       const images = await getImagesForCode(req.tenant.id, code);
       for (const c of candidates) {
         if (images.length >= 3) { full++; continue; }
-        const filename = `${code}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
+        const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '_');
+        const filename = `${safeCode}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
         if (useR2) {
           const key = `exo/${req.tenant.id}/items/${filename}`;
           await s3Client.send(new S3PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: c.file.buffer, ContentType: c.file.mimetype }));
@@ -2347,7 +2397,7 @@ async function nextOrderNo(tenant, exhibitionId) {
   return `EX${next}`;
 }
 
-app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { partyId, exhibitionId, items, remark, customFields } = req.body;
   if (!partyId || !Array.isArray(items) || !items.length)
     return res.status(400).json({ error: 'partyId and at least one item are required' });
