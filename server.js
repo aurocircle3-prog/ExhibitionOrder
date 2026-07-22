@@ -35,8 +35,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.49.1';
-const BUILD_TIME   = '2026-07-22T08:45:00Z';
+const APP_VERSION  = '1.49.2';
+const BUILD_TIME   = '2026-07-22T10:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -508,14 +508,20 @@ app.get('/api/version', (req, res) => res.json({ version: APP_VERSION, builtAt: 
 // structurally identical to a real per-company subdomain — skip those known
 // platform hosts so a Render/Vercel/etc. deployment isn't mistaken for a tenant.
 const PLATFORM_HOST_SUFFIXES = ['onrender.com', 'vercel.app', 'netlify.app', 'herokuapp.com'];
+// Shared by resolveTenant (for API requests) and the root route (to decide
+// marketing page vs. straight-to-login) — a request's hostname implies a
+// company subdomain if it's not a known generic hosting host, not
+// localhost, has 3+ dot-separated parts, and isn't "www".
+function detectSubdomainSlug(req) {
+  const host = (req.hostname || '').toLowerCase();
+  const onPlatformHost = PLATFORM_HOST_SUFFIXES.some(suf => host.endsWith(suf)) || host === 'localhost';
+  const parts = host.split('.');
+  if (!onPlatformHost && parts.length > 2 && parts[0] !== 'www') return parts[0];
+  return null;
+}
 async function resolveTenant(req, res, next) {
   let slug = req.headers['x-tenant-slug'] || req.query.tenant;
-  if (!slug) {
-    const host = (req.hostname || '').toLowerCase();
-    const onPlatformHost = PLATFORM_HOST_SUFFIXES.some(suf => host.endsWith(suf)) || host === 'localhost';
-    const parts = host.split('.');
-    if (!onPlatformHost && parts.length > 2 && parts[0] !== 'www') slug = parts[0];
-  }
+  if (!slug) slug = detectSubdomainSlug(req);
   if (!slug) return res.status(400).json({ error: 'Company not specified. Use the company subdomain, or pass ?tenant=slug / X-Tenant-Slug header.' });
   const tenant = await TenantDB.findOne({ slug: String(slug).toLowerCase() });
   if (!tenant) return res.status(404).json({ error: `No company found for "${slug}"` });
@@ -2823,7 +2829,14 @@ app.get('/api/audit-log', resolveTenant, auth, requireRole('admin'), async (req,
 
 // ── STATIC PAGES ──────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
+// A request to "/" on a company subdomain (kaashvi.expoorders.com) should
+// go straight to that company's login, not the generic marketing page —
+// the marketing page is only for the bare/www domain, where there's no
+// specific company to log into yet.
+app.get('/', (req, res) => {
+  if (detectSubdomainSlug(req)) return res.redirect('/login.html');
+  res.sendFile(path.join(__dirname, 'public', 'landing.html'));
+});
 // Public order-confirmation page — token is looked up client-side via /api/orders/public/:token
 app.get('/order/:token', (req, res) => res.sendFile(path.join(__dirname, 'public', 'order', 'view.html')));
 
