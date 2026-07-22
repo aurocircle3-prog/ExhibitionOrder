@@ -18,11 +18,25 @@ const PORT       = process.env.PORT       || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'exhibition-saas-dev-secret';
 const MONGO_URI  = process.env.MONGO_URI  || '';
 const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
+// Builds a link on the COMPANY's own subdomain (kaashvi.expoorders.com),
+// not the bare platform domain — the whole point of subdomains being that
+// a buyer's order link or an admin's setup link should look like it's
+// coming from that specific company, not a generic shared host. Falls
+// back to whatever host the request actually came in on if APP_URL isn't
+// configured for production yet (e.g. local dev, or before the domain's
+// wired up) — same reasoning as the existing fallback these replaced.
+function tenantBaseUrl(req, tenant) {
+  if (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000') {
+    const u = new URL(APP_URL);
+    return `${u.protocol}//${tenant.slug}.${u.host}`;
+  }
+  return `${req.protocol}://${req.get('host')}`;
+}
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.49.0';
-const BUILD_TIME   = '2026-07-22T08:15:00Z';
+const APP_VERSION  = '1.49.1';
+const BUILD_TIME   = '2026-07-22T08:45:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -744,7 +758,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
   });
-  const baseUrl = (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000') ? process.env.APP_URL : `${req.protocol}://${req.get('host')}`;
+  const baseUrl = tenantBaseUrl(req, tenant);
 
   log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email }, 'Platform admin created a company');
   res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}` });
@@ -2356,10 +2370,8 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   logAudit(req, 'order.create', 'order', order.id, { orderNo: order.orderNo, partyId, itemCount: lineItems.length });
   // APP_URL is meant to be set explicitly in production, but a misconfigured
   // or forgotten env var shouldn't silently break every shared order link —
-  // fall back to the actual request's host, which is always correct.
-  const baseUrl = (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000')
-    ? APP_URL
-    : `${req.protocol}://${req.get('host')}`;
+  // tenantBaseUrl falls back to the actual request's host, which is always correct.
+  const baseUrl = tenantBaseUrl(req, req.tenant);
   res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
 });
 
