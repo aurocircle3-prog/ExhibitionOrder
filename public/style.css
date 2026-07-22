@@ -104,6 +104,15 @@ td.thumb-cell{width:56px}
   .clubbed-photo-wrap .img-slider img{max-width:56px!important;max-height:68px!important}
 }
 .icon-btn{background:none;border:none;padding:4px 6px;font-size:15px;cursor:pointer;color:var(--muted)}
+.best-sellers-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
+.best-seller-card{text-align:center}
+.best-seller-thumb{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;background:var(--bg);cursor:pointer;display:block}
+.best-seller-thumb-empty{width:100%;aspect-ratio:1;border-radius:8px;background:var(--bg)}
+.best-seller-label{font-size:12px;margin:6px 0 0;font-weight:500}
+.best-seller-qty{font-size:11px;color:var(--muted);margin:1px 0 0}
+.simple-lightbox{position:fixed;inset:0;background:rgba(10,6,4,.9);display:none;align-items:center;justify-content:center;z-index:1000;cursor:zoom-out}
+.simple-lightbox.open{display:flex}
+.simple-lightbox img{max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px}
 .icon-btn:hover{color:var(--ink)}
 .icon-btn:disabled{opacity:.25;cursor:default}
 .field-row-edit input{margin:0}

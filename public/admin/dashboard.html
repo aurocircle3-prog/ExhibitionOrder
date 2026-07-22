@@ -4,6 +4,14 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
+  <div class="card" id="bestSellersCard" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Best selling items</h3>
+      <select id="bestSellersExhibition" onchange="loadBestSellers()" style="max-width:220px"></select>
+    </div>
+    <div id="bestSellersGrid" class="best-sellers-grid" style="margin-top:12px"></div>
+  </div>
+
   <div class="card" id="noExhibitionsCard" style="display:none">
     <h3 style="margin-top:0">No exhibitions yet</h3>
     <p class="muted">Exhibitions are set up centrally by AuroCircle. Contact them to get your company added to one — once you are, it'll show up here.</p>
@@ -18,6 +26,10 @@
     <h3>Completed exhibitions</h3>
     <div class="grid cols-2" id="completedExhibitions"></div>
   </div>
+</div>
+
+<div class="simple-lightbox" id="simpleLightbox" onclick="closeSimpleLightbox()">
+  <img id="simpleLightboxImg" src="">
 </div>
 
 <script src="/app.js"></script>
@@ -56,7 +68,30 @@ async function load(){
 
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
+
+  document.getElementById('bestSellersCard').style.display = exhibitions.length ? 'block' : 'none';
+  document.getElementById('bestSellersExhibition').innerHTML = `<option value="">All exhibitions</option>` +
+    exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('');
+  loadBestSellers();
 }
+async function loadBestSellers(){
+  const exhibitionId = document.getElementById('bestSellersExhibition').value;
+  const grid = document.getElementById('bestSellersGrid');
+  const items = await EXO.apiFetch('/dashboard/best-sellers' + (exhibitionId ? '?exhibitionId=' + exhibitionId : ''));
+  grid.innerHTML = items.map(it => `
+    <div class="best-seller-card">
+      ${it.images?.[0]
+        ? `<img class="best-seller-thumb" src="${it.images[0]}" onclick="openSimpleLightbox('${it.images[0]}')" onerror="this.outerHTML='<div class=&quot;best-seller-thumb-empty&quot;></div>'">`
+        : '<div class="best-seller-thumb-empty"></div>'}
+      <p class="best-seller-label">${it.label}</p>
+      <p class="best-seller-qty">${it.qty} sold</p>
+    </div>`).join('') || '<p class="muted">No orders yet.</p>';
+}
+function openSimpleLightbox(src){
+  document.getElementById('simpleLightboxImg').src = src;
+  document.getElementById('simpleLightbox').classList.add('open');
+}
+function closeSimpleLightbox(){ document.getElementById('simpleLightbox').classList.remove('open'); }
 
 function enterExhibition(id, name){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);

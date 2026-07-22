@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.48.0';
-const BUILD_TIME   = '2026-07-22T07:45:00Z';
+const APP_VERSION  = '1.49.0';
+const BUILD_TIME   = '2026-07-22T08:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -2722,8 +2722,10 @@ async function computeReport(tenant, reportDef, exhibitionId) {
   return rows;
 }
 
-async function getReportsForTenant(tenantId) {
-  const orders = (await OrderDB.find({ tenantId })).filter(o => !o.deleted);
+async function getReportsForTenant(tenantId, exhibitionId) {
+  const q = { tenantId };
+  if (exhibitionId) q.exhibitionId = exhibitionId;
+  const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
   const byParty = {}, byItem = {}, byStaff = {};
   for (const o of orders) {
     byParty[o.partyId] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
@@ -2731,7 +2733,7 @@ async function getReportsForTenant(tenantId) {
     byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0 };
     byStaff[o.staffId].orderCount += 1;
     for (const line of o.items || []) {
-      byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, qty: 0 };
+      byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: line.images || [], qty: 0 };
       byItem[line.itemId].qty += line.qty;
     }
   }
@@ -2741,6 +2743,15 @@ async function getReportsForTenant(tenantId) {
     byStaff: Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount),
   };
 }
+// Best sellers for the Dashboard — same underlying aggregation as the
+// Reports tab's item-wise table, just capped to the top N and exposed on
+// its own lightweight endpoint so Dashboard doesn't have to pull every
+// party/staff aggregate it doesn't need.
+app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
+  const { byItem } = await getReportsForTenant(req.tenant.id, req.query.exhibitionId);
+  res.json(byItem.slice(0, limit));
+});
 
 // ── Custom reports (client-facing) ────────────────────────────────────────
 app.get('/api/reports/custom', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
