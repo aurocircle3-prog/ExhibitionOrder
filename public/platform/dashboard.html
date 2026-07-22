@@ -720,6 +720,7 @@ function renderReportColumns(){
     if (c.type === 'meta' && !metaOptions.some(m => m.key === c.fieldKey)) c.fieldKey = metaOptions[0]?.key || '';
     if (c.type === 'itemfield' && !itemFieldOptions.some(f => f.key === c.fieldKey)) c.fieldKey = itemFieldOptions[0]?.key || '';
     if (c.type === 'orderfield' && !detailOrderFieldDefs.some(f => f.key === c.fieldKey)) c.fieldKey = detailOrderFieldDefs[0]?.key || '';
+    if (c.type === 'varianttag' && !variantCategories.some(v => v.key === c.fieldKey)) c.fieldKey = variantCategories[0]?.key || '';
   });
   document.getElementById('reportColumnRows').innerHTML = reportColumns.map((c, i) => `
     <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
@@ -727,6 +728,7 @@ function renderReportColumns(){
         <select onchange="updateReportColumn('${c._id}','type',this.value)">
           <option value="meta" ${c.type==='meta'?'selected':''}>Built-in field</option>
           <option value="itemfield" ${c.type==='itemfield'?'selected':''}>Item Master field</option>
+          ${rowType === 'item' && variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
           <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order Detail field</option>
           <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
         </select>
@@ -738,6 +740,8 @@ function renderReportColumns(){
             ? metaOptions.map(m => `<option value="${m.key}" ${c.fieldKey===m.key?'selected':''}>${m.label}</option>`).join('')
             : c.type === 'itemfield'
             ? (itemFieldOptions.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— none available —</option>')
+            : c.type === 'varianttag'
+            ? (variantCategories.map(v => `<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('') || '<option value="">— none available —</option>')
             : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
         </select>
       </div>` : `

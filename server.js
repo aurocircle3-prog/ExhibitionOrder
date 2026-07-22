@@ -21,8 +21,8 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.47.1';
-const BUILD_TIME   = '2026-07-22T07:20:00Z';
+const APP_VERSION  = '1.48.0';
+const BUILD_TIME   = '2026-07-22T07:45:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -911,7 +911,7 @@ app.post('/api/platform/tenants/:id/custom-reports', platformAuth, async (req, r
   try {
     const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
     const orderCustomFields = tenant.orderCustomFields || [];
-    const columns = validateReportColumns(req.body.columns, rowType, fieldDefs, orderCustomFields);
+    const columns = validateReportColumns(req.body.columns, rowType, fieldDefs, orderCustomFields, tenant.variantCategories);
     const report = { id: uuid(), tenantId: tenant.id, name, rowType, columns, createdAt: new Date().toISOString() };
     await ReportDefDB.create(report);
     res.json(report);
@@ -928,7 +928,7 @@ app.put('/api/platform/tenants/:id/custom-reports/:reportId', platformAuth, asyn
   try {
     const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
     const orderCustomFields = tenant.orderCustomFields || [];
-    const columns = validateReportColumns(req.body.columns, rowType, fieldDefs, orderCustomFields);
+    const columns = validateReportColumns(req.body.columns, rowType, fieldDefs, orderCustomFields, tenant.variantCategories);
     await ReportDefDB.update({ id: report.id }, { name, rowType, columns });
     res.json({ ok: true });
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
@@ -2587,9 +2587,10 @@ const REPORT_META_COLUMNS = {
     { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
   ],
 };
-function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields) {
+function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields, variantCategories) {
   const fieldByKey = {}; fieldDefs.forEach(f => { fieldByKey[f.key] = f; });
   const orderFieldByKey = {}; orderCustomFields.forEach(f => { orderFieldByKey[f.key] = f; });
+  const variantCatByKey = {}; (variantCategories || []).forEach(c => { variantCatByKey[c.key] = c; });
   const metaKeys = new Set(REPORT_META_COLUMNS[rowType].map(m => m.key));
   const allowedFormulaNames = new Set([
     ...fieldDefs.filter(f => f.type === 'number').map(f => f.key),
@@ -2598,13 +2599,23 @@ function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields
   ]);
   const out = [];
   for (const raw of (Array.isArray(rawColumns) ? rawColumns : [])) {
-    if (!raw || !['meta', 'itemfield', 'orderfield', 'formula'].includes(raw.type))
+    if (!raw || !['meta', 'itemfield', 'orderfield', 'formula', 'varianttag'].includes(raw.type))
       throw Object.assign(new Error('Each report column needs a valid type'), { status: 400 });
     const col = { id: raw.id || uuid(), type: raw.type };
     if (raw.type === 'meta') {
       if (!metaKeys.has(raw.fieldKey)) throw Object.assign(new Error(`"${raw.fieldKey}" isn't a valid built-in column for this row type`), { status: 400 });
       col.fieldKey = raw.fieldKey;
       col.label = (raw.label || REPORT_META_COLUMNS[rowType].find(m => m.key === raw.fieldKey)?.label || '').trim().slice(0, 60) || raw.fieldKey;
+    } else if (raw.type === 'varianttag') {
+      // Only makes sense per item line — a single order-level row can span
+      // several colors/sizes of the same item, so there's no one value to
+      // show (same reasoning that already restricts text Item Master
+      // fields to item-level rows).
+      if (rowType === 'order') throw Object.assign(new Error('Variant tags can only be used in item-level reports, not order-level'), { status: 400 });
+      const cat = variantCatByKey[raw.fieldKey];
+      if (!cat) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of this company's variant tags`), { status: 400 });
+      col.fieldKey = raw.fieldKey;
+      col.label = (raw.label || cat.label || '').trim().slice(0, 60) || cat.label;
     } else if (raw.type === 'itemfield') {
       const f = fieldByKey[raw.fieldKey];
       if (!f) throw Object.assign(new Error(`"${raw.fieldKey}" isn't an Item Master field`), { status: 400 });
@@ -2655,6 +2666,7 @@ function reportItemColumnValue(col, item, order) {
     const raw = item.extra?.[col.fieldKey];
     return raw === '' || raw === undefined || raw === null ? '' : raw;
   }
+  if (col.type === 'varianttag') return item.variantTags?.[col.fieldKey] || '';
   if (col.type === 'orderfield') return order.customFields?.[col.fieldKey] ?? '';
   if (col.type === 'formula') {
     try {
