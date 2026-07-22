@@ -461,7 +461,7 @@ function buildClubbedGroups(items){
 // item's full clubbed quantity, not just its first line.
 function extraCardFields(group, order){
   return (order.columnsSnapshot || [])
-    .filter(c => !['varianttag', 'qty', 'serial', 'images'].includes(c.type))
+    .filter(c => !['varianttag', 'qty', 'serial', 'images', 'itemcode'].includes(c.type))
     .map(col => {
       let value;
       if (col.type === 'formula') {
@@ -475,28 +475,58 @@ function extraCardFields(group, order){
     })
     .filter(Boolean);
 }
+function tagChipsHtml(g){
+  return g.colorOrder.map(colorKey => `
+    ${colorKey ? `<p class="clubbed-color-label">${colorKey}</p>` : ''}
+    <div class="clubbed-size-chips">
+      ${g.colors[colorKey].sizeOrder.map(sizeKey => `<span class="clubbed-size-chip">${sizeKey === 'Qty' ? '' : sizeKey + ' '}×${g.colors[colorKey].sizes[sizeKey]}</span>`).join('')}
+    </div>`).join('');
+}
 function renderClubbedItems(items, order){
   const groups = buildClubbedGroups(items);
-  document.getElementById('clubbedItems').innerHTML = groups.map(g => {
+  // Every other configured column (MRP, formula, etc.) — qty is handled
+  // separately below as the group's clubbed total, not per-line.
+  const otherCols = (order.columnsSnapshot || []).filter(c => !['varianttag', 'qty', 'serial', 'images', 'itemcode'].includes(c.type));
+
+  const desktopRows = groups.map(g => `
+    <tr>
+      <td>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          ${g.images.length ? renderImageSlider(g.images, 64) : ''}
+          <div>
+            <p style="margin:0;font-weight:600">${g.label}</p>
+            ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${g.code}</p>` : ''}
+          </div>
+        </div>
+      </td>
+      <td>${tagChipsHtml(g)}</td>
+      ${otherCols.map(col => `<td>${getColumnValue(col, g.lines[0], order, null, 0) || ''}</td>`).join('')}
+      <td style="font-weight:600">${g.total}</td>
+    </tr>`).join('');
+
+  const mobileCards = groups.map(g => {
     const extras = extraCardFields(g, order);
     return `
     <div class="clubbed-card">
-      ${g.images[0] ? `<img class="clubbed-photo" src="${g.images[0]}" onerror="this.style.visibility='hidden'">` : '<div class="clubbed-photo"></div>'}
+      <div class="clubbed-photo-wrap">${g.images.length ? renderImageSlider(g.images, 90) : '<div class="clubbed-photo"></div>'}</div>
       <div class="clubbed-header">
         <p style="margin:0;font-weight:600">${g.label}</p>
         ${g.code ? `<p class="muted" style="margin:2px 0 0;font-size:12px">${g.code}</p>` : ''}
         ${extras.length ? `<p class="muted" style="margin:4px 0 0;font-size:12px">${extras.map(e => `${e.label}: ${e.value}`).join(' · ')}</p>` : ''}
       </div>
       <div class="clubbed-groups">
-        ${g.colorOrder.map(colorKey => `
-          ${colorKey ? `<p class="clubbed-color-label">${colorKey}</p>` : ''}
-          <div class="clubbed-size-chips">
-            ${g.colors[colorKey].sizeOrder.map(sizeKey => `<span class="clubbed-size-chip">${sizeKey === 'Qty' ? '' : sizeKey + ' '}×${g.colors[colorKey].sizes[sizeKey]}</span>`).join('')}
-          </div>`).join('')}
+        ${tagChipsHtml(g)}
         <div class="clubbed-total"><span class="muted">Total qty</span><span style="font-weight:600">${g.total}</span></div>
       </div>
     </div>`;
   }).join('');
+
+  document.getElementById('clubbedItems').innerHTML = `
+    <div class="table-scroll desktop-order-view"><table>
+      <thead><tr><th>Item</th><th>Tags</th>${otherCols.map(c => `<th>${c.label}</th>`).join('')}<th>Qty</th></tr></thead>
+      <tbody>${desktopRows}</tbody>
+    </table></div>
+    <div class="mobile-order-view">${mobileCards}</div>`;
 }
 function renderTablePage(){
   const totalPages = Math.max(1, Math.ceil(allRowsHtml.length / PAGE_SIZE));

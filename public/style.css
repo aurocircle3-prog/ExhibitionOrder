@@ -90,6 +90,7 @@ td.thumb-cell{width:56px}
 .clubbed-card{display:grid;grid-template-areas:"photo header" "photo groups";grid-template-columns:90px 1fr;gap:4px 14px;border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:12px}
 .clubbed-card:first-child{margin-top:0}
 .clubbed-photo{grid-area:photo;width:90px;height:110px;object-fit:cover;border-radius:8px;background:var(--bg)}
+.clubbed-photo-wrap{grid-area:photo}
 .clubbed-header{grid-area:header;align-self:end}
 .clubbed-groups{grid-area:groups}
 .clubbed-color-label{font-size:12px;color:var(--muted);margin:10px 0 4px}
@@ -100,6 +101,7 @@ td.thumb-cell{width:56px}
 @media (max-width:640px){
   .clubbed-card{grid-template-areas:"photo header" "groups groups";grid-template-columns:56px 1fr;padding:12px}
   .clubbed-photo{width:56px;height:68px}
+  .clubbed-photo-wrap .img-slider img{max-width:56px!important;max-height:68px!important}
 }
 .icon-btn{background:none;border:none;padding:4px 6px;font-size:15px;cursor:pointer;color:var(--muted)}
 .icon-btn:hover{color:var(--ink)}
