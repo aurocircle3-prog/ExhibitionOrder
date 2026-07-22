@@ -35,8 +35,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.49.2';
-const BUILD_TIME   = '2026-07-22T10:00:00Z';
+const APP_VERSION  = '1.49.3';
+const BUILD_TIME   = '2026-07-22T10:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -525,7 +525,7 @@ async function resolveTenant(req, res, next) {
   if (!slug) return res.status(400).json({ error: 'Company not specified. Use the company subdomain, or pass ?tenant=slug / X-Tenant-Slug header.' });
   const tenant = await TenantDB.findOne({ slug: String(slug).toLowerCase() });
   if (!tenant) return res.status(404).json({ error: `No company found for "${slug}"` });
-  if (tenant.active === false) return res.status(403).json({ error: 'This company account is currently inactive. Contact AuroCircle for help.' });
+  if (tenant.active === false) return res.status(403).json({ error: 'This company account is currently inactive. Contact ExpoOrders for help.' });
   req.tenant = tenant;
   next();
 }
@@ -1135,7 +1135,7 @@ app.post('/api/auth/set-password', async (req, res) => {
 // removed outright) so the old public form gives a clear message instead
 // of a generic 404.
 app.post('/api/companies/register', async (req, res) => {
-  res.status(403).json({ error: 'New companies are set up by AuroCircle directly — get in touch to get started.' });
+  res.status(403).json({ error: 'New companies are set up by ExpoOrders directly — get in touch to get started.' });
 });
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
@@ -1171,7 +1171,7 @@ app.post('/api/staff', resolveTenant, auth, requireRole('admin'), async (req, re
   if (req.tenant.maxStaff != null) {
     const activeCount = await UserDB.count({ tenantId: req.tenant.id, role: 'staff', active: true });
     if (activeCount >= req.tenant.maxStaff) {
-      return res.status(400).json({ error: `Staff limit reached (${req.tenant.maxStaff}). Contact AuroCircle to increase it.` });
+      return res.status(400).json({ error: `Staff limit reached (${req.tenant.maxStaff}). Contact ExpoOrders to increase it.` });
     }
   }
   const loginId = (email || phone || name).toLowerCase();
@@ -1272,7 +1272,7 @@ app.get('/api/me', resolveTenant, auth, async (req, res) => {
 function requireSettingPermission(key) {
   return (req, res, next) => {
     if (req.tenant.settingsPermissions?.[key] !== true) {
-      return res.status(403).json({ error: 'This setting is managed by AuroCircle for your account — contact us to change it.' });
+      return res.status(403).json({ error: 'This setting is managed by ExpoOrders for your account — contact us to change it.' });
     }
     next();
   };
