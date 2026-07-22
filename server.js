@@ -35,8 +35,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.49.3';
-const BUILD_TIME   = '2026-07-22T10:30:00Z';
+const APP_VERSION  = '1.49.4';
+const BUILD_TIME   = '2026-07-22T11:00:00Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
