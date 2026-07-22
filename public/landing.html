@@ -3,14 +3,66 @@
 <meta name="description" content="Take exhibition orders in seconds — scan visiting cards and item codes, send ready-to-confirm order links, and manage every show from one place.">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
+<style>
+@media (max-width:760px){
+  .hero-grid{grid-template-columns:1fr!important;gap:32px!important;text-align:center}
+  .hero-grid h1{text-align:center!important}
+  .hero-grid .hero-point{text-align:left}
+}
+</style>
 <div class="topbar">
   <div class="brand"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div>
   <nav><a href="/login.html">Login</a></nav>
 </div>
-<div class="hero">
-  <h1>Take exhibition orders in seconds, not spreadsheets</h1>
-  <p>Scan a visiting card, scan the item code, and send a ready-to-confirm order link — before your buyer even leaves the stall.</p>
-  <a class="primary" style="display:inline-block;text-decoration:none;padding:11px 22px;border-radius:10px" href="https://wa.me/919137890649" target="_blank">Get your company set up</a>
+<div class="wrap" style="padding-top:56px;padding-bottom:40px">
+  <div class="hero-grid" style="display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:center">
+    <div style="display:flex;justify-content:center">
+      <div style="width:250px;border:10px solid var(--ink);border-radius:36px;padding:8px;background:var(--ink);box-shadow:0 20px 40px rgba(43,28,22,.18)">
+        <div style="background:#fff;border-radius:26px;overflow:hidden">
+          <div style="background:var(--brand);color:#fff;padding:12px 14px;font-size:13px;font-weight:700">Expo Orders</div>
+          <div style="padding:12px 14px">
+            <p style="font-size:11px;color:var(--muted);margin:0 0 8px">Scan items</p>
+            <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:11px;color:var(--muted);margin-bottom:12px">Scan, or type a code…</div>
+            <p style="font-size:11px;color:var(--muted);margin:0 0 6px">Cart</p>
+            <div style="border-bottom:1px solid var(--line);padding:8px 0">
+              <p style="margin:0;font-size:12px;font-weight:700">Denim Shirt <span style="font-weight:400;color:var(--muted)">· Red / M</span></p>
+              <p style="margin:2px 0 0;font-size:11px;color:var(--muted)">Qty: 3</p>
+            </div>
+            <div style="border-bottom:1px solid var(--line);padding:8px 0">
+              <p style="margin:0;font-size:12px;font-weight:700">Diamond Ring</p>
+              <p style="margin:2px 0 0;font-size:11px;color:var(--muted)">Qty: 1</p>
+            </div>
+            <div style="background:var(--accent);color:#fff;text-align:center;border-radius:8px;padding:9px;margin-top:14px;font-size:12px;font-weight:700">Send order link</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h1 style="font-size:36px;margin:0 0 22px;text-align:left">Expo Orders</h1>
+      <div class="hero-point" style="display:flex;gap:14px;align-items:flex-start;margin-bottom:22px">
+        <span style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px">✓</span>
+        <div>
+          <p style="margin:0;font-weight:700;font-size:17px">Scan, don't type</p>
+          <p class="muted" style="margin:2px 0 0">Item code, buyer's card — scanned into the order in seconds.</p>
+        </div>
+      </div>
+      <div class="hero-point" style="display:flex;gap:14px;align-items:flex-start;margin-bottom:22px">
+        <span style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px">✓</span>
+        <div>
+          <p style="margin:0;font-weight:700;font-size:17px">A link, not a follow-up call</p>
+          <p class="muted" style="margin:2px 0 0">Every order gets a shareable link with photos and totals, ready before the buyer leaves the stall.</p>
+        </div>
+      </div>
+      <div class="hero-point" style="display:flex;gap:14px;align-items:flex-start;margin-bottom:28px">
+        <span style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px">✓</span>
+        <div>
+          <p style="margin:0;font-weight:700;font-size:17px">Your own branded link</p>
+          <p class="muted" style="margin:2px 0 0">yourcompany.expoorders.com — a company login for your admin, staff and buyers.</p>
+        </div>
+      </div>
+      <a class="primary" style="display:inline-block;text-decoration:none;padding:11px 22px;border-radius:10px" href="https://wa.me/919137890649" target="_blank">Get your company set up</a>
+    </div>
+  </div>
 </div>
 <div class="wrap">
   <div class="grid cols-3">
@@ -27,16 +79,16 @@
       <p class="muted">Photograph the buyer's card — firm and contact name are read automatically and can be edited.</p>
     </div>
     <div class="card">
-      <b>Shareable order link</b>
-      <p class="muted">Every order gets a link with photos and totals, ready to send over WhatsApp for confirmation.</p>
+      <b>Works without wifi</b>
+      <p class="muted">Item catalog and buyer list are cached on the phone — keep scanning even when the hall's connection drops.</p>
     </div>
     <div class="card">
       <b>Party &amp; item reports</b>
       <p class="muted">See total orders by buyer, by item, and by staff member — across every exhibition you run.</p>
     </div>
     <div class="card">
-      <b>Your own company link</b>
-      <p class="muted">yourcompany.expoorders.com — a branded login for your admin, staff and buyers.</p>
+      <b>No app to install</b>
+      <p class="muted">Works straight from a browser on any phone — nothing for your staff or buyers to download first.</p>
     </div>
   </div>
 
