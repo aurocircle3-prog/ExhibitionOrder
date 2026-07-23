@@ -1,188 +1,110 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ExpoOrders — Take Exhibition Orders in Seconds</title>
-    <meta name="description" content="Scan item codes, share branded order links over WhatsApp, and see reports across every show you run — built for exhibition floors.">
-    <link rel="icon" href="/logo.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <style>
-        .hero-bg {
-            background: linear-gradient(rgba(9,9,15,0.88), rgba(9,9,15,0.92)), radial-gradient(circle at 30% 20%, #1e1b4b 0%, #09090f 60%);
-        }
-        .feature-card, .slide-up, .step {
-            opacity: 0; transform: translateY(32px);
-            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .feature-card.visible, .slide-up.visible, .step.visible { opacity: 1; transform: translateY(0); }
-        .hero-text { animation: fadeInUp 0.9s ease forwards; }
-        @keyframes fadeInUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
-</head>
-<body class="bg-zinc-950 text-zinc-200">
-
-    <nav class="bg-zinc-900 border-b border-zinc-800 sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-6 py-4">
-            <div class="flex justify-between items-center">
-                <div class="flex items-center gap-3">
-                    <div id="navLogoSlot" class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl">E</div>
-                    <span class="text-2xl font-bold tracking-tight text-white">ExpoOrders</span>
-                </div>
-                <div class="hidden md:flex gap-8 font-medium">
-                    <a href="#features" class="hover:text-indigo-400 transition">Features</a>
-                    <a href="#how" class="hover:text-indigo-400 transition">How it Works</a>
-                </div>
-                <div class="hidden md:block">
-                    <a href="/login.html" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold transition">Login</a>
-                </div>
-                <button id="menuBtn" class="md:hidden text-2xl"><i class="fas fa-bars"></i></button>
+<title>Expo Orders — Scan, Order, Send</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Take exhibition orders in seconds — scan visiting cards and item codes, send ready-to-confirm order links, and manage every show from one place.">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<style>
+@media (max-width:760px){
+  .hero-grid{grid-template-columns:1fr!important;gap:32px!important;text-align:center}
+  .hero-grid h1{text-align:center!important}
+  .hero-grid .hero-point{text-align:left}
+}
+</style>
+<div class="topbar">
+  <div class="brand"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div>
+  <nav><a href="/login.html">Login</a></nav>
+</div>
+<div class="wrap" style="padding-top:56px;padding-bottom:40px">
+  <div class="hero-grid" style="display:grid;grid-template-columns:340px 1fr;gap:56px;align-items:center">
+    <div style="display:flex;justify-content:center">
+      <div style="width:250px;border:10px solid var(--ink);border-radius:36px;padding:8px;background:var(--ink);box-shadow:0 20px 40px rgba(43,28,22,.18)">
+        <div style="background:#fff;border-radius:26px;overflow:hidden">
+          <div style="background:var(--brand);color:#fff;padding:12px 14px;font-size:13px;font-weight:700">Expo Orders</div>
+          <div style="padding:12px 14px">
+            <p style="font-size:11px;color:var(--muted);margin:0 0 8px">Scan items</p>
+            <div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:11px;color:var(--muted);margin-bottom:12px">Scan, or type a code…</div>
+            <p style="font-size:11px;color:var(--muted);margin:0 0 6px">Cart</p>
+            <div style="border-bottom:1px solid var(--line);padding:8px 0">
+              <p style="margin:0;font-size:12px;font-weight:700">Denim Shirt <span style="font-weight:400;color:var(--muted)">· Red / M</span></p>
+              <p style="margin:2px 0 0;font-size:11px;color:var(--muted)">Qty: 3</p>
             </div>
-            <div id="mobileMenu" class="hidden md:hidden mt-5 py-5 border-t border-zinc-800">
-                <div class="flex flex-col gap-5 text-lg">
-                    <a href="#features" onclick="toggleMenu()" class="hover:text-indigo-400 transition">Features</a>
-                    <a href="#how" onclick="toggleMenu()" class="hover:text-indigo-400 transition">How it Works</a>
-                    <a href="/login.html" class="block w-full text-center py-3.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold">Login</a>
-                </div>
+            <div style="border-bottom:1px solid var(--line);padding:8px 0">
+              <p style="margin:0;font-size:12px;font-weight:700">Diamond Ring</p>
+              <p style="margin:2px 0 0;font-size:11px;color:var(--muted)">Qty: 1</p>
             </div>
+            <div style="background:var(--accent);color:#fff;text-align:center;border-radius:8px;padding:9px;margin-top:14px;font-size:12px;font-weight:700">Send order link</div>
+          </div>
         </div>
-    </nav>
-
-    <section class="hero-bg py-24">
-        <div class="max-w-4xl mx-auto px-6 text-center">
-            <div class="hero-text">
-                <h1 class="text-4xl md:text-6xl font-bold leading-tight mb-6 text-white">
-                    Take exhibition orders in seconds,<br><span class="text-indigo-400">not spreadsheets.</span>
-                </h1>
-                <p class="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10">
-                    Scan a visiting card, scan the item code, and send a ready-to-confirm order link — before your buyer even leaves the stall.
-                </p>
-            </div>
-            <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                <a href="https://wa.me/919137890649" target="_blank"
-                   class="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-semibold text-lg transition">
-                    Get your company set up
-                </a>
-                <button onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})"
-                        class="px-8 py-4 border border-zinc-700 hover:border-zinc-400 rounded-2xl font-medium flex items-center gap-3 transition justify-center">
-                    <i class="fas fa-arrow-down"></i> See how it works
-                </button>
-            </div>
+      </div>
+    </div>
+    <div>
+      <h1 style="font-size:36px;margin:0 0 22px;text-align:left">Expo Orders</h1>
+      <div class="hero-point" style="display:flex;gap:14px;align-items:flex-start;margin-bottom:22px">
+        <span style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px">✓</span>
+        <div>
+          <p style="margin:0;font-weight:700;font-size:17px">Scan, don't type</p>
+          <p class="muted" style="margin:2px 0 0">Item code, buyer's card — scanned into the order in seconds.</p>
         </div>
-    </section>
-
-    <section id="features" class="py-24 bg-zinc-900">
-        <div class="max-w-6xl mx-auto px-6">
-            <div class="text-center mb-16 slide-up">
-                <span class="bg-indigo-950 text-indigo-400 px-4 py-2 rounded-full text-sm font-medium">FOR EXHIBITION TEAMS</span>
-                <h2 class="text-3xl md:text-4xl font-bold mt-4 text-white">Everything you need on the floor</h2>
-            </div>
-            <div class="grid md:grid-cols-3 gap-8" id="featuresContainer">
-                <div class="feature-card bg-zinc-950 border border-zinc-800 p-8 rounded-3xl">
-                    <i class="fas fa-barcode text-4xl text-indigo-400 mb-6"></i>
-                    <h3 class="text-2xl font-semibold mb-3 text-white">Scan, don't type</h3>
-                    <p class="text-zinc-400">Item code, buyer's visiting card — scanned straight into the order, camera or Bluetooth scanner, no manual entry.</p>
-                </div>
-                <div class="feature-card bg-zinc-950 border border-zinc-800 p-8 rounded-3xl">
-                    <i class="fas fa-link text-4xl text-violet-400 mb-6"></i>
-                    <h3 class="text-2xl font-semibold mb-3 text-white">Shareable order link</h3>
-                    <p class="text-zinc-400">Every order gets a branded link with photos and totals — ready to send over WhatsApp before the buyer leaves the stall.</p>
-                </div>
-                <div class="feature-card bg-zinc-950 border border-zinc-800 p-8 rounded-3xl">
-                    <i class="fas fa-chart-line text-4xl text-emerald-400 mb-6"></i>
-                    <h3 class="text-2xl font-semibold mb-3 text-white">Reports across every show</h3>
-                    <p class="text-zinc-400">See totals by buyer, by item, and by staff member — across every exhibition you run, not just one.</p>
-                </div>
-                <div class="feature-card bg-zinc-950 border border-zinc-800 p-8 rounded-3xl">
-                    <i class="fas fa-wifi text-4xl text-indigo-400 mb-6"></i>
-                    <h3 class="text-2xl font-semibold mb-3 text-white">Works without wifi</h3>
-                    <p class="text-zinc-400">Your item catalog and buyer list are cached on the phone — keep scanning even when the hall's connection drops.</p>
-                </div>
-                <div class="feature-card bg-zinc-950 border border-zinc-800 p-8 rounded-3xl">
-                    <i class="fas fa-id-card text-4xl text-violet-400 mb-6"></i>
-                    <h3 class="text-2xl font-semibold mb-3 text-white">Visiting card capture</h3>
-                    <p class="text-zinc-400">Photograph the buyer's card — firm and contact name are read automatically and can be edited.</p>
-                </div>
-                <div class="feature-card bg-zinc-950 border border-zinc-800 p-8 rounded-3xl">
-                    <i class="fas fa-mobile-screen text-4xl text-emerald-400 mb-6"></i>
-                    <h3 class="text-2xl font-semibold mb-3 text-white">No app to install</h3>
-                    <p class="text-zinc-400">Works straight from a browser on any phone — nothing for your staff or buyers to download first.</p>
-                </div>
-            </div>
+      </div>
+      <div class="hero-point" style="display:flex;gap:14px;align-items:flex-start;margin-bottom:22px">
+        <span style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px">✓</span>
+        <div>
+          <p style="margin:0;font-weight:700;font-size:17px">A link, not a follow-up call</p>
+          <p class="muted" style="margin:2px 0 0">Every order gets a shareable link with photos and totals, ready before the buyer leaves the stall.</p>
         </div>
-    </section>
-
-    <section id="how" class="py-24 bg-black">
-        <div class="max-w-5xl mx-auto px-6">
-            <h2 class="text-3xl md:text-4xl font-bold text-center mb-16 slide-up text-white">How ExpoOrders works</h2>
-            <div class="grid md:grid-cols-3 gap-12" id="stepsContainer">
-                <div class="step text-center">
-                    <div class="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-3xl font-bold mb-6 text-white">1</div>
-                    <h3 class="text-xl font-semibold mb-2 text-white">Scan & build</h3>
-                    <p class="text-zinc-400">Staff scans the item code or types it in — added to the order in real time, even offline.</p>
-                </div>
-                <div class="step text-center">
-                    <div class="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-3xl font-bold mb-6 text-white">2</div>
-                    <h3 class="text-xl font-semibold mb-2 text-white">Send the link</h3>
-                    <p class="text-zinc-400">The buyer gets a clean, branded order link instantly, straight over WhatsApp — no app needed.</p>
-                </div>
-                <div class="step text-center">
-                    <div class="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-3xl font-bold mb-6 text-white">3</div>
-                    <h3 class="text-xl font-semibold mb-2 text-white">Review & confirm</h3>
-                    <p class="text-zinc-400">They review photos, quantities and totals on their own phone, and get back to you to confirm.</p>
-                </div>
-            </div>
+      </div>
+      <div class="hero-point" style="display:flex;gap:14px;align-items:flex-start;margin-bottom:28px">
+        <span style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px">✓</span>
+        <div>
+          <p style="margin:0;font-weight:700;font-size:17px">Your own branded link</p>
+          <p class="muted" style="margin:2px 0 0">yourcompany.expoorders.com — a company login for your admin, staff and buyers.</p>
         </div>
-    </section>
+      </div>
+      <a class="primary" style="display:inline-block;text-decoration:none;padding:11px 22px;border-radius:10px" href="https://wa.me/919137890649" target="_blank">Get your company set up</a>
+    </div>
+  </div>
+</div>
+<div class="wrap">
+  <div class="grid cols-3">
+    <div class="card">
+      <b>Your own item master</b>
+      <p class="muted">Define the fields you actually track — 10, 12, whatever you need. Pick one as the scan code.</p>
+    </div>
+    <div class="card">
+      <b>Scan to order</b>
+      <p class="muted">Staff scan the item code (camera or Bluetooth scanner) to add it to the cart in real time.</p>
+    </div>
+    <div class="card">
+      <b>Visiting card capture</b>
+      <p class="muted">Photograph the buyer's card — firm and contact name are read automatically and can be edited.</p>
+    </div>
+    <div class="card">
+      <b>Works without wifi</b>
+      <p class="muted">Item catalog and buyer list are cached on the phone — keep scanning even when the hall's connection drops.</p>
+    </div>
+    <div class="card">
+      <b>Party &amp; item reports</b>
+      <p class="muted">See total orders by buyer, by item, and by staff member — across every exhibition you run.</p>
+    </div>
+    <div class="card">
+      <b>No app to install</b>
+      <p class="muted">Works straight from a browser on any phone — nothing for your staff or buyers to download first.</p>
+    </div>
+  </div>
 
-    <section class="bg-gradient-to-r from-indigo-600 to-violet-600 py-20 text-white text-center">
-        <div class="max-w-2xl mx-auto px-6">
-            <h2 class="text-3xl md:text-4xl font-bold mb-6 slide-up">Ready to run your next exhibition without the spreadsheet chaos?</h2>
-            <a href="https://wa.me/919137890649" target="_blank"
-               class="inline-block px-10 py-5 bg-white text-indigo-700 font-semibold rounded-3xl text-xl hover:bg-zinc-100 transition">
-                Get your company set up →
-            </a>
-        </div>
-    </section>
-
-    <footer class="bg-zinc-950 border-t border-zinc-800 py-10 text-center">
-        <p class="text-zinc-500 text-sm" id="footerCopyright">© 2026 ExpoOrders. All rights reserved.</p>
-    </footer>
-
-    <script>
-        const menuBtn = document.getElementById('menuBtn');
-        const mobileMenu = document.getElementById('mobileMenu');
-        let isOpen = false;
-        function toggleMenu() {
-            isOpen = !isOpen;
-            mobileMenu.classList.toggle('hidden', !isOpen);
-            menuBtn.innerHTML = isOpen ? '<i class="fas fa-times"></i>' : '<i class="fas fa-bars"></i>';
-        }
-        menuBtn.addEventListener('click', toggleMenu);
-
-        function handleScrollAnimations() {
-            const elements = document.querySelectorAll('.feature-card, .slide-up, .step');
-            const observer = new IntersectionObserver((entries) => {
-                entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('visible'); });
-            }, { threshold: 0.1, rootMargin: "0px 0px -50px 0px" });
-            elements.forEach(el => observer.observe(el));
-        }
-
-        // Platform logo, if one's been uploaded in Platform Admin — falls back
-        // to the "E" letter mark already in the HTML if none is set.
-        fetch('/api/platform-info').then(r => r.json()).then(res => {
-            if (res.logoUrl) {
-                const img = document.createElement('img');
-                img.src = res.logoUrl;
-                img.alt = '';
-                img.className = 'h-9 w-auto object-contain';
-                document.getElementById('navLogoSlot').replaceWith(img);
-            }
-        }).catch(() => {});
-        document.getElementById('footerCopyright').textContent = `© ${new Date().getFullYear()} ExpoOrders. All rights reserved.`;
-
-        handleScrollAnimations();
-    </script>
-</body>
-</html>
+  <div class="card" style="text-align:center;margin-top:8px;padding:36px 22px">
+    <h3 style="margin:0 0 6px">Get in touch</h3>
+    <p class="muted" style="margin:0 0 20px">Tell us about your exhibition, and we'll set your company up.</p>
+    <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap">
+      <a href="https://wa.me/919137890649" target="_blank" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:11px 22px;border-radius:10px;border:1px solid var(--line);color:var(--ink)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a10 10 0 00-8.6 15.1L2 22l5.1-1.3A10 10 0 1012 2zm0 18.2a8.2 8.2 0 01-4.2-1.1l-.3-.2-3.1.8.8-3-.2-.3A8.2 8.2 0 1112 20.2z"/><path d="M9.1 7.4c-.2-.5-.4-.5-.6-.5h-.5c-.2 0-.5.1-.7.4-.3.3-1 1-1 2.3s1 2.7 1.1 2.9c.1.2 2 3 4.7 4.2 2.3.9 2.8.7 3.3.7.5-.1 1.6-.7 1.8-1.3.2-.5.2-1 .1-1.1-.1-.1-.2-.2-.5-.3-.3-.2-1.6-.8-1.9-.9-.2-.1-.4-.1-.6.1-.2.2-.7 1-.9 1.1-.2.2-.3.2-.6.1-.3-.2-1.2-.4-2.2-1.4-.8-.7-1.4-1.7-1.5-1.9-.2-.3 0-.5.1-.6l.4-.4c.1-.2.2-.3.3-.4.1-.2 0-.4 0-.5-.1-.2-.5-1.2-.7-1.6z"/></svg>
+        WhatsApp us
+      </a>
+      <a href="tel:+919137890649" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:11px 22px;border-radius:10px;border:1px solid var(--line);color:var(--ink)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.362 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+        +91 91378 90649
+      </a>
+    </div>
+  </div>
+</div>
+<p class="muted" style="text-align:center;padding:24px 20px 32px;font-size:13px">© Expo Orders. All rights reserved.</p>

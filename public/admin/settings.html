@@ -487,6 +487,11 @@ const FOOTER_FIELD_DEFS = [
   { key: 'twitter', label: 'Twitter / X', type: 'text', placeholder: '@yourhandle or full URL' },
   { key: 'youtube', label: 'YouTube', type: 'text', placeholder: 'channel name or full URL' },
   { key: 'website', label: 'Website', type: 'text', placeholder: 'yourcompany.com' },
+  // Free text for anything not covered above — visibility on the public
+  // link is decided by AuroCircle (platform admin), not from here, so no
+  // show/hide checkbox is rendered for these two.
+  { key: 'note1', label: 'Note 1', type: 'textarea', noClientToggle: true },
+  { key: 'note2', label: 'Note 2', type: 'textarea', noClientToggle: true },
 ];
 function loadFooter(tenant){
   const f = tenant.footer || { show: {} };
@@ -516,9 +521,11 @@ function loadFooter(tenant){
       <div style="margin-top:12px">
         <label>${def.label}</label>
         ${inputHtml}
-        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:4px">
+        ${def.noClientToggle
+          ? `<p class="muted" style="margin:4px 0 0;font-size:12px">Whether this appears on the order link is set by AuroCircle, not from here.</p>`
+          : `<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:4px">
           <input type="checkbox" id="show_${def.key}" style="width:auto" ${f.show?.[def.key] ? 'checked' : ''}> <span class="muted" style="font-weight:400">Show on order link</span>
-        </label>
+        </label>`}
       </div>`;
   }).join('');
 }
@@ -531,7 +538,6 @@ async function uploadLogo(){
     const res = await EXO.apiFetch('/companies/logo', { method: 'POST', body: fd });
     document.getElementById('logoPreview').src = res.logoUrl;
     document.getElementById('logoPreview').style.display = 'inline-block';
-    localStorage.setItem('exo_tenant_logo', res.logoUrl || '');
     EXO.toast('Logo uploaded');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
@@ -545,7 +551,7 @@ async function saveFooter(){
     } else {
       body[def.key] = document.getElementById(`footer_${def.key}`).value.trim();
     }
-    body.show[def.key] = document.getElementById(`show_${def.key}`).checked;
+    if (!def.noClientToggle) body.show[def.key] = document.getElementById(`show_${def.key}`).checked;
   }
   try {
     await EXO.apiFetch('/companies/footer', { method: 'PUT', body: JSON.stringify(body) });

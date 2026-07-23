@@ -1,27 +1,6 @@
 // Shared helpers used by every page — resolves which company (tenant) we're
 // talking to, and wraps fetch() so every API call carries the tenant + auth token.
 (function () {
-  // Applied immediately (not inside DOMContentLoaded) so the correct theme
-  // is set as early as possible, minimizing any flash of the wrong theme
-  // before the rest of the page loads.
-  function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('exo_theme', theme);
-  }
-  function initTheme() {
-    const saved = localStorage.getItem('exo_theme');
-    if (saved) return applyTheme(saved);
-    // No explicit choice yet — follow the system preference rather than
-    // always defaulting to light.
-    applyTheme(window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  }
-  function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'light';
-    const next = current === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
-    document.querySelectorAll('.theme-toggle').forEach(btn => { btn.textContent = next === 'dark' ? '☀️' : '🌙'; });
-  }
-  initTheme();
   // Shared hosting platforms (Render, Vercel, etc.) hand out URLs shaped like
   // <service>.onrender.com — structurally identical to a real per-company
   // subdomain, so treating any 3-part hostname as a tenant slug is wrong
@@ -55,11 +34,7 @@
   function saveSession({ token, user, tenant }) {
     localStorage.setItem('exo_token', token);
     localStorage.setItem('exo_user', JSON.stringify(user));
-    if (tenant) {
-      localStorage.setItem('exo_tenant', tenant.slug);
-      localStorage.setItem('exo_tenant_name', tenant.name);
-      localStorage.setItem('exo_tenant_logo', tenant.logoUrl || '');
-    }
+    if (tenant) { localStorage.setItem('exo_tenant', tenant.slug); localStorage.setItem('exo_tenant_name', tenant.name); }
   }
   function getUser() { try { return JSON.parse(localStorage.getItem('exo_user') || 'null'); } catch { return null; } }
   function logout() { localStorage.removeItem('exo_token'); localStorage.removeItem('exo_user'); location.href = '/login.html'; }
@@ -74,15 +49,11 @@
     const switcherHtml = exhibitionSwitcher ? `
       <span class="muted" style="margin:0 8px;white-space:nowrap">📍 ${exhibitionSwitcher.name}</span>
       <button class="ghost small" onclick="EXO.exitExhibition();return false;" style="margin-right:10px;white-space:nowrap">Change exhibition</button>` : '';
-    const themeIcon = (localStorage.getItem('exo_theme') || 'light') === 'dark' ? '☀️' : '🌙';
-    const logoUrl = localStorage.getItem('exo_tenant_logo');
-    const brandMark = logoUrl ? `<img src="${logoUrl}" alt="" style="height:26px;width:auto;object-fit:contain;display:block">` : '🎪';
     return `<div class="topbar">
-      <div class="brand" style="display:flex;align-items:center;gap:8px">${brandMark}<span>${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</span></div>
+      <div class="brand">🎪 ${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</div>
       ${switcherHtml}
       <button class="nav-toggle" onclick="this.closest('.topbar').classList.toggle('nav-open')" aria-label="Menu">☰</button>
       <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>
-      <button class="theme-toggle" onclick="EXO.toggleTheme()" title="Toggle light/dark" aria-label="Toggle light/dark theme">${themeIcon}</button>
     </div>`;
   }
   // Leaves the current exhibition and goes to see the full list again —
@@ -208,7 +179,7 @@
     finally { btn.disabled = false; btn.textContent = original; }
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

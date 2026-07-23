@@ -35,7 +35,7 @@ async function load(){
         </select>` : `<span class="badge ${o.status}">${o.status}</span>`}
       </td>
       <td>
-        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="/order/${o.shareToken}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="deleteOrder('${o.id}','${o.orderNo}');return false;" style="color:var(--danger)">Delete</a>` : ''}
+        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="${o.shareUrl}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="deleteOrder('${o.id}','${o.orderNo}');return false;" style="color:var(--danger)">Delete</a>` : ''}
       </td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No orders yet — go take one!</td></tr>';
 }

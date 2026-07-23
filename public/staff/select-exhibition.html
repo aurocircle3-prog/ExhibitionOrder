@@ -2,7 +2,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
-<div class="topbar"><div class="brand" style="display:flex;align-items:center;gap:8px"><span id="brandMarkSlot">🎪</span><span id="companyNameLabel">Expo Orders</span></div>
+<div class="topbar"><div class="brand">🎪 <span id="companyNameLabel">Expo Orders</span></div>
   <nav><a href="#" onclick="EXO.logout();return false;">Logout</a></nav>
 </div>
 <div class="wrap" style="max-width:560px;margin:0 auto">
@@ -17,8 +17,6 @@
 <script>
 const user = EXO.requireRole('admin', 'staff');
 document.getElementById('companyNameLabel').textContent = localStorage.getItem('exo_tenant_name') || 'Expo Orders';
-const selectExLogo = localStorage.getItem('exo_tenant_logo');
-if (selectExLogo) document.getElementById('brandMarkSlot').innerHTML = `<img src="${selectExLogo}" alt="" style="height:26px;width:auto;object-fit:contain;display:block">`;
 const tenantSlug = EXO.getTenantSlug();
 
 async function load(){

@@ -14,7 +14,7 @@ const now = () => new Date().toISOString();
 // the order form just adds a Number field with a unit ("Rs.") like any other,
 // configured in Settings > Order Form (demoed below with the seeded Price field).
 const tenant = {
-  id: uuid(), name: 'Kaashvi Jewels', slug: 'kaashvi', plan: 'free', createdAt: now(),
+  id: uuid(), name: 'Meridian Traders', slug: 'meridian', plan: 'free', createdAt: now(),
   orderFields: [{ key: 'price', label: 'Price', unit: 'Rs.', showTotal: true }],
   orderShowImages: true,
   orderSeq: 1001, // one demo order (EX1001) already exists below — next created order will be EX1002
@@ -37,8 +37,8 @@ const CUSTOM_FIELDS = [
 ];
 const fielddefs = [...FIXED_FIELDS, ...CUSTOM_FIELDS].map((f, i) => ({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], fixed: false, decimals: 2, unit: '', createdAt: now(), ...f }));
 
-const admin = { id: uuid(), tenantId: tenant.id, role: 'admin', loginId: 'admin@kaashvi.test', password: bcrypt.hashSync('admin123', 10), name: 'Sanjay Jain', phone: '+919029006090', email: 'admin@kaashvi.test', active: true, createdAt: now() };
-const staff = { id: uuid(), tenantId: tenant.id, role: 'staff', loginId: 'staff@kaashvi.test', password: bcrypt.hashSync('staff123', 10), name: 'Priya Mehta', phone: '+919876500011', email: 'staff@kaashvi.test', active: true, createdAt: now() };
+const admin = { id: uuid(), tenantId: tenant.id, role: 'admin', loginId: 'admin@meridian.test', password: bcrypt.hashSync('admin123', 10), name: 'Demo Admin', phone: '+919000000001', email: 'admin@meridian.test', active: true, createdAt: now() };
+const staff = { id: uuid(), tenantId: tenant.id, role: 'staff', loginId: 'staff@meridian.test', password: bcrypt.hashSync('staff123', 10), name: 'Demo Staff', phone: '+919000000002', email: 'staff@meridian.test', active: true, createdAt: now() };
 
 // Two items deliberately share Image Code "DZ2" to demo the shared-photo
 // behavior (upload one photo named DZ2.jpg and both items show it).
@@ -65,9 +65,9 @@ db.setState({
   auditlogs: [], imagesets: [], platformadmins: [],
 }).write();
 
-console.log('✅ Seeded demo company "Kaashvi Jewels" (slug: kaashvi)');
-console.log('   Admin login: admin@kaashvi.test / admin123');
-console.log('   Staff login: staff@kaashvi.test / staff123');
+console.log('✅ Seeded demo company "Meridian Traders" (slug: meridian)');
+console.log('   Admin login: admin@meridian.test / admin123');
+console.log('   Staff login: staff@meridian.test / staff123');
 console.log(`   Order link:  http://localhost:${process.env.PORT || 3000}/order/${order.shareToken}`);
 console.log('   Note: DZ2 and DZ2B share an Image Code — upload one photo named DZ2.jpg via Item Master > Photos and both items will show it.');
 console.log('   No platform admin yet — run: node db/seed-platform-admin.js you@yourcompany.com "a strong password"');

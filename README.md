@@ -20,10 +20,10 @@ Open http://localhost:3000 and sign in at `/login.html`:
 
 | Role  | Login ID            | Password  |
 |-------|----------------------|-----------|
-| Admin | `admin@kaashvi.test` | `admin123`|
-| Staff | `staff@kaashvi.test` | `staff123`|
+| Admin | `admin@meridian.test` | `admin123`|
+| Staff | `staff@meridian.test` | `staff123`|
 
-Company link (tenant slug): `kaashvi`. Locally there's no real subdomain, so
+Company link (tenant slug): `meridian`. Locally there's no real subdomain, so
 the login/register pages ask for the company link explicitly and cache it in
 `localStorage`; every API call is sent with an `X-Tenant-Slug` header. In
 production, point `*.orders.is` (or your own domain) at this service and the
@@ -31,7 +31,7 @@ subdomain is resolved automatically — no header needed.
 
 ## How the pieces fit together
 
-- **Tenant = company.** `Tenant.slug` is the subdomain (`kaashvi.orders.is`),
+- **Tenant = company.** `Tenant.slug` is the subdomain (`meridian.orders.is`),
   chosen at signup (`/register.html`) and validated the same way ecatlog
   validates `storeSlug` — format + reserved-word + uniqueness checks.
 - **Roles**: `admin` (one per company, created at signup), `staff` (created
