@@ -55,7 +55,11 @@
   function saveSession({ token, user, tenant }) {
     localStorage.setItem('exo_token', token);
     localStorage.setItem('exo_user', JSON.stringify(user));
-    if (tenant) { localStorage.setItem('exo_tenant', tenant.slug); localStorage.setItem('exo_tenant_name', tenant.name); }
+    if (tenant) {
+      localStorage.setItem('exo_tenant', tenant.slug);
+      localStorage.setItem('exo_tenant_name', tenant.name);
+      localStorage.setItem('exo_tenant_logo', tenant.logoUrl || '');
+    }
   }
   function getUser() { try { return JSON.parse(localStorage.getItem('exo_user') || 'null'); } catch { return null; } }
   function logout() { localStorage.removeItem('exo_token'); localStorage.removeItem('exo_user'); location.href = '/login.html'; }
@@ -71,8 +75,10 @@
       <span class="muted" style="margin:0 8px;white-space:nowrap">📍 ${exhibitionSwitcher.name}</span>
       <button class="ghost small" onclick="EXO.exitExhibition();return false;" style="margin-right:10px;white-space:nowrap">Change exhibition</button>` : '';
     const themeIcon = (localStorage.getItem('exo_theme') || 'light') === 'dark' ? '☀️' : '🌙';
+    const logoUrl = localStorage.getItem('exo_tenant_logo');
+    const brandMark = logoUrl ? `<img src="${logoUrl}" alt="" style="height:26px;width:auto;object-fit:contain;display:block">` : '🎪';
     return `<div class="topbar">
-      <div class="brand">🎪 ${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</div>
+      <div class="brand" style="display:flex;align-items:center;gap:8px">${brandMark}<span>${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</span></div>
       ${switcherHtml}
       <button class="nav-toggle" onclick="this.closest('.topbar').classList.toggle('nav-open')" aria-label="Menu">☰</button>
       <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>

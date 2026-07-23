@@ -531,6 +531,7 @@ async function uploadLogo(){
     const res = await EXO.apiFetch('/companies/logo', { method: 'POST', body: fd });
     document.getElementById('logoPreview').src = res.logoUrl;
     document.getElementById('logoPreview').style.display = 'inline-block';
+    localStorage.setItem('exo_tenant_logo', res.logoUrl || '');
     EXO.toast('Logo uploaded');
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }

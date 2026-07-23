@@ -3,7 +3,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
-<div class="topbar"><div class="brand" id="companyName"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div></div>
+<div class="topbar"><div class="brand" id="companyName" style="display:flex;align-items:center;gap:8px"><img src="/logo.svg" alt="" style="height:26px;width:auto;object-fit:contain;display:block"><span>Expo Orders</span></div></div>
 <div class="wrap" id="content">
   <p class="muted">Loading order…</p>
 </div>
@@ -229,8 +229,8 @@ async function load(){
   try {
     const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
     const { order, company, rowGrouping, viewHeaderFields, viewFooterFields } = res;
-    const logoHtml = company.logoUrl ? `<img src="${esc(company.logoUrl)}" alt="" style="height:28px;vertical-align:-8px;margin-right:8px;border-radius:4px;object-fit:contain">` : '🎪 ';
-    document.getElementById('companyName').innerHTML = logoHtml + esc(company.name || 'Expo Orders');
+    const logoHtml = company.logoUrl ? `<img src="${esc(company.logoUrl)}" alt="" style="height:26px;width:auto;object-fit:contain;display:block">` : '🎪';
+    document.getElementById('companyName').innerHTML = `${logoHtml}<span>${esc(company.name || 'Expo Orders')}</span>`;
 
     if (rowGrouping === 'itemName') {
       const decimalsByKey = {};
@@ -304,7 +304,8 @@ async function load(){
         ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${esc(order.remark)}</p>` : ''}
         ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
-      ${renderFooter(company, order)}`;
+      ${renderFooter(company, order)}
+      ${renderPoweredByFooter(company, res.platformLogoUrl)}`;
     decideAndRenderItems(order);
   } catch (e) {
     box.innerHTML = `<div class="error" style="display:block">${esc(e.message)}</div>`;
@@ -591,6 +592,20 @@ function renderFooter(company, order){
       ${f.address ? `<p class="muted" style="margin:4px 0">${esc(f.address)}</p>` : ''}
       ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${esc(f.gstNumber)}</p>` : ''}
       ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${esc(s.url)}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
+    </div>`;
+}
+// Copyright + "Powered by" credit — always shown regardless of whether
+// the company's own footer (address/social/etc.) is configured, since
+// this isn't the company's content, it's ExpoOrders' own attribution.
+function renderPoweredByFooter(company, platformLogoUrl){
+  const year = new Date().getFullYear();
+  const logoHtml = platformLogoUrl
+    ? `<img src="${esc(platformLogoUrl)}" alt="" style="height:16px;width:auto;object-fit:contain;vertical-align:-3px;margin-left:4px">`
+    : '';
+  return `
+    <div style="text-align:center;margin-top:18px;padding-top:14px">
+      <p class="muted" style="margin:0;font-size:12px">© ${year} ${esc(company.name || '')}. All rights reserved.</p>
+      <a href="https://expoorders.com" target="_blank" class="muted" style="display:inline-flex;align-items:center;margin-top:4px;font-size:12px;text-decoration:none">Powered by ExpoOrders${logoHtml}</a>
     </div>`;
 }
 

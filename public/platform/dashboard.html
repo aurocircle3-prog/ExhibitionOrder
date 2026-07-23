@@ -14,6 +14,19 @@
     <button class="tab-btn" data-ttab="companies" onclick="switchTopTab('companies')">Companies</button>
     <button class="tab-btn" data-ttab="create" onclick="switchTopTab('create')">Create Company</button>
     <button class="tab-btn" data-ttab="exhibitions" onclick="switchTopTab('exhibitions')">Exhibitions</button>
+    <button class="tab-btn" data-ttab="platformsettings" onclick="switchTopTab('platformsettings')">Platform Settings</button>
+  </div>
+
+  <div class="tab-panel" id="ttab-platformsettings">
+    <div class="card">
+      <h3 style="margin-top:0">ExpoOrders logo</h3>
+      <p class="muted" style="margin-top:-6px">Shown on the "Powered by" credit at the bottom of every order link, and used as the fallback brand mark anywhere a company hasn't uploaded their own logo.</p>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+        <img id="platformLogoPreview" style="height:44px;max-width:180px;object-fit:contain;display:none;border-radius:6px;border:1px solid var(--line)">
+        <input type="file" id="platformLogoFile" accept="image/*" onchange="uploadPlatformLogo()">
+      </div>
+      <p class="muted" id="platformLogoErr" style="display:none;color:var(--danger)"></p>
+    </div>
   </div>
 
   <div class="tab-panel" id="ttab-companies">
@@ -342,6 +355,30 @@ let tenants = [];
 async function load(){
   try { tenants = await platformFetch('/tenants'); renderList(); }
   catch (e) { EXO.toast(e.message, 'error'); }
+  loadPlatformSettings();
+}
+async function loadPlatformSettings(){
+  try {
+    const res = await fetch('/api/platform-info').then(r => r.json());
+    if (res.logoUrl) {
+      const img = document.getElementById('platformLogoPreview');
+      img.src = res.logoUrl; img.style.display = 'inline-block';
+    }
+  } catch (e) { /* non-critical — logo section just stays empty */ }
+}
+async function uploadPlatformLogo(){
+  const err = document.getElementById('platformLogoErr'); err.style.display = 'none';
+  const file = document.getElementById('platformLogoFile').files[0];
+  if (!file) return;
+  try {
+    const fd = new FormData(); fd.append('logo', file);
+    const res = await fetch('/api/platform/settings/logo', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    const img = document.getElementById('platformLogoPreview');
+    img.src = data.logoUrl; img.style.display = 'inline-block';
+    EXO.toast('Logo uploaded');
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 
 let platformExhibitions = [], currentExhibitionDetailId = null;

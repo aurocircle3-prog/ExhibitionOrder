@@ -205,6 +205,7 @@ async function refreshOfflineCache(){
     enableVariants = !!me.tenant?.enableVariants;
     variantCategories = me.tenant?.variantCategories || [];
     allowDuplicateItems = me.tenant?.allowDuplicateItems !== false;
+    localStorage.setItem('exo_tenant_logo', me.tenant?.logoUrl || '');
     orderFields = me.tenant?.orderFields || [];
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];

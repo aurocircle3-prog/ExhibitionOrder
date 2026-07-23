@@ -37,8 +37,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.52.0';
-const BUILD_TIME   = '2026-07-23T05:30:00Z';
+const APP_VERSION  = '1.53.0';
+const BUILD_TIME   = '2026-07-23T06:15:00Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -358,6 +358,17 @@ const reportDefSchema = new mongoose.Schema({
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Single-document settings for ExpoOrders' own branding (not tied to any
+// tenant) — currently just the platform's own logo, shown on the shared
+// nav bar's "Powered by" credit and anywhere else the platform brand
+// (as opposed to a client's own brand) needs to show. Always one document
+// with a fixed id, upserted rather than created-then-found each time.
+const platformSettingsSchema = new mongoose.Schema({
+  id: { type: String, default: 'singleton' },
+  logoUrl: String,
+});
+const PlatformSettings = mongoose.model('PlatformSettings', platformSettingsSchema);
+
 const Tenant     = mongoose.model('Tenant', tenantSchema);
 const User       = mongoose.model('User', userSchema);
 const FieldDef   = mongoose.model('FieldDef', fieldDefSchema);
@@ -388,7 +399,7 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], reportDefs: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], reportDefs: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [], platformSettings: [] }).write();
     log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
@@ -425,6 +436,7 @@ const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
 const ExhibitionParticipantDB = makeCollectionOps(ExhibitionParticipant, 'exhibitionParticipants', { addedAt: -1 });
+const PlatformSettingsDB = makeCollectionOps(PlatformSettings, 'platformSettings');
 const ReportDefDB = makeCollectionOps(ReportDef, 'reportDefs', { createdAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
 const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
@@ -1152,6 +1164,27 @@ app.post('/api/platform/tenants/:id/logo', platformAuth, (req, res) => {
     await TenantDB.update({ id: req.params.id }, { logoUrl });
     res.json({ ok: true, logoUrl });
   });
+});
+// ExpoOrders' own logo — separate from any client's logoUrl above. One
+// singleton settings document rather than per-tenant, since this is the
+// platform's own brand, shown on the "Powered by" credit on every order
+// link regardless of which company it belongs to.
+app.post('/api/platform/settings/logo', platformAuth, (req, res) => {
+  const uploader = makeUploader('exo/platform/logo', path.join('logos', 'platform'));
+  uploader.single('logo')(req, res, async err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Logo too large (max 10MB)' : err.message });
+    const logoUrl = fileUrl(req.file, path.join('logos', 'platform'));
+    const existing = await PlatformSettingsDB.findOne({ id: 'singleton' });
+    if (existing) await PlatformSettingsDB.update({ id: 'singleton' }, { logoUrl });
+    else await PlatformSettingsDB.create({ id: 'singleton', logoUrl });
+    res.json({ ok: true, logoUrl });
+  });
+});
+// Public — the nav bar, order links, and pre-login pages all need this
+// without being authenticated as anyone in particular.
+app.get('/api/platform-info', async (req, res) => {
+  const settings = await PlatformSettingsDB.findOne({ id: 'singleton' });
+  res.json({ logoUrl: settings?.logoUrl || '' });
 });
 // Lets the platform admin preview exactly what a company's current Item
 // Master field structure produces as a downloadable template — useful right
@@ -2565,9 +2598,11 @@ app.get('/api/orders/public/:token', async (req, res) => {
   for (const key of FOOTER_TEXT_FIELDS) if (rawFooter.show?.[key] && rawFooter[key]) footer[key] = rawFooter[key];
   if (footer.whatsappNumber && rawFooter.whatsappMessage) footer.whatsappMessage = rawFooter.whatsappMessage;
   const showLogo = !!(rawFooter.show?.logo && tenant?.logoUrl);
+  const platformSettings = await PlatformSettingsDB.findOne({ id: 'singleton' });
   res.json({
     order: { ...order, columnsSnapshot: columns },
     company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
+    platformLogoUrl: platformSettings?.logoUrl || '',
     // Live like the column layout, not frozen at order-creation time — same
     // reasoning: this is a display method AuroCircle chose for the client,
     // not a record of what happened on that specific order.
