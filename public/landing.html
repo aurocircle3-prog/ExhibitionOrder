@@ -33,7 +33,6 @@
                 <div class="hidden md:flex gap-8 font-medium">
                     <a href="#features" class="hover:text-indigo-400 transition">Features</a>
                     <a href="#how" class="hover:text-indigo-400 transition">How it Works</a>
-                    <a href="#demo" class="hover:text-indigo-400 transition">Demo</a>
                 </div>
                 <div class="hidden md:block">
                     <a href="/login.html" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold transition">Login</a>
@@ -44,7 +43,6 @@
                 <div class="flex flex-col gap-5 text-lg">
                     <a href="#features" onclick="toggleMenu()" class="hover:text-indigo-400 transition">Features</a>
                     <a href="#how" onclick="toggleMenu()" class="hover:text-indigo-400 transition">How it Works</a>
-                    <a href="#demo" onclick="toggleMenu()" class="hover:text-indigo-400 transition">Demo</a>
                     <a href="/login.html" class="block w-full text-center py-3.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold">Login</a>
                 </div>
             </div>
@@ -138,35 +136,6 @@
         </div>
     </section>
 
-    <section id="demo" class="py-24 bg-zinc-900">
-        <div class="max-w-3xl mx-auto px-6 text-center">
-            <h2 class="text-3xl md:text-4xl font-bold mb-4 slide-up text-white">See a sample order link</h2>
-            <p class="mb-10 text-zinc-400">This is what a buyer sees the moment your staff hits send.</p>
-            <div class="bg-zinc-950 border border-zinc-800 rounded-3xl p-8 md:p-10 text-left">
-                <div class="flex justify-between items-start mb-8 flex-wrap gap-4">
-                    <div>
-                        <div class="font-medium text-white">Order EX1042</div>
-                        <div class="text-sm text-zinc-500">Vinay Fabrics • Vijay Punamiya</div>
-                    </div>
-                    <button onclick="shareDemo()"
-                            class="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 transition text-sm">
-                        <i class="fas fa-share"></i> Share Link
-                    </button>
-                </div>
-                <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-                    <p class="text-sm text-zinc-500 mb-4">Order summary</p>
-                    <div class="space-y-3 text-zinc-300">
-                        <div class="flex justify-between"><span>Diamond Ring — 2 pcs</span><span class="text-zinc-500">15 sold this show</span></div>
-                        <div class="flex justify-between"><span>Gold Bangle — 1 pc</span><span class="text-zinc-500">7 sold this show</span></div>
-                    </div>
-                    <div class="border-t border-zinc-800 mt-6 pt-6 flex justify-between font-semibold text-white">
-                        <span>Total quantity</span><span>3</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
     <section class="bg-gradient-to-r from-indigo-600 to-violet-600 py-20 text-white text-center">
         <div class="max-w-2xl mx-auto px-6">
             <h2 class="text-3xl md:text-4xl font-bold mb-6 slide-up">Ready to run your next exhibition without the spreadsheet chaos?</h2>
@@ -198,10 +167,6 @@
                 entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('visible'); });
             }, { threshold: 0.1, rootMargin: "0px 0px -50px 0px" });
             elements.forEach(el => observer.observe(el));
-        }
-
-        function shareDemo() {
-            alert("✅ Order link copied!\n\nYour buyer can now view photos, quantities and totals, and confirm the order.");
         }
 
         // Platform logo, if one's been uploaded in Platform Admin — falls back
