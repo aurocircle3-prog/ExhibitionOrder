@@ -25,7 +25,7 @@
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
     "uuid": "^13.0.0",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "pino-pretty": "^13.0.0"

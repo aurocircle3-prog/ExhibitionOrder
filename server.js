@@ -37,8 +37,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.50.0';
-const BUILD_TIME   = '2026-07-22T12:15:00Z';
+const APP_VERSION  = '1.52.0';
+const BUILD_TIME   = '2026-07-23T05:30:00Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -108,6 +108,13 @@ const tenantSchema = new mongoose.Schema({
   // company admin — this is AuroCircle choosing a display method for the
   // client, not something the client configures themselves.
   orderRowGrouping: { type: String, enum: ['none', 'itemName'], default: 'none' },
+  // Whether staff can scan/search the same item into a cart more than
+  // once during Take Order. Default true preserves the existing behavior
+  // (scanning again just bumps the quantity) for every company already
+  // relying on that — opt-out, not opt-in, so nothing changes until a
+  // platform admin explicitly turns it off for a company that wants
+  // stricter control (no accidental double-scan silently inflating qty).
+  allowDuplicateItems: { type: Boolean, default: true },
   // Atomically incremented to generate order numbers (EX1001, EX1002...).
   // Replaces the old "count existing orders, then create" approach, which
   // had a race window: two staff submitting at the same instant could both
@@ -834,6 +841,13 @@ app.put('/api/platform/tenants/:id/row-grouping', platformAuth, async (req, res)
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   await TenantDB.update({ id: tenant.id }, { orderRowGrouping: value });
   res.json({ ok: true, orderRowGrouping: value });
+});
+app.put('/api/platform/tenants/:id/allow-duplicate-items', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.allowDuplicateItems;
+  await TenantDB.update({ id: tenant.id }, { allowDuplicateItems: value });
+  res.json({ ok: true, allowDuplicateItems: value });
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {

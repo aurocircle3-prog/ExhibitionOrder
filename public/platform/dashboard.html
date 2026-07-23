@@ -147,6 +147,12 @@
         <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, saveMaxStaff)">Save limit</button></div>
       </div>
 
+      <h4>Take Order behavior</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="allowDuplicateItemsToggle" style="width:auto" onchange="saveAllowDuplicateItems(this.checked)"> <span>Allow scanning/searching the same item more than once per order</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">On (default): scanning an item already in the cart just bumps its quantity. Off: staff get a message instead, and the item drops out of search once it's in the cart — for companies that want to catch accidental double-scans rather than have them silently inflate a quantity.</p>
+
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
@@ -517,6 +523,15 @@ async function saveRowGrouping(){
     EXO.toast('Row grouping saved.');
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
+async function saveAllowDuplicateItems(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/allow-duplicate-items`, { method: 'PUT', body: JSON.stringify({ allowDuplicateItems: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('allowDuplicateItemsToggle').checked = !checked; // revert the checkbox if the save actually failed
+    EXO.toast(e.message, 'error');
+  }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -577,6 +592,7 @@ async function openDetail(id){
   document.getElementById('natureOfBusinessInput').value = tenant.natureOfBusiness || '';
   document.getElementById('activeToggle').checked = tenant.active !== false;
   document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
+  document.getElementById('allowDuplicateItemsToggle').checked = tenant.allowDuplicateItems !== false;
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
