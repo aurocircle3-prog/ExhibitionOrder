@@ -105,6 +105,7 @@
   function adminNav(active) {
     const ex = currentExhibition();
     const links = ex ? [
+      { key: 'dashboard', href: '/admin/dashboard.html', label: 'Dashboard' },
       { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
       { key: 'order', href: '/staff/order.html', label: 'Take Order' },
       { key: 'orders', href: '/staff/orders.html', label: 'Orders' },

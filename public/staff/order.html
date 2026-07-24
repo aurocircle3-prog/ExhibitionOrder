@@ -30,6 +30,7 @@
     <input id="shareUrl" readonly onclick="this.select()">
     <div class="btn-row" style="margin-top:12px">
       <button class="primary" onclick="window.open(waLink(),'_blank')">Send on WhatsApp</button>
+      <button class="ghost" id="sendEmailBtn" onclick="EXO.busy(this, sendPartyEmail)" style="display:none">Send Email</button>
       <button class="ghost" onclick="copyLink()">Copy link</button>
       <button class="ghost" onclick="newOrder()">Start new order</button>
     </div>
@@ -679,6 +680,7 @@ async function submitOrder(){
     document.getElementById('shareCard').style.display = 'block';
     document.getElementById('orderNo').textContent = lastOrder.orderNo;
     document.getElementById('shareUrl').value = lastOrder.shareUrl;
+    document.getElementById('sendEmailBtn').style.display = lastOrder.partyEmail ? 'inline-block' : 'none';
     document.getElementById('shareCard').scrollIntoView({behavior:'smooth'});
   } catch(e) {
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
@@ -694,6 +696,12 @@ async function submitOrder(){
 function waLink(){
   const msg = encodeURIComponent(`Your order ${lastOrder.orderNo}\n${lastOrder.shareUrl}`);
   return `https://wa.me/${(lastOrder.partyPhone||'').replace(/\D/g,'')}?text=${msg}`;
+}
+async function sendPartyEmail(){
+  try {
+    await EXO.apiFetch(`/orders/${lastOrder.id}/send-email`, { method: 'POST' });
+    EXO.toast(`Email sent to ${lastOrder.partyEmail}`);
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 function copyLink(){ document.getElementById('shareUrl').select(); document.execCommand('copy'); }
 function clearForm(){

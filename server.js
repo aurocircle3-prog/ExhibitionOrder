@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.59.0';
-const BUILD_TIME   = '2026-07-24T09:16:31Z';
+const APP_VERSION  = '1.60.0';
+const BUILD_TIME   = '2026-07-24T09:50:45Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -144,7 +144,15 @@ function escHtml(s) {
 // or break the actual order-creation response. Company gets one if its
 // admin has an email on file (always true — required at signup); the
 // buyer gets one only if they have an email on file (optional field).
-async function sendOrderEmails(tenant, order, party, baseUrl) {
+// Fires automatically on order creation — only the company-admin
+// notification. The buyer's own email is deliberately NOT sent
+// automatically here anymore; see sendPartyOrderEmail below, which staff
+// trigger on demand with a button, same pattern as "Send on WhatsApp".
+// Reasoning: WhatsApp is the primary channel (that's what buyers expect
+// and what the pre-filled message targets), so email defaults to
+// available-but-not-automatic rather than every order silently emailing
+// the buyer whether or not that's actually wanted for that order.
+async function sendAdminOrderEmail(tenant, order, party, baseUrl) {
   if (!useEmail || !tenant.emailNotificationsEnabled) return;
   const shareUrl = `${baseUrl}/order/${order.shareToken}`;
   const itemCount = order.items.length;
@@ -158,15 +166,25 @@ async function sendOrderEmails(tenant, order, party, baseUrl) {
         <p><a href="${shareUrl}">View order</a></p>`,
     }).catch(err => log.error({ err }, 'Order admin-notification email failed'));
   }
-  if (party.email) {
-    sendEmail({
-      to: party.email, toName: party.firmName,
-      subject: `Your order ${order.orderNo} from ${tenant.name}`,
-      html: `<p>Hi ${escHtml(party.contactPerson || party.firmName)},</p>
-        <p>Your order <b>${escHtml(order.orderNo)}</b> with <b>${escHtml(tenant.name)}</b> has been received (${itemCount} item${itemCount === 1 ? '' : 's'}).</p>
-        <p><a href="${shareUrl}">View your order</a></p>`,
-    }).catch(err => log.error({ err }, 'Order buyer-notification email failed'));
-  }
+}
+// Triggered on demand (a "Send Email" button next to "Send on WhatsApp"),
+// not automatically. Returns a reason on failure so the UI can show staff
+// something more useful than a generic error — same gates as the
+// automatic admin email (platform Brevo config + per-company opt-in),
+// plus obviously needing an email on file for this specific buyer.
+async function sendPartyOrderEmail(tenant, order, party, baseUrl) {
+  if (!useEmail || !tenant.emailNotificationsEnabled) return { ok: false, reason: 'Email isn\u2019t enabled for this company yet.' };
+  if (!party.email) return { ok: false, reason: 'This buyer doesn\u2019t have an email on file.' };
+  const shareUrl = `${baseUrl}/order/${order.shareToken}`;
+  const itemCount = order.items.length;
+  const result = await sendEmail({
+    to: party.email, toName: party.firmName,
+    subject: `Your order ${order.orderNo} from ${tenant.name}`,
+    html: `<p>Hi ${escHtml(party.contactPerson || party.firmName)},</p>
+      <p>Your order <b>${escHtml(order.orderNo)}</b> with <b>${escHtml(tenant.name)}</b> has been received (${itemCount} item${itemCount === 1 ? '' : 's'}).</p>
+      <p><a href="${shareUrl}">View your order</a></p>`,
+  });
+  return result.ok ? { ok: true } : { ok: false, reason: 'Email couldn\u2019t be sent — try again in a moment.' };
 }
 
 // ── MONGOOSE SCHEMAS ──────────────────────────────────────────────────────────
@@ -2714,8 +2732,23 @@ app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 
   const baseUrl = tenantBaseUrl(req, req.tenant);
   // Fire-and-forget — never awaited, so a slow/failing email provider can't
   // delay the response staff are waiting on to hand the buyer their link.
-  sendOrderEmails(req.tenant, order, party, baseUrl).catch(err => log.error({ err }, 'sendOrderEmails failed'));
+  sendAdminOrderEmail(req.tenant, order, party, baseUrl).catch(err => log.error({ err }, 'sendAdminOrderEmail failed'));
   res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
+});
+
+// On-demand "Send Email" button — the equivalent of "Send on WhatsApp" but
+// for email. Staff/admin trigger this explicitly per order; nothing here
+// happens automatically.
+app.post('/api/orders/:id/send-email', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  const party = await PartyDB.findOne({ id: order.partyId, tenantId: req.tenant.id });
+  if (!party) return res.status(404).json({ error: 'Buyer not found' });
+  const baseUrl = tenantBaseUrl(req, req.tenant);
+  const result = await sendPartyOrderEmail(req.tenant, order, party, baseUrl);
+  if (!result.ok) return res.status(400).json({ error: result.reason });
+  logAudit(req, 'order.email_sent', 'order', order.id, { to: party.email });
+  res.json({ ok: true });
 });
 
 app.get('/api/orders', resolveTenant, auth, async (req, res) => {
