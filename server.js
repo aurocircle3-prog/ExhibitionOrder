@@ -1,4 +1,6 @@
 const express    = require('express');
+const helmet     = require('helmet');
+const rateLimit  = require('express-rate-limit');
 const path       = require('path');
 const fs         = require('fs');
 const cors       = require('cors');
@@ -35,10 +37,14 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.52.0';
-const BUILD_TIME   = '2026-07-23T14:15:59Z';
+const APP_VERSION  = '1.55.0';
+const BUILD_TIME   = '2026-07-24T06:21:32Z';
 
 if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    log.error('JWT_SECRET env var is not set. Refusing to start in production with a guessable default secret — set JWT_SECRET on Render and redeploy.');
+    process.exit(1);
+  }
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
 }
 
@@ -110,6 +116,12 @@ function sendEmail({ to, toName, subject, html }) {
   });
 }
 
+// Minimal HTML escape for values dropped into email bodies — party/company
+// names and remarks are free text, and this goes out as real HTML mail.
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
 // Fire-and-forget both order-notification emails — never awaited by the
 // route that calls this, so a slow or failing email provider can't delay
 // or break the actual order-creation response. Company gets one if its
@@ -138,11 +150,6 @@ async function sendOrderEmails(tenant, order, party, baseUrl) {
         <p><a href="${shareUrl}">View your order</a></p>`,
     }).catch(err => log.error({ err }, 'Order buyer-notification email failed'));
   }
-}
-// Minimal HTML escape for values dropped into email bodies — party/company
-// names and remarks are free text, and this goes out as real HTML mail.
-function escHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
 // ── MONGOOSE SCHEMAS ──────────────────────────────────────────────────────────
@@ -174,6 +181,13 @@ const tenantSchema = new mongoose.Schema({
   // company admin — this is AuroCircle choosing a display method for the
   // client, not something the client configures themselves.
   orderRowGrouping: { type: String, enum: ['none', 'itemName'], default: 'none' },
+  // Whether staff can scan/search the same item into a cart more than
+  // once during Take Order. Default true preserves the existing behavior
+  // (scanning again just bumps the quantity) for every company already
+  // relying on that — opt-out, not opt-in, so nothing changes until a
+  // platform admin explicitly turns it off for a company that wants
+  // stricter control (no accidental double-scan silently inflating qty).
+  allowDuplicateItems: { type: Boolean, default: true },
   // Atomically incremented to generate order numbers (EX1001, EX1002...).
   // Replaces the old "count existing orders, then create" approach, which
   // had a race window: two staff submitting at the same instant could both
@@ -422,6 +436,17 @@ const reportDefSchema = new mongoose.Schema({
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Single-document settings for ExpoOrders' own branding (not tied to any
+// tenant) — currently just the platform's own logo, shown on the shared
+// nav bar's "Powered by" credit and anywhere else the platform brand
+// (as opposed to a client's own brand) needs to show. Always one document
+// with a fixed id, upserted rather than created-then-found each time.
+const platformSettingsSchema = new mongoose.Schema({
+  id: { type: String, default: 'singleton' },
+  logoUrl: String,
+});
+const PlatformSettings = mongoose.model('PlatformSettings', platformSettingsSchema);
+
 const Tenant     = mongoose.model('Tenant', tenantSchema);
 const User       = mongoose.model('User', userSchema);
 const FieldDef   = mongoose.model('FieldDef', fieldDefSchema);
@@ -452,7 +477,7 @@ async function connectDB() {
     if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
     const adapter  = new FileSync(path.join(dbDir, 'db.json'));
     db = low(adapter);
-    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], reportDefs: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [] }).write();
+    db.defaults({ tenants: [], users: [], fielddefs: [], items: [], parties: [], orders: [], exhibitions: [], exhibitionParticipants: [], reportDefs: [], auditlogs: [], imagesets: [], platformadmins: [], passwordsetuptokens: [], platformSettings: [] }).write();
     log.warn('Using local JSON db (set MONGO_URI to use MongoDB)');
   }
 }
@@ -489,6 +514,7 @@ const PartyDB      = makeCollectionOps(Party, 'parties', { createdAt: -1 });
 const OrderDB      = makeCollectionOps(Order, 'orders', { createdAt: -1 });
 const ExhibitionDB = makeCollectionOps(Exhibition, 'exhibitions', { createdAt: -1 });
 const ExhibitionParticipantDB = makeCollectionOps(ExhibitionParticipant, 'exhibitionParticipants', { addedAt: -1 });
+const PlatformSettingsDB = makeCollectionOps(PlatformSettings, 'platformSettings');
 const ReportDefDB = makeCollectionOps(ReportDef, 'reportDefs', { createdAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
 const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
@@ -552,9 +578,46 @@ const RESERVED_FIELD_LABELS = FIXED_FIELDS.map(f => f.label.toLowerCase());
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.set('trust proxy', true); // Render sits behind a proxy — needed for req.ip to be the real client IP
-app.use(cors());
+app.use(helmet({
+  // This app relies on inline onclick handlers and inline <script> blocks
+  // throughout every page — a default CSP blocks both and would break the
+  // app immediately. Disabling CSP specifically (not helmet as a whole)
+  // still gets every other protection: X-Frame-Options (clickjacking),
+  // X-Content-Type-Options (MIME sniffing), HSTS, etc. Revisiting this to
+  // build a real CSP (moving inline handlers to addEventListener, adding
+  // nonces) is a larger, separate project, not a same-day patch.
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+// Scoped rather than wide open — every company has its own subdomain
+// (meridian.expoorders.com), so this can't be a static list of origins.
+// Risk here is already low (bearer tokens in an Authorization header, not
+// cookies, so there's no session to ride via CSRF) but scoping this is
+// still better than reflecting any origin back unconditionally.
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // same-origin requests, curl, server-to-server — no Origin header at all
+    try {
+      const host = new URL(origin).hostname;
+      const allowed = host === 'localhost' || host === '127.0.0.1'
+        || host.endsWith('.expoorders.com') || host === 'expoorders.com'
+        || host.endsWith('.onrender.com'); // fallback before the custom domain's fully live
+      cb(null, allowed);
+    } catch { cb(null, false); }
+  },
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting — login/password routes are the classic brute-force
+// target, and unauthenticated order creation could otherwise be hammered
+// to spam junk orders. Keyed by IP (trust proxy above makes req.ip the
+// real client address, not Render's proxy). Deliberately not applied
+// globally — most routes are already behind auth() + a valid JWT, which
+// is a much stronger gate than a request-rate window.
+const loginLimiter = rateLimit({ windowMs: 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts — please wait a minute and try again.' } });
+const orderLimiter = rateLimit({ windowMs: 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many orders submitted too quickly — please wait a minute and try again.' } });
 
 // Request logging — one line per request, written after the response finishes
 // so it can include status + duration. Placed early so it wraps every route,
@@ -678,6 +741,12 @@ function fileUrl(file, localDir) {
 // image-naming convention, capped at 3 images per item.
 const IMAGE_SLOT_SUFFIXES = ['', '_1', '_2'];
 function makeItemImageUploader(tenantId, imageCode, startIndex) {
+  // imageCode is admin-entered free text — used directly as part of a
+  // filename (local disk) or S3 key (R2). Without restricting it, a value
+  // like "../../other-tenant/x" could escape the intended directory on
+  // local disk, or collide with another tenant's key prefix on R2. Only
+  // characters that are safe in both contexts survive.
+  imageCode = String(imageCode).replace(/[^A-Za-z0-9_-]/g, '_');
   let slot = startIndex;
   const nameFor = ext => `${imageCode}${IMAGE_SLOT_SUFFIXES[slot++] ?? '_' + slot}${ext}`;
   if (useR2) {
@@ -732,7 +801,7 @@ app.get('/api/companies/check-slug', async (req, res) => {
 // exception is password reset below — a company admin locked out has no
 // other way back in, and this keeps that capability narrow (password only,
 // nothing else about the account) rather than opening general user editing.
-app.post('/api/platform/login', async (req, res) => {
+app.post('/api/platform/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
   const admin = await PlatformAdminDB.findOne({ email: String(email).trim().toLowerCase() });
@@ -843,6 +912,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     tenant.orderFields = template.orderFields || [];
     tenant.orderShowImages = template.orderShowImages !== false;
     tenant.orderRowGrouping = template.orderRowGrouping || 'none';
+    tenant.allowDuplicateItems = template.allowDuplicateItems !== false;
     tenant.orderCustomFields = template.orderCustomFields || [];
     tenant.orderViewColumns = template.orderViewColumns || [];
     tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
@@ -904,6 +974,13 @@ app.put('/api/platform/tenants/:id/row-grouping', platformAuth, async (req, res)
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   await TenantDB.update({ id: tenant.id }, { orderRowGrouping: value });
   res.json({ ok: true, orderRowGrouping: value });
+});
+app.put('/api/platform/tenants/:id/allow-duplicate-items', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.allowDuplicateItems;
+  await TenantDB.update({ id: tenant.id }, { allowDuplicateItems: value });
+  res.json({ ok: true, allowDuplicateItems: value });
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -1209,6 +1286,27 @@ app.post('/api/platform/tenants/:id/logo', platformAuth, (req, res) => {
     res.json({ ok: true, logoUrl });
   });
 });
+// ExpoOrders' own logo — separate from any client's logoUrl above. One
+// singleton settings document rather than per-tenant, since this is the
+// platform's own brand, shown on the "Powered by" credit on every order
+// link regardless of which company it belongs to.
+app.post('/api/platform/settings/logo', platformAuth, (req, res) => {
+  const uploader = makeUploader('exo/platform/logo', path.join('logos', 'platform'));
+  uploader.single('logo')(req, res, async err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Logo too large (max 10MB)' : err.message });
+    const logoUrl = fileUrl(req.file, path.join('logos', 'platform'));
+    const existing = await PlatformSettingsDB.findOne({ id: 'singleton' });
+    if (existing) await PlatformSettingsDB.update({ id: 'singleton' }, { logoUrl });
+    else await PlatformSettingsDB.create({ id: 'singleton', logoUrl });
+    res.json({ ok: true, logoUrl });
+  });
+});
+// Public — the nav bar, order links, and pre-login pages all need this
+// without being authenticated as anyone in particular.
+app.get('/api/platform-info', async (req, res) => {
+  const settings = await PlatformSettingsDB.findOne({ id: 'singleton' });
+  res.json({ logoUrl: settings?.logoUrl || '' });
+});
 // Lets the platform admin preview exactly what a company's current Item
 // Master field structure produces as a downloadable template — useful right
 // after setting up fields, to confirm it looks right before handing
@@ -1238,7 +1336,7 @@ app.get('/api/auth/setup-token/:token', async (req, res) => {
   if (!user || !tenant) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
   res.json({ name: user.name, companyName: tenant.name, companySlug: tenant.slug });
 });
-app.post('/api/auth/set-password', async (req, res) => {
+app.post('/api/auth/set-password', loginLimiter, async (req, res) => {
   const { token, password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   const entry = await PasswordSetupTokenDB.findOne({ token });
@@ -1258,7 +1356,7 @@ app.post('/api/companies/register', async (req, res) => {
 });
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
-app.post('/api/auth/login', resolveTenant, async (req, res) => {
+app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
   const { loginId, password } = req.body;
   if (!loginId || !password) return res.status(400).json({ error: 'Login ID and password are required' });
   const user = await UserDB.findOne({ tenantId: req.tenant.id, loginId: String(loginId).toLowerCase() });
@@ -1622,8 +1720,7 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 // not covered by the structured fields (terms, a delivery note, etc.) —
 // unlike every other field here, their show/hide toggle is platform-admin
 // only: the client can write the text, but AuroCircle decides whether it
-// actually goes live on the public link (a lightweight review gate on
-// freeform text, which the structured fields don't need).
+// actually goes live on the public link.
 const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage', 'note1', 'note2'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
 const PLATFORM_ONLY_SHOW_KEYS = ['note1', 'note2'];
@@ -1633,9 +1730,6 @@ async function saveFooterForTenant(tenantId, body, { isPlatform = false } = {}) 
   const footer = { show: {} };
   for (const key of FOOTER_TEXT_FIELDS) footer[key] = String(body[key] || '').trim().slice(0, 300);
   for (const key of FOOTER_SHOW_KEYS) {
-    // A non-platform caller (the company admin) can't touch a platform-only
-    // toggle either way — on or off — so their save can never flip it;
-    // whatever the platform last set stays as-is.
     footer.show[key] = (!isPlatform && PLATFORM_ONLY_SHOW_KEYS.includes(key)) ? !!existingShow[key] : !!body.show?.[key];
   }
   await TenantDB.update({ id: tenantId }, { footer });
@@ -2006,7 +2100,8 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
       const images = await getImagesForCode(req.tenant.id, code);
       for (const c of candidates) {
         if (images.length >= 3) { full++; continue; }
-        const filename = `${code}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
+        const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '_');
+        const filename = `${safeCode}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
         if (useR2) {
           const key = `exo/${req.tenant.id}/items/${filename}`;
           await s3Client.send(new S3PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: c.file.buffer, ContentType: c.file.mimetype }));
@@ -2480,7 +2575,7 @@ async function nextOrderNo(tenant, exhibitionId) {
   return `EX${next}`;
 }
 
-app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const { partyId, exhibitionId, items, remark, customFields } = req.body;
   if (!partyId || !Array.isArray(items) || !items.length)
     return res.status(400).json({ error: 'partyId and at least one item are required' });
@@ -2532,10 +2627,9 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
   // Same tenantBaseUrl() the create route uses — always resolves to the
   // company's own subdomain regardless of which host (bare domain, www,
   // or the tenant subdomain itself) the browser loaded this list from.
-  // Without this, the "View link" button built its href client-side from
-  // the current page's host, so an admin browsing on www.expoorders.com
-  // got a link missing the company subdomain while staff on the tenant
-  // subdomain got it right — same order, two different links.
+  // Without this, a link built client-side from location.host gave an
+  // admin browsing on the bare domain a different link than staff on the
+  // tenant subdomain got, for the exact same order.
   const baseUrl = tenantBaseUrl(req, req.tenant);
   res.json(orders.map(o => ({ ...o, shareUrl: `${baseUrl}/order/${o.shareToken}` })));
 });
@@ -2646,9 +2740,11 @@ app.get('/api/orders/public/:token', async (req, res) => {
   for (const key of FOOTER_TEXT_FIELDS) if (rawFooter.show?.[key] && rawFooter[key]) footer[key] = rawFooter[key];
   if (footer.whatsappNumber && rawFooter.whatsappMessage) footer.whatsappMessage = rawFooter.whatsappMessage;
   const showLogo = !!(rawFooter.show?.logo && tenant?.logoUrl);
+  const platformSettings = await PlatformSettingsDB.findOne({ id: 'singleton' });
   res.json({
     order: { ...order, columnsSnapshot: columns },
     company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
+    platformLogoUrl: platformSettings?.logoUrl || '',
     // Live like the column layout, not frozen at order-creation time — same
     // reasoning: this is a display method AuroCircle chose for the client,
     // not a record of what happened on that specific order.

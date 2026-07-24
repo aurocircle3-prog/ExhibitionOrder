@@ -194,7 +194,7 @@ function isNetworkFailure(e){
 
 // Warms the offline cache (items + parties) whenever we're online, so scan
 // lookups and buyer search still work if the connection drops mid-booth.
-let catalogItems = [], enableVariants = false, variantCategories = [];
+let catalogItems = [], enableVariants = false, variantCategories = [], allowDuplicateItems = true;
 async function refreshOfflineCache(){
   try {
     const exhibitionId = EXO.currentExhibition()?.id;
@@ -204,6 +204,8 @@ async function refreshOfflineCache(){
     catalogItems = items;
     enableVariants = !!me.tenant?.enableVariants;
     variantCategories = me.tenant?.variantCategories || [];
+    allowDuplicateItems = me.tenant?.allowDuplicateItems !== false;
+    localStorage.setItem('exo_tenant_logo', me.tenant?.logoUrl || '');
     orderFields = me.tenant?.orderFields || [];
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];
@@ -450,9 +452,16 @@ function renderSearchSuggestions(q){
   const box = document.getElementById('searchSuggestions');
   q = q.trim().toLowerCase();
   if (!q) { box.style.display = 'none'; return; }
-  const matches = catalogItems.filter(it =>
-    it.scannerCode?.toLowerCase().includes(q) || String(it.fields?.itemName || '').toLowerCase().includes(q)
-  ).slice(0, 8);
+  const cartItemIds = new Set(cart.map(c => c.itemId));
+  const matches = catalogItems.filter(it => {
+    const hasVariants = enableVariants && it.variantSelections && Object.values(it.variantSelections).some(v => v && v.length);
+    // Non-variant items only ever have one possible cart line, so "already
+    // in cart" is unambiguous — hide it entirely. Variant items can still
+    // have other untaken color/size combos, so they stay searchable; the
+    // picker itself (via addToCart) blocks re-adding an exact combo.
+    if (!allowDuplicateItems && !hasVariants && cartItemIds.has(it.id)) return false;
+    return it.scannerCode?.toLowerCase().includes(q) || String(it.fields?.itemName || '').toLowerCase().includes(q);
+  }).slice(0, 8);
   if (!matches.length) { box.style.display = 'none'; return; }
   box.innerHTML = matches.map(it => `
     <div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
@@ -581,21 +590,22 @@ function renderVariantPicker(){
 function confirmVariantPicks(){
   const [primaryCat, secondaryCat] = pendingCats;
   const extraCats = pendingCats.slice(2);
-  let anyAdded = false;
+  let anyAttempted = false, anyAdded = false;
   Object.keys(pendingPicks).forEach(primaryValue => {
     const qtyMap = pendingPicks[primaryValue];
     if (!qtyMap) return;
     Object.keys(qtyMap).forEach(secKey => {
       const qty = Number(qtyMap[secKey]) || 0;
       if (qty <= 0) return;
+      anyAttempted = true;
       const variantTags = { [primaryCat.key]: primaryValue };
       if (secondaryCat) variantTags[secondaryCat.key] = secKey;
       extraCats.forEach(cat => { variantTags[cat.key] = pendingExtraPicks[cat.key]; });
-      addToCart(pendingVariantItem, variantTags, qty);
-      anyAdded = true;
+      if (addToCart(pendingVariantItem, variantTags, qty)) anyAdded = true;
     });
   });
-  if (!anyAdded) { EXO.toast('Enter at least one quantity', 'error'); return; }
+  if (!anyAttempted) { EXO.toast('Enter at least one quantity', 'error'); return; }
+  if (!anyAdded) return; // everything entered was rejected as a duplicate — addToCart already said why
   closeVariantPicker();
 }
 function addToCart(item, variantTags, qty){
@@ -606,12 +616,19 @@ function addToCart(item, variantTags, qty){
   // separate lines, not one line to bump the quantity on.
   const tagsMatch = a => JSON.stringify(a || {}) === JSON.stringify(variantTags);
   const existing = cart.find(c => c.itemId === item.id && tagsMatch(c.variantTags));
-  if (existing) { existing.qty += qty; renderCart(); return; }
+  if (existing) {
+    if (!allowDuplicateItems) {
+      EXO.toast('Already in cart — adjust the quantity there instead of scanning again', 'error');
+      return false;
+    }
+    existing.qty += qty; renderCart(); return true;
+  }
   const extra = {};
   orderFields.forEach(f => { extra[f.key] = item.fields?.[f.key] ?? ''; });
   const tagLabel = Object.values(variantTags).filter(Boolean).join(' / ');
   cart.push({ lineId: 'l'+Date.now()+Math.random().toString(36).slice(2,6), itemId: item.id, label: item.fields?.itemName || item.fields?.productName || item.scannerCode, code: item.scannerCode, qty, extra, comment: '', variantTags, tagLabel });
   renderCart();
+  return true;
 }
 function changeQty(lineId, delta){
   const line = cart.find(c => c.lineId === lineId);
@@ -716,7 +733,10 @@ async function cameraScan(){
   // A visible framing box — mainly to guide the person holding the phone to
   // get the barcode centered, steady, and reasonably filling the frame.
   const guide = document.createElement('div');
-  guide.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80%;max-width:340px;height:120px;border:3px solid #f0b429;border-radius:12px;pointer-events:none';
+  guide.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:92%;max-width:480px;height:220px;border:3px solid #f0b429;border-radius:12px;pointer-events:none';
+  const hint = document.createElement('p');
+  hint.textContent = 'Fits anywhere in view — this box is just a guide';
+  hint.style.cssText = 'position:absolute;bottom:64px;left:0;right:0;text-align:center;color:#fff;font-size:13px;text-shadow:0 1px 3px rgba(0,0,0,.6);pointer-events:none';
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '✕ Close';
   closeBtn.className = 'ghost';
@@ -725,7 +745,7 @@ async function cameraScan(){
   torchBtn.textContent = '💡 Light';
   torchBtn.className = 'ghost';
   torchBtn.style.cssText = 'position:absolute;top:16px;left:16px;z-index:1000;display:none';
-  overlay.appendChild(video); overlay.appendChild(guide); overlay.appendChild(closeBtn); overlay.appendChild(torchBtn);
+  overlay.appendChild(video); overlay.appendChild(guide); overlay.appendChild(hint); overlay.appendChild(closeBtn); overlay.appendChild(torchBtn);
   document.body.appendChild(overlay);
 
   let scanTimer = null, stream = null;

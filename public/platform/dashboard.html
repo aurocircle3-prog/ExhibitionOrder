@@ -14,6 +14,19 @@
     <button class="tab-btn" data-ttab="companies" onclick="switchTopTab('companies')">Companies</button>
     <button class="tab-btn" data-ttab="create" onclick="switchTopTab('create')">Create Company</button>
     <button class="tab-btn" data-ttab="exhibitions" onclick="switchTopTab('exhibitions')">Exhibitions</button>
+    <button class="tab-btn" data-ttab="platformsettings" onclick="switchTopTab('platformsettings')">Platform Settings</button>
+  </div>
+
+  <div class="tab-panel" id="ttab-platformsettings">
+    <div class="card">
+      <h3 style="margin-top:0">ExpoOrders logo</h3>
+      <p class="muted" style="margin-top:-6px">Shown on the "Powered by" credit at the bottom of every order link, and used as the fallback brand mark anywhere a company hasn't uploaded their own logo.</p>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+        <img id="platformLogoPreview" style="height:44px;max-width:180px;object-fit:contain;display:none;border-radius:6px;border:1px solid var(--line)">
+        <input type="file" id="platformLogoFile" accept="image/*" onchange="uploadPlatformLogo()">
+      </div>
+      <p class="muted" id="platformLogoErr" style="display:none;color:var(--danger)"></p>
+    </div>
   </div>
 
   <div class="tab-panel" id="ttab-companies">
@@ -151,6 +164,12 @@
         <div><label>Max staff <span class="muted">(blank = unlimited)</span> — currently <span id="staffUsage"></span></label><input id="maxStaffInput" type="number" min="0"></div>
         <div><label>&nbsp;</label><button class="primary" onclick="EXO.busy(this, saveMaxStaff)">Save limit</button></div>
       </div>
+
+      <h4>Take Order behavior</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="allowDuplicateItemsToggle" style="width:auto" onchange="saveAllowDuplicateItems(this.checked)"> <span>Allow scanning/searching the same item more than once per order</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">On (default): scanning an item already in the cart just bumps its quantity. Off: staff get a message instead, and the item drops out of search once it's in the cart — for companies that want to catch accidental double-scans rather than have them silently inflate a quantity.</p>
 
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
@@ -341,12 +360,9 @@ function logout(){ localStorage.removeItem('exo_platform_token'); localStorage.r
 
 let tenants = [];
 async function load(){
-  try {
-    tenants = await platformFetch('/tenants');
-    renderList();
-    renderCloneOptions();
-  }
+  try { tenants = await platformFetch('/tenants'); renderList(); renderCloneOptions(); }
   catch (e) { EXO.toast(e.message, 'error'); }
+  loadPlatformSettings();
 }
 function renderCloneOptions(){
   const sel = document.getElementById('newCloneFrom');
@@ -354,7 +370,30 @@ function renderCloneOptions(){
   const current = sel.value;
   sel.innerHTML = '<option value="">— Start blank —</option>' +
     tenants.slice().sort((a, b) => a.name.localeCompare(b.name)).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
-  sel.value = current; // keep selection across an unrelated reload, if it still exists
+  sel.value = current;
+}
+async function loadPlatformSettings(){
+  try {
+    const res = await fetch('/api/platform-info').then(r => r.json());
+    if (res.logoUrl) {
+      const img = document.getElementById('platformLogoPreview');
+      img.src = res.logoUrl; img.style.display = 'inline-block';
+    }
+  } catch (e) { /* non-critical — logo section just stays empty */ }
+}
+async function uploadPlatformLogo(){
+  const err = document.getElementById('platformLogoErr'); err.style.display = 'none';
+  const file = document.getElementById('platformLogoFile').files[0];
+  if (!file) return;
+  try {
+    const fd = new FormData(); fd.append('logo', file);
+    const res = await fetch('/api/platform/settings/logo', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    const img = document.getElementById('platformLogoPreview');
+    img.src = data.logoUrl; img.style.display = 'inline-block';
+    EXO.toast('Logo uploaded');
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 
 let platformExhibitions = [], currentExhibitionDetailId = null;
@@ -539,6 +578,15 @@ async function saveRowGrouping(){
     EXO.toast('Row grouping saved.');
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
+async function saveAllowDuplicateItems(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/allow-duplicate-items`, { method: 'PUT', body: JSON.stringify({ allowDuplicateItems: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('allowDuplicateItemsToggle').checked = !checked; // revert the checkbox if the save actually failed
+    EXO.toast(e.message, 'error');
+  }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -599,6 +647,7 @@ async function openDetail(id){
   document.getElementById('natureOfBusinessInput').value = tenant.natureOfBusiness || '';
   document.getElementById('activeToggle').checked = tenant.active !== false;
   document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
+  document.getElementById('allowDuplicateItemsToggle').checked = tenant.allowDuplicateItems !== false;
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
