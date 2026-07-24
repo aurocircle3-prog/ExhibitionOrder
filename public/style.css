@@ -17,6 +17,8 @@ a{color:var(--accent);text-decoration:none}
 
 .wrap{max-width:1100px;margin:0 auto;padding:24px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
+.stat-card{transition:transform .12s,box-shadow .12s,border-color .12s;cursor:pointer}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.08);border-color:var(--accent)}
 .grid{display:grid;gap:16px}
 .grid.cols-2{grid-template-columns:1fr 1fr}
 .grid.cols-3{grid-template-columns:repeat(3,1fr)}

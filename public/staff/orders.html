@@ -10,8 +10,8 @@
       <p class="muted" id="filterNote" style="display:none;margin:0"></p>
     </div>
     <div class="table-scroll"><table>
-      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      <thead><tr><th>Order #</th><th>Buyer</th><th id="exhibitionHeader" style="display:none">Exhibition</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
     </table></div>
   </div>
 </div>
@@ -20,28 +20,49 @@
 const user = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
-// Supports a ?status=pending deep link — the Dashboard's "pending orders"
-// list sends admins here pre-filtered, so they land straight on exactly
-// what needs attention instead of scrolling through everything.
-const statusFilter = new URLSearchParams(location.search).get('status') || '';
+
+// A ?status= and/or ?date=today deep link (e.g. from a Dashboard stat
+// card) is treated as an explicit cross-exhibition request — it shows
+// matching orders from EVERY exhibition, with an Exhibition column added,
+// rather than being scoped to whatever single exhibition happens to be
+// "current" in this browser. Without this, clicking a Dashboard stat card
+// would only ever show orders from one arbitrary exhibition, silently
+// hiding matches from every other one.
+const params = new URLSearchParams(location.search);
+const statusFilter = params.get('status') || '';
+const dateFilter = params.get('date') || '';
+const isFiltered = !!(statusFilter || dateFilter);
 let tenantStatuses = ['pending', 'confirmed', 'cancelled']; // overwritten by /me once loaded; this is just the pre-load default
-if (statusFilter) {
+
+if (isFiltered) {
+  const bits = [];
+  if (statusFilter) bits.push(`status "${statusFilter}"`);
+  if (dateFilter === 'today') bits.push('placed today');
   const note = document.getElementById('filterNote');
-  note.textContent = `Showing only "${statusFilter}" orders — `;
+  note.innerHTML = `Showing ${bits.join(', ')}, across every exhibition — <a href="/staff/orders.html">Clear filter</a>`;
   note.style.display = 'block';
-  note.innerHTML += `<a href="/staff/orders.html">Show all</a>`;
+  document.getElementById('exhibitionHeader').style.display = '';
 }
+
+function buildQuery(params){
+  const parts = Object.entries(params).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
 async function load(){
-  const exhibitionId = EXO.currentExhibition()?.id;
-  const [me, orders] = await Promise.all([
+  const exhibitionId = isFiltered ? '' : EXO.currentExhibition()?.id;
+  const [me, orders, exhibitions] = await Promise.all([
     EXO.apiFetch('/me'),
-    EXO.apiFetch('/orders' + buildQuery({ exhibitionId, status: statusFilter })),
+    EXO.apiFetch('/orders' + buildQuery({ exhibitionId, status: statusFilter, date: dateFilter })),
+    isFiltered ? EXO.apiFetch('/exhibitions') : Promise.resolve([]),
   ]);
   tenantStatuses = (me.tenant?.orderStatuses && me.tenant.orderStatuses.length) ? me.tenant.orderStatuses : tenantStatuses;
+  const exhibitionById = {}; exhibitions.forEach(e => { exhibitionById[e.id] = e; });
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
       <td>${o.orderNo}</td>
       <td>${o.partyName}<br><span class="muted">${o.partyPhone}</span></td>
+      ${isFiltered ? `<td>${exhibitionById[o.exhibitionId]?.name || '<span class="muted">—</span>'}</td>` : ''}
       <td>${o.staffName}</td>
       <td>${o.items.length}</td>
       <td>
@@ -53,11 +74,7 @@ async function load(){
       <td>
         ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="${o.shareUrl}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="deleteOrder('${o.id}','${o.orderNo}');return false;" style="color:var(--danger)">Delete</a>` : ''}
       </td>
-    </tr>`).join('') || '<tr><td colspan="6" class="muted">No orders' + (statusFilter ? ` with status "${statusFilter}"` : '') + ' — go take one!</td></tr>';
-}
-function buildQuery(params){
-  const parts = Object.entries(params).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
-  return parts.length ? '?' + parts.join('&') : '';
+    </tr>`).join('') || `<tr><td colspan="${isFiltered ? 7 : 6}" class="muted">No matching orders — go take one!</td></tr>`;
 }
 async function deleteOrder(id, orderNo){
   if (!confirm(`Delete order ${orderNo}? This removes it from every list and report, and the buyer's link will stop working. This cannot be undone.`)) return;
@@ -74,7 +91,10 @@ async function changeStatus(id, select){
   catch(e) { EXO.toast(e.message, 'error'); load(); }
 }
 (async function(){
-  if (!(await EXO.ensureExhibitionSelected())) return;
+  // A filtered deep-link deliberately spans every exhibition, so it
+  // doesn't need one "current" exhibition selected first — only the
+  // normal unscoped view does.
+  if (!isFiltered && !(await EXO.ensureExhibitionSelected())) return;
   document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders'); // re-render now the switcher has something to show
   load();
 })();

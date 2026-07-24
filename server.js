@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.63.0';
-const BUILD_TIME   = '2026-07-24T10:27:27Z';
+const APP_VERSION  = '1.64.0';
+const BUILD_TIME   = '2026-07-24T10:37:23Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -2787,7 +2787,16 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
     const party = await PartyDB.findOne({ tenantId: req.tenant.id, phone: user.phone });
     q.partyId = party ? party.id : '__none__';
   }
-  const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
+  let orders = (await OrderDB.find(q)).filter(o => !o.deleted);
+  // Applied after the DB fetch, same as the !o.deleted filter above — a
+  // simple string-prefix match works identically whether running on
+  // Mongoose or the local JSON fallback, unlike trying to express "today"
+  // as part of the DB query object itself. Matches the same UTC-day
+  // convention /api/dashboard/stats already uses for "orders today".
+  if (req.query.date === 'today') {
+    const today = new Date().toISOString().slice(0, 10);
+    orders = orders.filter(o => (o.createdAt || '').slice(0, 10) === today);
+  }
   // Same tenantBaseUrl() the create route uses — always resolves to the
   // company's own subdomain regardless of which host (bare domain, www,
   // or the tenant subdomain itself) the browser loaded this list from.
