@@ -37,8 +37,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.55.0';
-const BUILD_TIME   = '2026-07-24T06:21:32Z';
+const APP_VERSION  = '1.56.0';
+const BUILD_TIME   = '2026-07-24T07:22:57Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1306,6 +1306,28 @@ app.post('/api/platform/settings/logo', platformAuth, (req, res) => {
 app.get('/api/platform-info', async (req, res) => {
   const settings = await PlatformSettingsDB.findOne({ id: 'singleton' });
   res.json({ logoUrl: settings?.logoUrl || '' });
+});
+// Platform-admin-only visibility into whether order-notification emails
+// are actually wired up. This is a platform-wide switch (one BREVO_API_KEY
+// for the whole app), not per-company — so this deliberately isn't exposed
+// anywhere in a company admin's own Settings.
+app.get('/api/platform/email-status', platformAuth, (req, res) => {
+  res.json({ enabled: useEmail, senderEmail: useEmail ? BREVO_SENDER_EMAIL : null, senderName: useEmail ? BREVO_SENDER_NAME : null });
+});
+// Sends a real test email to the platform admin's own address, so "is this
+// actually working" can be answered by checking an inbox instead of
+// digging through Render logs or Brevo's dashboard.
+app.post('/api/platform/email-test', platformAuth, async (req, res) => {
+  if (!useEmail) return res.status(400).json({ error: 'BREVO_API_KEY is not set — nothing to test yet.' });
+  const result = await sendEmail({
+    to: req.platformAdmin.email, toName: req.platformAdmin.name,
+    subject: 'Expo Orders — test email',
+    html: `<p>This is a test email from Expo Orders' platform admin dashboard.</p>
+      <p>Sent from <b>${escHtml(BREVO_SENDER_NAME)}</b> &lt;${escHtml(BREVO_SENDER_EMAIL)}&gt; at ${new Date().toLocaleString()}.</p>
+      <p>If you're reading this, order-notification emails are configured correctly.</p>`,
+  });
+  if (!result.ok) return res.status(502).json({ error: 'Brevo rejected the send — check Render logs for the exact error, or Brevo\u2019s own Statistics > Email > Logs.' });
+  res.json({ ok: true, sentTo: req.platformAdmin.email });
 });
 // Lets the platform admin preview exactly what a company's current Item
 // Master field structure produces as a downloadable template — useful right

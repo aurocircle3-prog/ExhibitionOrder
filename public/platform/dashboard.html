@@ -27,6 +27,14 @@
       </div>
       <p class="muted" id="platformLogoErr" style="display:none;color:var(--danger)"></p>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Order notification emails</h3>
+      <p class="muted" style="margin-top:-6px">Platform-wide switch — one Brevo account for the whole app, not per-company. Set from <code>BREVO_API_KEY</code> on Render.</p>
+      <p id="emailStatusLine">Checking…</p>
+      <button class="ghost" id="emailTestBtn" onclick="EXO.busy(this, sendTestEmail)" disabled>Send test email to myself</button>
+      <p class="muted" id="emailTestResult" style="margin-top:8px"></p>
+    </div>
   </div>
 
   <div class="tab-panel" id="ttab-companies">
@@ -380,6 +388,30 @@ async function loadPlatformSettings(){
       img.src = res.logoUrl; img.style.display = 'inline-block';
     }
   } catch (e) { /* non-critical — logo section just stays empty */ }
+  try {
+    const res = await platformFetch('/email-status');
+    const line = document.getElementById('emailStatusLine');
+    const btn = document.getElementById('emailTestBtn');
+    if (res.enabled) {
+      line.innerHTML = `🟢 Active — sending as <b>${res.senderName}</b> &lt;${res.senderEmail}&gt;`;
+      btn.disabled = false;
+    } else {
+      line.innerHTML = `⚪ Not configured — set <code>BREVO_API_KEY</code> on Render to turn this on.`;
+      btn.disabled = true;
+    }
+  } catch (e) { document.getElementById('emailStatusLine').textContent = 'Could not check status.'; }
+}
+async function sendTestEmail(){
+  const result = document.getElementById('emailTestResult');
+  result.textContent = 'Sending…'; result.style.color = '';
+  try {
+    const res = await platformFetch('/email-test', { method: 'POST' });
+    result.textContent = `✅ Sent to ${res.sentTo} — check your inbox (and spam folder).`;
+    result.style.color = 'var(--ok)';
+  } catch (e) {
+    result.textContent = `❌ ${e.message}`;
+    result.style.color = 'var(--danger)';
+  }
 }
 async function uploadPlatformLogo(){
   const err = document.getElementById('platformLogoErr'); err.style.display = 'none';
