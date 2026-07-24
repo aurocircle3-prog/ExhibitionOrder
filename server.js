@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.61.0';
-const BUILD_TIME   = '2026-07-24T10:02:22Z';
+const APP_VERSION  = '1.62.0';
+const BUILD_TIME   = '2026-07-24T10:14:29Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3120,19 +3120,55 @@ async function computeReport(tenant, reportDef, exhibitionId) {
   return rows;
 }
 
+// When a tenant displays multi-piece sets as one row on the buyer-facing
+// link (orderRowGrouping: 'itemName' — e.g. a necklace + earrings sold and
+// scanned as two separate barcodes but named identically so they look like
+// one product to the buyer), reports should count them as one set too, not
+// as two separate Item Codes with duplicate-looking rows. This mirrors
+// exactly the buyer-facing grouping key (label + variantTags) and exactly
+// its qty rule: a set's quantity comes from one of its pieces, not summed
+// across them — two scans of "one set" is still 1 set, the same way the
+// order-view page already treats it. Only kicks in when the tenant has
+// actually turned row-grouping on; every other tenant's reports are
+// unaffected, still keyed by the real Item Code as before.
+function consolidateSetLines(items) {
+  const groups = {}, order = [];
+  for (const item of items || []) {
+    const key = (item.label || '') + '::' + JSON.stringify(item.variantTags || {});
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(item);
+  }
+  return order.map(key => {
+    const group = groups[key];
+    if (group.length === 1) return group[0];
+    return {
+      itemId: group.map(g => g.itemId).join(','), label: group[0].label,
+      scannerCode: [...new Set(group.map(g => g.scannerCode).filter(Boolean))].join(', '),
+      images: [...new Set(group.flatMap(g => g.images || []))],
+      qty: group[0].qty,
+    };
+  });
+}
 async function getReportsForTenant(tenantId, exhibitionId) {
+  const tenant = await TenantDB.findOne({ id: tenantId });
   const q = { tenantId };
   if (exhibitionId) q.exhibitionId = exhibitionId;
   const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
+  const grouped = tenant?.orderRowGrouping === 'itemName';
   const byParty = {}, byItem = {}, byStaff = {};
   for (const o of orders) {
     byParty[o.partyId] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
     byParty[o.partyId].orderCount += 1;
     byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0 };
     byStaff[o.staffId].orderCount += 1;
-    for (const line of o.items || []) {
-      byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: line.images || [], qty: 0 };
-      byItem[line.itemId].qty += line.qty;
+    const lines = grouped ? consolidateSetLines(o.items) : (o.items || []);
+    for (const line of lines) {
+      // Grouped mode keys by name+variant (the set's identity) since its
+      // component pieces have different Item Codes; ungrouped mode keeps
+      // keying by the real Item Code, unchanged from before.
+      const key = grouped ? (line.label + '::' + JSON.stringify(line.variantTags || {})) : line.itemId;
+      byItem[key] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: line.images || [], qty: 0 };
+      byItem[key].qty += line.qty;
     }
   }
   return {
