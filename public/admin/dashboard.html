@@ -17,6 +17,16 @@
 
   <div class="tab-panel" id="dashtab-overview">
     <div class="grid cols-2" id="statRow" style="margin-bottom:18px"></div>
+    <div class="card" id="pendingOrdersCard" style="display:none;margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">Pending orders <span class="muted" id="pendingOrdersCount"></span></h3>
+        <span class="muted" style="font-size:12px">Click one to review and confirm</span>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Order #</th><th>Buyer</th><th>Exhibition</th><th>Items</th></tr></thead>
+        <tbody id="pendingOrdersRows"></tbody>
+      </table></div>
+    </div>
     <h3>Current exhibitions</h3>
     <div class="grid cols-2" id="currentExhibitions"></div>
   </div>
@@ -77,13 +87,15 @@ function exhibitionCard(e){
 }
 
 async function load(){
-  const [exhibitions, stats] = await Promise.all([
+  const [exhibitions, stats, pendingOrders] = await Promise.all([
     EXO.apiFetch('/exhibitions'),
     EXO.apiFetch('/dashboard/stats'),
+    EXO.apiFetch('/orders?status=pending'),
   ]);
   const current = exhibitions.filter(e => e.status === 'current');
   const completed = exhibitions.filter(e => e.status === 'completed');
   const ordersInCurrent = current.reduce((sum, e) => sum + (e.orderCount || 0), 0);
+  const exhibitionById = {}; exhibitions.forEach(e => { exhibitionById[e.id] = e; });
 
   document.getElementById('noExhibitionsCard').style.display = exhibitions.length ? 'none' : 'block';
   document.getElementById('dashTabs').style.display = exhibitions.length ? 'flex' : 'none';
@@ -95,6 +107,33 @@ async function load(){
 
   document.getElementById('bestSellersExhibition').innerHTML = `<option value="">All exhibitions</option>` +
     exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('');
+
+  // Oldest-first — the ones that have been waiting longest are the most
+  // urgent to clear, so they should be the first thing an admin sees here.
+  const sortedPending = pendingOrders.slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  document.getElementById('pendingOrdersCard').style.display = sortedPending.length ? 'block' : 'none';
+  document.getElementById('pendingOrdersCount').textContent = `— ${sortedPending.length}`;
+  document.getElementById('pendingOrdersRows').innerHTML = sortedPending.slice(0, 10).map(o => `
+    <tr style="cursor:pointer" onclick="reviewPendingOrder('${o.exhibitionId || ''}','${(exhibitionById[o.exhibitionId]?.name || '').replace(/'/g,"\\'")}')">
+      <td>${o.orderNo}</td>
+      <td>${o.partyName}</td>
+      <td>${exhibitionById[o.exhibitionId]?.name || '<span class="muted">—</span>'}</td>
+      <td>${o.items.length}</td>
+    </tr>`).join('');
+  if (sortedPending.length > 10) {
+    document.getElementById('pendingOrdersRows').innerHTML += `<tr><td colspan="4" class="muted">+${sortedPending.length - 10} more — open Orders to see the rest</td></tr>`;
+  }
+}
+// Clicking a pending order enters that order's exhibition (same as the
+// "Enter" button on an exhibition card) so ensureExhibitionSelected()
+// on the Orders page doesn't bounce back here, then deep-links straight
+// into the pending filter — landing exactly on what needs a decision.
+function reviewPendingOrder(exhibitionId, exhibitionName){
+  if (exhibitionId) {
+    localStorage.setItem('exo_current_exhibition_' + tenantSlug, exhibitionId);
+    localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, exhibitionName);
+  }
+  location.href = '/staff/orders.html?status=pending';
 }
 async function loadBestSellers(){
   const exhibitionId = document.getElementById('bestSellersExhibition').value;

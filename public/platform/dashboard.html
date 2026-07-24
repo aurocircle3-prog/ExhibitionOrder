@@ -201,6 +201,13 @@
       </label>
       <p class="muted" style="margin-top:-4px">Off by default for every company — email also needs Brevo configured platform-wide (check Platform Settings) for this to actually send anything even when turned on here.</p>
 
+      <h4>Order statuses</h4>
+      <p class="muted" style="margin-top:-6px">Comma-separated, in dropdown order. <b>pending</b> always stays first no matter what's typed here — new orders start there and the edit-lock logic depends on that exact name, so it can't be removed or renamed.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="orderStatusesInput" style="flex:1;min-width:220px" placeholder="pending, confirmed, dispatched, delivered, cancelled">
+        <button class="primary small" onclick="EXO.busy(this, saveOrderStatuses)">Save</button>
+      </div>
+
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
@@ -650,6 +657,14 @@ async function saveEmailNotifications(checked){
     EXO.toast(e.message, 'error');
   }
 }
+async function saveOrderStatuses(){
+  const orderStatuses = document.getElementById('orderStatusesInput').value.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    const res = await platformFetch(`/tenants/${lastTenantId}/order-statuses`, { method: 'PUT', body: JSON.stringify({ orderStatuses }) });
+    document.getElementById('orderStatusesInput').value = res.orderStatuses.join(', ');
+    EXO.toast('Order statuses saved.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -712,6 +727,7 @@ async function openDetail(id){
   document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
   document.getElementById('allowDuplicateItemsToggle').checked = tenant.allowDuplicateItems !== false;
   document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
+  document.getElementById('orderStatusesInput').value = (tenant.orderStatuses && tenant.orderStatuses.length ? tenant.orderStatuses : ['pending', 'confirmed', 'cancelled']).join(', ');
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>

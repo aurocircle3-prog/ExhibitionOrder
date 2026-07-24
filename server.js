@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.62.0';
-const BUILD_TIME   = '2026-07-24T10:14:29Z';
+const APP_VERSION  = '1.63.0';
+const BUILD_TIME   = '2026-07-24T10:27:27Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -223,6 +223,17 @@ const tenantSchema = new mongoose.Schema({
   // platform admin explicitly turns it off for a company that wants
   // stricter control (no accidental double-scan silently inflating qty).
   allowDuplicateItems: { type: Boolean, default: true },
+  // Which order statuses this company can actually use — platform-admin
+  // defined, not client-configurable (same "AuroCircle decides the
+  // workflow" pattern as orderRowGrouping above). 'pending' is always
+  // present regardless of what's saved here — order creation and the
+  // edit-lock logic are both hardcoded to that exact status name, so it
+  // can't be removed even by mistake. Everything else in the list (e.g.
+  // adding 'dispatched', 'delivered') is fully up to the platform admin
+  // per company. Defaults to the original fixed 3 so every existing
+  // tenant keeps working identically until a platform admin deliberately
+  // customizes this.
+  orderStatuses: { type: [String], default: ['pending', 'confirmed', 'cancelled'] },
   // Order-notification emails are opt-in PER COMPANY, on top of the
   // platform-wide BREVO_API_KEY switch — both have to be true for a given
   // company's orders to actually send email. Default false: turning this
@@ -987,6 +998,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     tenant.orderShowImages = template.orderShowImages !== false;
     tenant.orderRowGrouping = template.orderRowGrouping || 'none';
     tenant.allowDuplicateItems = template.allowDuplicateItems !== false;
+    tenant.orderStatuses = (template.orderStatuses && template.orderStatuses.length) ? template.orderStatuses : ['pending', 'confirmed', 'cancelled'];
     tenant.orderCustomFields = template.orderCustomFields || [];
     tenant.orderViewColumns = template.orderViewColumns || [];
     tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
@@ -1062,6 +1074,19 @@ app.put('/api/platform/tenants/:id/email-notifications', platformAuth, async (re
   const value = !!req.body.emailNotificationsEnabled;
   await TenantDB.update({ id: tenant.id }, { emailNotificationsEnabled: value });
   res.json({ ok: true, emailNotificationsEnabled: value });
+});
+app.put('/api/platform/tenants/:id/order-statuses', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const raw = Array.isArray(req.body.orderStatuses) ? req.body.orderStatuses : [];
+  const cleaned = raw.map(s => String(s || '').trim().toLowerCase()).filter(Boolean);
+  // 'pending' can't be removed — order creation and the edit-lock logic
+  // are both hardcoded to that exact status name. Always first in the
+  // list regardless of where (or whether) it was submitted.
+  const statuses = ['pending', ...cleaned.filter(s => s !== 'pending')];
+  const deduped = [...new Set(statuses)].slice(0, 20); // sane upper bound, not a real limit anyone should hit
+  await TenantDB.update({ id: tenant.id }, { orderStatuses: deduped });
+  res.json({ ok: true, orderStatuses: deduped });
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -2811,7 +2836,8 @@ app.put('/api/orders/:id', resolveTenant, auth, requireRole('admin', 'staff'), a
 
 app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const { status } = req.body;
-  if (!['pending', 'confirmed', 'cancelled'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  const allowed = (req.tenant.orderStatuses && req.tenant.orderStatuses.length) ? req.tenant.orderStatuses : ['pending', 'confirmed', 'cancelled'];
+  if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
   const before = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { status });
   logAudit(req, 'order.status_change', 'order', req.params.id, { from: before?.status, to: status });
