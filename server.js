@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.65.0';
-const BUILD_TIME   = '2026-07-24T12:23:27Z';
+const APP_VERSION  = '1.66.0';
+const BUILD_TIME   = '2026-07-24T12:37:19Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1360,11 +1360,6 @@ app.put('/api/platform/tenants/:id/order-fields', platformAuth, async (req, res)
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const result = await saveOrderFieldsForTenant(tenant.id, req.body.orderFields, req.body.showImages);
   res.json({ ok: true, ...result });
-});
-app.get('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
-  const tenant = await TenantDB.findOne({ id: req.params.id });
-  if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  res.json(await getReportsForTenant(tenant.id));
 });
 app.put('/api/platform/tenants/:id/order-custom-fields', platformAuth, async (req, res) => {
   try { res.json({ ok: true, fields: await saveOrderCustomFieldsForTenant(req.params.id, req.body.fields) }); }
