@@ -136,7 +136,6 @@
       <button class="tab-btn" data-dtab="users" onclick="switchDetailTab('users')">Users</button>
       <button class="tab-btn" data-dtab="access" onclick="switchDetailTab('access')">Access &amp; Limits</button>
       <button class="tab-btn" data-dtab="config" onclick="switchDetailTab('config')">Configuration</button>
-      <button class="tab-btn" data-dtab="orders" onclick="switchDetailTab('orders')">Recent Orders</button>
       <button class="tab-btn" data-dtab="reports" onclick="switchDetailTab('reports')">Reports</button>
     </div>
 
@@ -321,13 +320,6 @@
         <div class="error" id="variantsErr"></div>
         <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveVariantsConfig)">Save variant tags</button>
       </div>
-    </div>
-
-    <div class="tab-panel" id="dtab-orders">
-      <div class="table-scroll"><table>
-        <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Status</th><th>Date</th></tr></thead>
-        <tbody id="detailOrders"></tbody>
-      </table></div>
     </div>
 
     <div class="tab-panel" id="dtab-reports">
@@ -717,7 +709,7 @@ async function openDetail(id){
   catch (e) { EXO.toast(e.message, 'error'); return; }
   document.getElementById('topTabs').style.display = 'none';
   document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.remove('active'));
-  const { tenant, users, fieldDefs, counts, recentOrders } = detail;
+  const { tenant, users, fieldDefs, counts } = detail;
 
   document.getElementById('detailTitle').textContent = tenant.name;
   document.getElementById('detailSlug').textContent = `/${tenant.slug} — plan: ${tenant.plan} — created ${new Date(tenant.createdAt).toLocaleString()} — ${counts.itemCount} items, ${counts.orderCount} orders, ${counts.partyCount} buyers, ${counts.exhibitionCount} exhibitions`;
@@ -764,13 +756,6 @@ async function openDetail(id){
   renderDetailColumns();
   loadDetailFooter(tenant);
   loadVariantsConfig(tenant);
-
-  document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
-    <tr>
-      <td>${o.orderNo}</td><td>${o.partyName}</td><td>${o.staffName}</td>
-      <td><span class="badge ${o.status}">${o.status}</span></td>
-      <td>${new Date(o.createdAt).toLocaleDateString()}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
 
   platformFetch('/tenants/' + id + '/reports').then(({ byParty, byItem, byStaff }) => {
     document.getElementById('reportPartyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
