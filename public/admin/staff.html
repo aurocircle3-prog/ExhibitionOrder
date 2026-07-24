@@ -11,6 +11,15 @@
     <button class="ghost" style="margin-top:10px" onclick="copyResetLink()">Copy link</button>
     <button class="ghost" style="margin-top:10px" onclick="document.getElementById('resetLinkCard').style.display='none'">Close</button>
   </div>
+  <div class="card" id="activityCard" style="display:none">
+    <h3 style="margin-top:0">Login activity — <span id="activityName"></span></h3>
+    <p class="muted" id="activitySummary"></p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>When</th><th>IP address</th></tr></thead>
+      <tbody id="activityRows"></tbody>
+    </table></div>
+    <button class="ghost" style="margin-top:10px" onclick="document.getElementById('activityCard').style.display='none'">Close</button>
+  </div>
   <div class="card">
     <h3 style="margin-top:0">Staff accounts <span class="muted" id="usage"></span></h3>
     <p class="muted">Created internally by the admin — staff cannot self-register.</p>
@@ -79,6 +88,7 @@ async function load(){
       <td>${s.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
         <button class="ghost small" onclick="sendResetLink('${s.id}','${s.name.replace(/'/g,"\\'")}')">Send reset link</button>
+        <button class="ghost small" onclick="showActivity('${s.id}','${s.name.replace(/'/g,"\\'")}',false)">Login activity</button>
         <button class="ghost small" onclick="toggle('${s.id}', ${!s.active})">${s.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="remove('${s.id}')">Delete</button>
       </td>
@@ -89,6 +99,7 @@ async function load(){
       <td>${c.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
         <button class="ghost small" onclick="sendClientResetLink('${c.id}','${c.name.replace(/'/g,"\\'")}')">Send reset link</button>
+        <button class="ghost small" onclick="showActivity('${c.id}','${c.name.replace(/'/g,"\\'")}',true)">Login activity</button>
         <button class="ghost small" onclick="toggleClient('${c.id}', ${!c.active})">${c.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="removeClient('${c.id}')">Delete</button>
       </td>
@@ -105,6 +116,17 @@ async function sendResetLink(id, name){
   try {
     const res = await EXO.apiFetch('/staff/'+id+'/reset-link', { method: 'POST' });
     showResetLink(res.resetLink, name);
+  } catch(e) { EXO.toast(e.message, 'error'); }
+}
+async function showActivity(id, name, isClient){
+  try {
+    const data = await EXO.apiFetch(`/${isClient ? 'clients' : 'staff'}/${id}/login-activity`);
+    document.getElementById('activityName').textContent = name;
+    const flag = data.distinctIps24h > 1 ? `⚠️ ${data.distinctIps24h} different IPs in the last 24h` : (data.distinctIps7d > 1 ? `${data.distinctIps7d} different IPs in the last 7 days` : 'Nothing unusual — one IP recently');
+    document.getElementById('activitySummary').textContent = flag;
+    document.getElementById('activityRows').innerHTML = data.recent.map(r => `<tr><td>${new Date(r.at).toLocaleString()}</td><td>${r.ip || '—'}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No logins recorded yet</td></tr>';
+    document.getElementById('activityCard').style.display = 'block';
+    document.getElementById('activityCard').scrollIntoView({ behavior: 'smooth' });
   } catch(e) { EXO.toast(e.message, 'error'); }
 }
 async function addStaff(){

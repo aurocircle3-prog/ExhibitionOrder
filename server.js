@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.58.0';
-const BUILD_TIME   = '2026-07-24T08:57:55Z';
+const APP_VERSION  = '1.59.0';
+const BUILD_TIME   = '2026-07-24T09:16:31Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -596,6 +596,28 @@ function logAudit(req, action, entityType, entityId, changes = null) {
   AuditLogDB.create(entry).catch(err => log.error({ err, action }, 'Failed to write audit log'));
 }
 
+// Visibility (not enforcement) into whether one login is being used from
+// several places at once — e.g. one staff account shared across 3 phones.
+// Nothing new is tracked for this: every login already writes an
+// 'auth.login' audit entry with IP, this just summarizes what's already
+// there. distinctIps24h/7d are the actionable numbers — more than 1 means
+// this exact login was used from more than one network in that window,
+// which for a single person on one device during a shift should be rare.
+// Not proof of sharing (mobile networks/VPNs can rotate IPs for one real
+// person), just a signal worth a human glance.
+async function getLoginActivity(tenantId, userId) {
+  const entries = (await AuditLogDB.find({ tenantId, actorId: userId, action: 'auth.login' }))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const now = Date.now();
+  const within = (hours) => entries.filter(e => now - new Date(e.createdAt).getTime() < hours * 60 * 60 * 1000);
+  const distinctIps = (list) => new Set(list.map(e => e.ip).filter(Boolean)).size;
+  return {
+    recent: entries.slice(0, 10).map(e => ({ ip: e.ip, at: e.createdAt })),
+    distinctIps24h: distinctIps(within(24)),
+    distinctIps7d: distinctIps(within(24 * 7)),
+  };
+}
+
 // Every new company starts with just these two built-in fields — admin adds
 // whatever else they need from the field builder. Both are permanent: Item
 // Code is always the scan/barcode value, Image Code always drives which
@@ -899,6 +921,11 @@ app.post('/api/platform/tenants/:tenantId/users/:userId/reset-link', platformAut
   AuditLogDB.create(entry).catch(err => log.error({ err }, 'Failed to write audit log'));
   log.info({ tenant: tenant.slug, targetUser: user.email, platformAdmin: req.platformAdmin.email }, 'Platform admin generated a password reset link');
   res.json({ ok: true, resetLink });
+});
+app.get('/api/platform/tenants/:tenantId/users/:userId/login-activity', platformAuth, async (req, res) => {
+  const user = await UserDB.findOne({ id: req.params.userId, tenantId: req.params.tenantId });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json(await getLoginActivity(req.params.tenantId, user.id));
 });
 
 // Companies are created here, not through a public form. The admin account
@@ -1489,6 +1516,11 @@ app.post('/api/staff/:id/reset-link', resolveTenant, auth, requireRole('admin'),
   logAudit(req, 'staff.password_reset_link_generated', 'user', staffUser.id);
   res.json({ ok: true, resetLink });
 });
+app.get('/api/staff/:id/login-activity', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const staffUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'staff' });
+  if (!staffUser) return res.status(404).json({ error: 'Staff member not found' });
+  res.json(await getLoginActivity(req.tenant.id, staffUser.id));
+});
 
 app.delete('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'staff' });
@@ -1537,6 +1569,11 @@ app.post('/api/clients/:id/reset-link', resolveTenant, auth, requireRole('admin'
   const resetLink = await createPasswordResetLink(clientUser, req.tenant, req);
   logAudit(req, 'client.password_reset_link_generated', 'user', clientUser.id);
   res.json({ ok: true, resetLink });
+});
+app.get('/api/clients/:id/login-activity', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const clientUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });
+  if (!clientUser) return res.status(404).json({ error: 'Buyer login not found' });
+  res.json(await getLoginActivity(req.tenant.id, clientUser.id));
 });
 app.delete('/api/clients/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });

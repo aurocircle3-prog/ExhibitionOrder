@@ -148,6 +148,15 @@
         <button class="ghost small" style="margin-top:8px" onclick="copyPlatformResetLink()">Copy link</button>
         <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('platformResetLinkCard').style.display='none'">Close</button>
       </div>
+      <div class="card" id="platformActivityCard" style="display:none">
+        <h4 style="margin-top:0">Login activity — <span id="platformActivityName"></span></h4>
+        <p class="muted" id="platformActivitySummary"></p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>When</th><th>IP address</th></tr></thead>
+          <tbody id="platformActivityRows"></tbody>
+        </table></div>
+        <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('platformActivityCard').style.display='none'">Close</button>
+      </div>
       <div class="table-scroll"><table>
         <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
         <tbody id="detailUsers"></tbody>
@@ -708,7 +717,7 @@ async function openDetail(id){
     <tr>
       <td>${u.name}</td><td>${u.role}</td><td>${u.loginId}</td><td>${u.phone || '—'}</td>
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
-      <td><button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Send reset link</button></td>
+      <td><button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Send reset link</button> <button class="ghost small" onclick="showPlatformActivity('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Login activity</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
 
   const staffCount = users.filter(u => u.role === 'staff' && u.active !== false).length;
@@ -1412,6 +1421,17 @@ async function sendUserResetLink(tenantId, userId, name){
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 function copyPlatformResetLink(){ document.getElementById('platformResetLinkBox').select(); document.execCommand('copy'); }
+async function showPlatformActivity(tenantId, userId, name){
+  try {
+    const data = await platformFetch(`/tenants/${tenantId}/users/${userId}/login-activity`);
+    document.getElementById('platformActivityName').textContent = name;
+    const flag = data.distinctIps24h > 1 ? `⚠️ ${data.distinctIps24h} different IPs in the last 24h` : (data.distinctIps7d > 1 ? `${data.distinctIps7d} different IPs in the last 7 days` : 'Nothing unusual — one IP recently');
+    document.getElementById('platformActivitySummary').textContent = flag;
+    document.getElementById('platformActivityRows').innerHTML = data.recent.map(r => `<tr><td>${new Date(r.at).toLocaleString()}</td><td>${r.ip || '—'}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No logins recorded yet</td></tr>';
+    document.getElementById('platformActivityCard').style.display = 'block';
+    document.getElementById('platformActivityCard').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
 
 switchTopTab('companies');
 load();
