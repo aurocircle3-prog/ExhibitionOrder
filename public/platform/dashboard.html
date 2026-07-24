@@ -30,7 +30,7 @@
 
     <div class="card">
       <h3 style="margin-top:0">Order notification emails</h3>
-      <p class="muted" style="margin-top:-6px">Platform-wide switch — one Brevo account for the whole app, not per-company. Set from <code>BREVO_API_KEY</code> on Render.</p>
+      <p class="muted" style="margin-top:-6px">This is the platform-wide switch (one Brevo account for the whole app, set from <code>BREVO_API_KEY</code> on Render). Even when this is active, each company also needs its own "Order notification emails" toggle turned on individually — open a company below → its detail page.</p>
       <p id="emailStatusLine">Checking…</p>
       <button class="ghost" id="emailTestBtn" onclick="EXO.busy(this, sendTestEmail)" disabled>Send test email to myself</button>
       <p class="muted" id="emailTestResult" style="margin-top:8px"></p>
@@ -178,6 +178,12 @@
         <input type="checkbox" id="allowDuplicateItemsToggle" style="width:auto" onchange="saveAllowDuplicateItems(this.checked)"> <span>Allow scanning/searching the same item more than once per order</span>
       </label>
       <p class="muted" style="margin-top:-4px">On (default): scanning an item already in the cart just bumps its quantity. Off: staff get a message instead, and the item drops out of search once it's in the cart — for companies that want to catch accidental double-scans rather than have them silently inflate a quantity.</p>
+
+      <h4>Order notification emails</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="emailNotificationsToggle" style="width:auto" onchange="saveEmailNotifications(this.checked)"> <span>Send order emails to this company's admin and to buyers who have an email on file</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default for every company — email also needs Brevo configured platform-wide (check Platform Settings) for this to actually send anything even when turned on here.</p>
 
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
@@ -619,6 +625,15 @@ async function saveAllowDuplicateItems(checked){
     EXO.toast(e.message, 'error');
   }
 }
+async function saveEmailNotifications(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/email-notifications`, { method: 'PUT', body: JSON.stringify({ emailNotificationsEnabled: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('emailNotificationsToggle').checked = !checked; // revert the checkbox if the save actually failed
+    EXO.toast(e.message, 'error');
+  }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -680,6 +695,7 @@ async function openDetail(id){
   document.getElementById('activeToggle').checked = tenant.active !== false;
   document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
   document.getElementById('allowDuplicateItemsToggle').checked = tenant.allowDuplicateItems !== false;
+  document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
