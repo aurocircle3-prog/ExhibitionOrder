@@ -4,27 +4,36 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
-  <div class="card" id="bestSellersCard" style="display:none">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Best selling items</h3>
-      <select id="bestSellersExhibition" onchange="loadBestSellers()" style="max-width:220px"></select>
-    </div>
-    <div id="bestSellersGrid" class="best-sellers-grid" style="margin-top:12px"></div>
-  </div>
-
   <div class="card" id="noExhibitionsCard" style="display:none">
     <h3 style="margin-top:0">No exhibitions yet</h3>
     <p class="muted">Exhibitions are set up centrally by ExpoOrders. Contact them to get your company added to one — once you are, it'll show up here.</p>
   </div>
 
-  <div id="currentSection" style="display:none">
+  <div class="tabs" id="dashTabs" style="display:none">
+    <button class="tab-btn" data-dashtab="overview" onclick="switchDashTab('overview')">Overview</button>
+    <button class="tab-btn" data-dashtab="completed" onclick="switchDashTab('completed')">Completed</button>
+    <button class="tab-btn" data-dashtab="bestsellers" onclick="switchDashTab('bestsellers')">Best Sellers</button>
+  </div>
+
+  <div class="tab-panel" id="dashtab-overview">
+    <div class="grid cols-2" id="statRow" style="margin-bottom:18px"></div>
     <h3>Current exhibitions</h3>
     <div class="grid cols-2" id="currentExhibitions"></div>
   </div>
 
-  <div id="completedSection" style="display:none">
-    <h3>Completed exhibitions</h3>
+  <div class="tab-panel" id="dashtab-completed">
+    <h3 style="margin-top:0">Completed exhibitions</h3>
     <div class="grid cols-2" id="completedExhibitions"></div>
+  </div>
+
+  <div class="tab-panel" id="dashtab-bestsellers">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">Best selling items</h3>
+        <select id="bestSellersExhibition" onchange="loadBestSellers()" style="max-width:220px"></select>
+      </div>
+      <div id="bestSellersGrid" class="best-sellers-grid" style="margin-top:12px"></div>
+    </div>
   </div>
 </div>
 
@@ -37,6 +46,16 @@
 const user = EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('dashboard');
 const tenantSlug = EXO.getTenantSlug();
+
+function switchDashTab(name){
+  document.querySelectorAll('#dashTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.dashtab === name));
+  document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'dashtab-' + name));
+  if (name === 'bestsellers') loadBestSellers();
+}
+
+function statCard(label, value){
+  return `<div class="card" style="text-align:center;padding:16px"><div class="muted" style="font-size:12px">${label}</div><div style="font-size:28px;font-weight:800;margin-top:4px">${value}</div></div>`;
+}
 
 function exhibitionCard(e){
   const dates = e.startDate ? `${e.startDate}${e.endDate ? ' – ' + e.endDate : ''}` : '';
@@ -58,21 +77,24 @@ function exhibitionCard(e){
 }
 
 async function load(){
-  const exhibitions = await EXO.apiFetch('/exhibitions');
+  const [exhibitions, stats] = await Promise.all([
+    EXO.apiFetch('/exhibitions'),
+    EXO.apiFetch('/dashboard/stats'),
+  ]);
   const current = exhibitions.filter(e => e.status === 'current');
   const completed = exhibitions.filter(e => e.status === 'completed');
+  const ordersInCurrent = current.reduce((sum, e) => sum + (e.orderCount || 0), 0);
 
   document.getElementById('noExhibitionsCard').style.display = exhibitions.length ? 'none' : 'block';
-  document.getElementById('currentSection').style.display = current.length ? 'block' : 'none';
-  document.getElementById('completedSection').style.display = completed.length ? 'block' : 'none';
+  document.getElementById('dashTabs').style.display = exhibitions.length ? 'flex' : 'none';
+  if (exhibitions.length && !document.querySelector('#dashTabs .tab-btn.active')) switchDashTab('overview');
 
+  document.getElementById('statRow').innerHTML = statCard('Orders today', stats.ordersToday) + statCard('Orders in ongoing exhibitions', ordersInCurrent);
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 
-  document.getElementById('bestSellersCard').style.display = exhibitions.length ? 'block' : 'none';
   document.getElementById('bestSellersExhibition').innerHTML = `<option value="">All exhibitions</option>` +
     exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('');
-  loadBestSellers();
 }
 async function loadBestSellers(){
   const exhibitionId = document.getElementById('bestSellersExhibition').value;

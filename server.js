@@ -54,8 +54,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.60.0';
-const BUILD_TIME   = '2026-07-24T09:50:45Z';
+const APP_VERSION  = '1.61.0';
+const BUILD_TIME   = '2026-07-24T10:02:22Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3149,6 +3149,16 @@ app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin',
   const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
   const { byItem } = await getReportsForTenant(req.tenant.id, req.query.exhibitionId);
   res.json(byItem.slice(0, limit));
+});
+// Backs the Overview tab's stat row. Kept to just what isn't already
+// derivable from /api/exhibitions on the client (order counts per
+// exhibition are already in that response — "orders today" needs its own
+// date-filtered count, so that's the only thing computed here).
+app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const orders = await OrderDB.find({ tenantId: req.tenant.id });
+  const ordersToday = orders.filter(o => !o.deleted && (o.createdAt || '').slice(0, 10) === today).length;
+  res.json({ ordersToday });
 });
 
 // ── Custom reports (client-facing) ────────────────────────────────────────
