@@ -35,8 +35,8 @@ function tenantBaseUrl(req, tenant) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.49.5';
-const BUILD_TIME   = '2026-07-22T11:30:00Z';
+const APP_VERSION  = '1.52.0';
+const BUILD_TIME   = '2026-07-23T14:15:59Z';
 
 if (!process.env.JWT_SECRET) {
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
@@ -71,6 +71,78 @@ function initR2() {
   } else {
     log.warn('R2 not configured — using local disk storage (set R2_* env vars to switch)');
   }
+}
+
+// ── EMAIL (Brevo HTTP API — plain https POST, no SMTP ports needed on Render) ──
+const BREVO_API_KEY     = process.env.BREVO_API_KEY || '';
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'orders@expoorders.com';
+const BREVO_SENDER_NAME  = process.env.BREVO_SENDER_NAME || 'Expo Orders';
+const useEmail = !!BREVO_API_KEY;
+if (!useEmail) log.warn('BREVO_API_KEY not set — order notification emails are disabled');
+
+// Fires one email via Brevo's transactional send endpoint. Always resolves
+// (never throws) — a failed send should never take down whatever request
+// triggered it; the caller just logs and moves on.
+function sendEmail({ to, toName, subject, html }) {
+  if (!useEmail || !to) return Promise.resolve({ skipped: true });
+  const payload = JSON.stringify({
+    sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+    to: [{ email: to, name: toName || undefined }],
+    subject, htmlContent: html,
+  });
+  return new Promise(resolve => {
+    const req = https.request({
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'api-key': BREVO_API_KEY, 'content-length': Buffer.byteLength(payload) },
+    }, resp => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => {
+        if (resp.statusCode >= 300) log.error({ to, status: resp.statusCode, body: data }, 'Brevo email send failed');
+        resolve({ ok: resp.statusCode < 300 });
+      });
+    });
+    req.on('error', err => { log.error({ err, to }, 'Brevo email request failed'); resolve({ ok: false }); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+// Fire-and-forget both order-notification emails — never awaited by the
+// route that calls this, so a slow or failing email provider can't delay
+// or break the actual order-creation response. Company gets one if its
+// admin has an email on file (always true — required at signup); the
+// buyer gets one only if they have an email on file (optional field).
+async function sendOrderEmails(tenant, order, party, baseUrl) {
+  if (!useEmail) return;
+  const shareUrl = `${baseUrl}/order/${order.shareToken}`;
+  const itemCount = order.items.length;
+  const admin = await UserDB.findOne({ tenantId: tenant.id, role: 'admin' });
+  if (admin?.email) {
+    sendEmail({
+      to: admin.email, toName: admin.name,
+      subject: `New order ${order.orderNo} — ${party.firmName}`,
+      html: `<p>New order <b>${escHtml(order.orderNo)}</b> from <b>${escHtml(party.firmName)}</b> (${escHtml(party.phone || '')}).</p>
+        <p>${itemCount} item${itemCount === 1 ? '' : 's'}${order.remark ? ` — Note: ${escHtml(order.remark)}` : ''}</p>
+        <p><a href="${shareUrl}">View order</a></p>`,
+    }).catch(err => log.error({ err }, 'Order admin-notification email failed'));
+  }
+  if (party.email) {
+    sendEmail({
+      to: party.email, toName: party.firmName,
+      subject: `Your order ${order.orderNo} from ${tenant.name}`,
+      html: `<p>Hi ${escHtml(party.contactPerson || party.firmName)},</p>
+        <p>Your order <b>${escHtml(order.orderNo)}</b> with <b>${escHtml(tenant.name)}</b> has been received (${itemCount} item${itemCount === 1 ? '' : 's'}).</p>
+        <p><a href="${shareUrl}">View your order</a></p>`,
+    }).catch(err => log.error({ err }, 'Order buyer-notification email failed'));
+  }
+}
+// Minimal HTML escape for values dropped into email bodies — party/company
+// names and remarks are free text, and this goes out as real HTML mail.
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
 // ── MONGOOSE SCHEMAS ──────────────────────────────────────────────────────────
@@ -738,7 +810,7 @@ app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platform
 // directly to the platform admin to share manually; hook up real sending
 // later by replacing that one response field with an actual email call.)
 app.post('/api/platform/tenants', platformAuth, async (req, res) => {
-  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness } = req.body;
+  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness, cloneFromTenantId } = req.body;
   if (!companyName || !rawSlug || !adminName || !email)
     return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
   const slug = normalizeSlug(rawSlug);
@@ -746,15 +818,57 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   if (slugErr) return res.status(400).json({ error: slugErr });
   if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
 
+  // Optional starting point: copy another company's CONFIGURATION onto this
+  // brand-new one — the tedious stuff to set up from scratch (Item Master
+  // fields, Order Form, variant categories, Order View Layout, settings
+  // permissions) — so two companies in the same industry (e.g. two jewelry
+  // exhibitors) don't each need identical setup done by hand. Deliberately
+  // narrow: never copies anything that identifies or contacts the SOURCE
+  // company itself (name, slug, logo, address, GST, phone, socials, staff
+  // cap) — those stay blank/default on the new company either way.
+  let template = null;
+  if (cloneFromTenantId) {
+    template = await TenantDB.findOne({ id: cloneFromTenantId });
+    if (!template) return res.status(400).json({ error: 'Company to copy settings from was not found' });
+  }
+
   const tenant = {
     id: uuid(), name: companyName, slug, natureOfBusiness: natureOfBusiness || '', plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
-    settingsPermissions: { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
+    settingsPermissions: template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
   };
+  if (template) {
+    tenant.enableVariants = template.enableVariants || false;
+    tenant.variantCategories = template.variantCategories || [];
+    tenant.orderFields = template.orderFields || [];
+    tenant.orderShowImages = template.orderShowImages !== false;
+    tenant.orderRowGrouping = template.orderRowGrouping || 'none';
+    tenant.orderCustomFields = template.orderCustomFields || [];
+    tenant.orderViewColumns = template.orderViewColumns || [];
+    tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
+    tenant.orderViewFooterFields = template.orderViewFooterFields || [];
+    // Only the reusable boilerplate text/policy pieces of the footer — never
+    // the source company's own address/GST/phone/socials/logo, which are
+    // that company's identity, not a "setting".
+    tenant.footer = {
+      whatsappMessage: template.footer?.whatsappMessage || '',
+      note1: template.footer?.note1 || '', note2: template.footer?.note2 || '',
+      show: { note1: !!template.footer?.show?.note1, note2: !!template.footer?.show?.note2 },
+    };
+  }
   await TenantDB.create(tenant);
 
   for (let i = 0; i < FIXED_FIELDS.length; i++) {
     await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
+  }
+  // Copy the source company's own custom Item Master fields (everything
+  // past the two always-present fixed fields), preserving their order.
+  if (template) {
+    const templateFields = (await FieldDefDB.find({ tenantId: template.id, active: true })).filter(f => !f.fixed).sort((a, b) => a.order - b.order);
+    for (let i = 0; i < templateFields.length; i++) {
+      const { id: _oldId, tenantId: _oldTenant, createdAt: _oldCreatedAt, ...rest } = templateFields[i];
+      await FieldDefDB.create({ ...rest, id: uuid(), tenantId: tenant.id, order: FIXED_FIELDS.length + i, createdAt: new Date().toISOString() });
+    }
   }
 
   const admin = {
@@ -771,8 +885,8 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   });
   const baseUrl = tenantBaseUrl(req, tenant);
 
-  log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email }, 'Platform admin created a company');
-  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}` });
+  log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email, clonedFrom: template?.slug || null }, 'Platform admin created a company');
+  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}`, clonedFrom: template ? { id: template.id, name: template.name } : null });
 });
 
 app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) => {
@@ -2397,6 +2511,9 @@ app.post('/api/orders', resolveTenant, auth, requireRole('admin', 'staff'), asyn
   // or forgotten env var shouldn't silently break every shared order link —
   // tenantBaseUrl falls back to the actual request's host, which is always correct.
   const baseUrl = tenantBaseUrl(req, req.tenant);
+  // Fire-and-forget — never awaited, so a slow/failing email provider can't
+  // delay the response staff are waiting on to hand the buyer their link.
+  sendOrderEmails(req.tenant, order, party, baseUrl).catch(err => log.error({ err }, 'sendOrderEmails failed'));
   res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
 });
 

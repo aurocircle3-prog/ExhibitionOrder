@@ -47,6 +47,11 @@
         </div>
         <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
       </div>
+      <div style="margin-top:14px">
+        <label>Copy settings from an existing company <span class="muted">(optional)</span></label>
+        <select id="newCloneFrom"><option value="">— Start blank —</option></select>
+        <p class="muted" style="margin:4px 0 0">Copies Item Master fields, Order Form, variant categories, Order View Layout, settings permissions, and reusable footer text (WhatsApp message + Note 1/2) from that company. Never copies its name, logo, address, GST, phone, or social links — those stay blank for the new company.</p>
+      </div>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, createCompany)">Create company</button>
     </div>
 
@@ -336,8 +341,20 @@ function logout(){ localStorage.removeItem('exo_platform_token'); localStorage.r
 
 let tenants = [];
 async function load(){
-  try { tenants = await platformFetch('/tenants'); renderList(); }
+  try {
+    tenants = await platformFetch('/tenants');
+    renderList();
+    renderCloneOptions();
+  }
   catch (e) { EXO.toast(e.message, 'error'); }
+}
+function renderCloneOptions(){
+  const sel = document.getElementById('newCloneFrom');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— Start blank —</option>' +
+    tenants.slice().sort((a, b) => a.name.localeCompare(b.name)).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  sel.value = current; // keep selection across an unrelated reload, if it still exists
 }
 
 let platformExhibitions = [], currentExhibitionDetailId = null;
@@ -470,6 +487,7 @@ async function createCompany(){
     email: document.getElementById('newAdminEmail').value.trim(),
     phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
     maxStaff: document.getElementById('newMaxStaff').value,
+    cloneFromTenantId: document.getElementById('newCloneFrom').value || undefined,
   };
   if (!body.companyName || !body.slug || !body.adminName || !body.email) {
     err.textContent = 'Company name, link, admin name, and email are all required';
@@ -483,6 +501,8 @@ async function createCompany(){
     document.getElementById('setupLinkCard').style.display = 'block';
     document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
     ['newCompanyName','newSlug','newAdminName','newAdminEmail','newAdminPhone','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('newCloneFrom').value = '';
+    EXO.toast(res.clonedFrom ? `Company created — settings copied from ${res.clonedFrom.name}` : 'Company created');
     load();
   } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
