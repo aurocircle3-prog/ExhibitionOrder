@@ -4,6 +4,13 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
+  <div class="card" id="resetLinkCard" style="display:none">
+    <h3 style="margin-top:0">Reset link ready ✅</h3>
+    <p class="muted">Share this with <b id="resetLinkName"></b> — valid 7 days, works once. They'll set their own new password when they open it.</p>
+    <input id="resetLinkBox" readonly onclick="this.select()">
+    <button class="ghost" style="margin-top:10px" onclick="copyResetLink()">Copy link</button>
+    <button class="ghost" style="margin-top:10px" onclick="document.getElementById('resetLinkCard').style.display='none'">Close</button>
+  </div>
   <div class="card">
     <h3 style="margin-top:0">Staff accounts <span class="muted" id="usage"></span></h3>
     <p class="muted">Created internally by the admin — staff cannot self-register.</p>
@@ -71,7 +78,7 @@ async function load(){
       <td>${s.name}</td><td>${s.loginId}</td><td>${s.phone||'—'}</td>
       <td>${s.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
-        <button class="ghost small" onclick="resetPassword('${s.id}','${s.name.replace(/'/g,"\\'")}')">Reset password</button>
+        <button class="ghost small" onclick="sendResetLink('${s.id}','${s.name.replace(/'/g,"\\'")}')">Send reset link</button>
         <button class="ghost small" onclick="toggle('${s.id}', ${!s.active})">${s.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="remove('${s.id}')">Delete</button>
       </td>
@@ -81,19 +88,23 @@ async function load(){
       <td>${c.name}</td><td>${c.loginId}</td><td>${c.phone||'—'}</td>
       <td>${c.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
-        <button class="ghost small" onclick="resetClientPassword('${c.id}','${c.name.replace(/'/g,"\\'")}')">Reset password</button>
+        <button class="ghost small" onclick="sendClientResetLink('${c.id}','${c.name.replace(/'/g,"\\'")}')">Send reset link</button>
         <button class="ghost small" onclick="toggleClient('${c.id}', ${!c.active})">${c.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="removeClient('${c.id}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No buyer logins yet</td></tr>';
 }
-async function resetPassword(id, name){
-  const pw = prompt(`New password for ${name} (min 6 characters):`);
-  if (pw === null) return; // cancelled
-  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
+function showResetLink(link, name){
+  document.getElementById('resetLinkName').textContent = name;
+  document.getElementById('resetLinkBox').value = link;
+  document.getElementById('resetLinkCard').style.display = 'block';
+  document.getElementById('resetLinkCard').scrollIntoView({ behavior: 'smooth' });
+}
+function copyResetLink(){ document.getElementById('resetLinkBox').select(); document.execCommand('copy'); }
+async function sendResetLink(id, name){
   try {
-    await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
-    EXO.toast(`Password updated for ${name}`);
+    const res = await EXO.apiFetch('/staff/'+id+'/reset-link', { method: 'POST' });
+    showResetLink(res.resetLink, name);
   } catch(e) { EXO.toast(e.message, 'error'); }
 }
 async function addStaff(){
@@ -131,13 +142,10 @@ async function addClient(){
     load();
   } catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Could not add buyer login — see error above', 'error'); }
 }
-async function resetClientPassword(id, name){
-  const pw = prompt(`New password for ${name} (min 6 characters):`);
-  if (pw === null) return;
-  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
+async function sendClientResetLink(id, name){
   try {
-    await EXO.apiFetch('/clients/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
-    EXO.toast(`Password updated for ${name}`);
+    const res = await EXO.apiFetch('/clients/'+id+'/reset-link', { method: 'POST' });
+    showResetLink(res.resetLink, name);
   } catch(e) { EXO.toast(e.message, 'error'); }
 }
 async function toggleClient(id, active){ await EXO.apiFetch('/clients/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }

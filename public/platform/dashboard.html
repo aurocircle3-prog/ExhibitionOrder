@@ -141,6 +141,13 @@
     </div>
 
     <div class="tab-panel" id="dtab-users">
+      <div class="card" id="platformResetLinkCard" style="display:none">
+        <h4 style="margin-top:0">Reset link ready ✅</h4>
+        <p class="muted">Share this with <b id="platformResetLinkName"></b> — valid 7 days, works once.</p>
+        <input id="platformResetLinkBox" readonly onclick="this.select()">
+        <button class="ghost small" style="margin-top:8px" onclick="copyPlatformResetLink()">Copy link</button>
+        <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('platformResetLinkCard').style.display='none'">Close</button>
+      </div>
       <div class="table-scroll"><table>
         <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
         <tbody id="detailUsers"></tbody>
@@ -701,7 +708,7 @@ async function openDetail(id){
     <tr>
       <td>${u.name}</td><td>${u.role}</td><td>${u.loginId}</td><td>${u.phone || '—'}</td>
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
-      <td><button class="ghost small" onclick="resetUserPassword('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Reset password</button></td>
+      <td><button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Send reset link</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
 
   const staffCount = users.filter(u => u.role === 'staff' && u.active !== false).length;
@@ -1395,15 +1402,16 @@ async function saveDetailFooter(){
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
-async function resetUserPassword(tenantId, userId, name){
-  const pw = prompt(`New password for ${name} (min 6 characters):`);
-  if (pw === null) return;
-  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
+async function sendUserResetLink(tenantId, userId, name){
   try {
-    await platformFetch(`/tenants/${tenantId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword: pw }) });
-    EXO.toast(`Password updated for ${name}.`);
+    const res = await platformFetch(`/tenants/${tenantId}/users/${userId}/reset-link`, { method: 'POST' });
+    document.getElementById('platformResetLinkName').textContent = name;
+    document.getElementById('platformResetLinkBox').value = res.resetLink;
+    document.getElementById('platformResetLinkCard').style.display = 'block';
+    document.getElementById('platformResetLinkCard').scrollIntoView({ behavior: 'smooth' });
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
+function copyPlatformResetLink(){ document.getElementById('platformResetLinkBox').select(); document.execCommand('copy'); }
 
 switchTopTab('companies');
 load();
