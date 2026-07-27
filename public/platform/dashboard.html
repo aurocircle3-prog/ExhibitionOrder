@@ -448,13 +448,13 @@ async function loadPlatformExhibitions(){
     platformExhibitions = await platformFetch('/exhibitions');
     document.getElementById('platExhibitionRows').innerHTML = platformExhibitions.map(e => `
       <tr>
-        <td><b>${e.name}</b></td>
-        <td>${e.location||'—'}</td>
+        <td><b>${EXO.esc(e.name)}</b></td>
+        <td>${EXO.esc(e.location)||'—'}</td>
         <td>${e.startDate||''}${e.endDate?' – '+e.endDate:''}</td>
         <td>${e.participantCount} compan${e.participantCount===1?'y':'ies'}</td>
         <td class="btn-row">
           <button class="primary small" onclick="openExhibitionDetail('${e.id}')">${e.participantCount ? 'Manage companies' : '+ Add companies'}</button>
-          <button class="danger small" onclick="deletePlatformExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Delete</button>
+          <button class="danger small" onclick="deletePlatformExhibition('${e.id}','${EXO.escAttr(e.name)}')">Delete</button>
         </td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">No exhibitions yet — create one below.</td></tr>';
   } catch (e) { EXO.toast(e.message, 'error'); }
@@ -501,15 +501,15 @@ async function loadParticipants(){
   const participants = await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants`);
   document.getElementById('participantRows').innerHTML = participants.map(p => `
     <tr>
-      <td>${p.tenantName}</td>
+      <td>${EXO.esc(p.tenantName)}</td>
       <td>${p.natureOfBusiness || '—'}</td>
       <td><input type="date" value="${p.validTill||''}" onchange="updateParticipantValidTill('${p.tenantId}', this.value)" style="width:150px"></td>
-      <td><button class="danger small" onclick="removeParticipant('${p.tenantId}','${p.tenantName.replace(/'/g,"\\'")}')">Remove</button></td>
+      <td><button class="danger small" onclick="removeParticipant('${p.tenantId}','${EXO.escAttr(p.tenantName)}')">Remove</button></td>
     </tr>`).join('') || '<tr><td colspan="4" class="muted">No companies added yet</td></tr>';
   const alreadyIn = new Set(participants.map(p => p.tenantId));
   const available = tenants.filter(t => !alreadyIn.has(t.id));
   document.getElementById('companyCheckboxList').innerHTML = available.map(t => `
-    <label style="display:block;padding:4px 0"><input type="checkbox" class="company-checkbox" value="${t.id}" style="width:auto;margin-right:8px">${t.name} <span class="muted">${t.natureOfBusiness ? '— ' + t.natureOfBusiness : ''}</span></label>
+    <label style="display:block;padding:4px 0"><input type="checkbox" class="company-checkbox" value="${t.id}" style="width:auto;margin-right:8px">${EXO.esc(t.name)} <span class="muted">${t.natureOfBusiness ? '— ' + EXO.esc(t.natureOfBusiness) : ''}</span></label>
   `).join('') || '<p class="muted" style="margin:0">Every company is already in this exhibition.</p>';
 }
 async function updateParticipantValidTill(tenantId, validTill){
@@ -549,9 +549,9 @@ function renderList(){
   document.getElementById('tenantCount').textContent = `— ${filtered.length} of ${tenants.length}`;
   document.getElementById('rows').innerHTML = filtered.map(t => `
     <tr style="cursor:pointer" onclick="openDetail('${t.id}')">
-      <td><b>${t.name}</b> ${t.active === false ? '<span class="badge cancelled">inactive</span>' : ''}</td>
-      <td>${t.slug}</td>
-      <td>${t.natureOfBusiness || '—'}</td>
+      <td><b>${EXO.esc(t.name)}</b> ${t.active === false ? '<span class="badge cancelled">inactive</span>' : ''}</td>
+      <td>${EXO.esc(t.slug)}</td>
+      <td>${EXO.esc(t.natureOfBusiness) || '—'}</td>
       <td>${t.plan}</td>
       <td>${t.userCount}</td>
       <td>${t.itemCount}</td>
@@ -716,9 +716,9 @@ async function openDetail(id){
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
-      <td>${u.name}</td><td>${u.role}</td><td>${u.loginId}</td><td>${u.phone || '—'}</td>
+      <td>${EXO.esc(u.name)}</td><td>${EXO.esc(u.role)}</td><td>${EXO.esc(u.loginId)}</td><td>${EXO.esc(u.phone) || '—'}</td>
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
-      <td><button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Send reset link</button> <button class="ghost small" onclick="showPlatformActivity('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Login activity</button></td>
+      <td><button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Send reset link</button> <button class="ghost small" onclick="showPlatformActivity('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Login activity</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
 
   const staffCount = users.filter(u => u.role === 'staff' && u.active !== false).length;
@@ -783,10 +783,10 @@ async function loadCustomReports(tenantId){
 function renderCustomReportList(){
   document.getElementById('customReportList').innerHTML = customReports.map(r => `
     <div class="btn-row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)">
-      <span><b>${r.name}</b> <span class="muted">— ${r.rowType === 'order' ? 'one row per order' : 'one row per item'}</span></span>
+      <span><b>${EXO.esc(r.name)}</b> <span class="muted">— ${r.rowType === 'order' ? 'one row per order' : 'one row per item'}</span></span>
       <span class="btn-row">
         <button class="ghost small" onclick="editCustomReport('${r.id}')">Edit</button>
-        <button class="danger small" onclick="deleteCustomReport('${r.id}','${r.name.replace(/'/g,"\\'")}')">Delete</button>
+        <button class="danger small" onclick="deleteCustomReport('${r.id}','${EXO.escAttr(r.name)}')">Delete</button>
       </span>
     </div>`).join('') || '<p class="muted">No custom reports yet for this company.</p>';
 }
@@ -852,7 +852,7 @@ function renderReportColumns(){
         <select onchange="updateReportColumn('${c._id}','type',this.value)">
           <option value="meta" ${c.type==='meta'?'selected':''}>Built-in field</option>
           <option value="itemfield" ${c.type==='itemfield'?'selected':''}>Item Master field</option>
-          ${rowType === 'item' && variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
+          ${rowType === 'item' && variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${EXO.esc(variantCategories.map(v=>v.label).join(', '))})</option>` : ''}
           <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order Detail field</option>
           <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
         </select>
@@ -863,17 +863,17 @@ function renderReportColumns(){
           ${c.type === 'meta'
             ? metaOptions.map(m => `<option value="${m.key}" ${c.fieldKey===m.key?'selected':''}>${m.label}</option>`).join('')
             : c.type === 'itemfield'
-            ? (itemFieldOptions.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— none available —</option>')
+            ? (itemFieldOptions.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— none available —</option>')
             : c.type === 'varianttag'
-            ? (variantCategories.map(v => `<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('') || '<option value="">— none available —</option>')
-            : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
+            ? (variantCategories.map(v => `<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${EXO.esc(v.label)}</option>`).join('') || '<option value="">— none available —</option>')
+            : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
         </select>
       </div>` : `
       <div style="flex:2;min-width:220px">${i===0?`<label>Formula <span class="muted">— e.g. <code>net_weight * melting</code>. Available: ${[...numericFields.map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(none yet)'}</span></label>`:''}
-        <input placeholder="net_weight * melting" value="${c.formula||''}" oninput="updateReportColumn('${c._id}','formula',this.value)">
+        <input placeholder="net_weight * melting" value="${EXO.esc(c.formula||'')}" oninput="updateReportColumn('${c._id}','formula',this.value)">
       </div>`}
       <div style="flex:1;min-width:120px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
-        <input placeholder="defaults to field name" value="${c.label||''}" oninput="updateReportColumn('${c._id}','label',this.value)">
+        <input placeholder="defaults to field name" value="${EXO.esc(c.label||'')}" oninput="updateReportColumn('${c._id}','label',this.value)">
       </div>
       <button class="danger small" title="Remove" onclick="removeReportColumn('${c._id}')">✕</button>
     </div>`).join('') || '<p class="muted">No columns yet — add at least one.</p>';
@@ -941,14 +941,14 @@ function renderVariantCategories(){
   document.getElementById('variantCategoryList').innerHTML = variantCategories.map((cat, ci) => `
     <div style="border:0.5px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-        <input placeholder="Category name, e.g. Color" value="${cat.label}" oninput="updateVariantCategoryLabel('${cat._id}',this.value)" style="flex:1;font-weight:500">
+        <input placeholder="Category name, e.g. Color" value="${EXO.esc(cat.label)}" oninput="updateVariantCategoryLabel('${cat._id}',this.value)" style="flex:1;font-weight:500">
         <button class="ghost small" title="Move up" onclick="moveVariantCategory('${cat._id}',-1)" ${ci===0?'disabled':''}>↑</button>
         <button class="ghost small" title="Move down" onclick="moveVariantCategory('${cat._id}',1)" ${ci===variantCategories.length-1?'disabled':''}>↓</button>
         <button class="danger small" onclick="removeVariantCategory('${cat._id}')">Remove category</button>
       </div>
       ${cat.values.map((v, i) => `
         <div style="display:flex;align-items:center;gap:6px;padding:3px 0">
-          <input value="${v}" placeholder="value" oninput="updateVariantValue('${cat._id}',${i},this.value)" style="flex:1">
+          <input value="${EXO.esc(v)}" placeholder="value" oninput="updateVariantValue('${cat._id}',${i},this.value)" style="flex:1">
           <button class="ghost small" title="Move up" onclick="moveVariantValue('${cat._id}',${i},-1)" ${i===0?'disabled':''}>↑</button>
           <button class="ghost small" title="Move down" onclick="moveVariantValue('${cat._id}',${i},1)" ${i===cat.values.length-1?'disabled':''}>↓</button>
           <button class="danger small" title="Remove" onclick="removeVariantValue('${cat._id}',${i})">✕</button>
@@ -995,9 +995,9 @@ function renderDetailFieldRows(){
   document.getElementById('detailFieldRows').innerHTML = detailFields.map((f, i) => {
     if (f.id === detailFieldEditingId) {
       return `<tr class="field-row-edit">
-        <td><input id="editDetailLabel" value="${f.label}"></td>
+        <td><input id="editDetailLabel" value="${EXO.esc(f.label)}"></td>
         <td>${fieldTypeLabel(f)}</td>
-        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editDetailOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
+        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${EXO.esc(f.unit||'')}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editDetailOptions" value="${EXO.esc((f.options||[]).join(', '))}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
           <button class="primary small" onclick="EXO.busy(this, () => saveEditDetailField('${f.id}'))">Save</button>
           <button class="ghost small" onclick="cancelEditDetailField()">Cancel</button>
@@ -1005,7 +1005,7 @@ function renderDetailFieldRows(){
       </tr>`;
     }
     return `<tr>
-      <td>${f.label}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
       <td>${fieldTypeLabel(f)}</td>
       <td></td>
       <td>
@@ -1074,7 +1074,7 @@ function renderDetailOrderFieldRows(){
   const savedByKey = {}; detailOrderFieldsSaved.forEach(f => { savedByKey[f.key] = f; });
   document.getElementById('detailOrderFieldRows').innerHTML = detailFields.map(f => `
     <tr>
-      <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
+      <td>${EXO.esc(f.label)}${f.type==='number' && f.unit ? ` <span class="muted">(${EXO.esc(f.unit)})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" class="dof-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
     </tr>`).join('') || '<tr><td colspan="2" class="muted">Add Item Master fields first</td></tr>';
 }
@@ -1104,7 +1104,7 @@ function moveDetailCustomField(i, direction){
 function renderDetailCustomFields(){
   document.getElementById('detailCustomFieldRows').innerHTML = detailCustomFields.map((f, i) => `
     <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
-      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
+      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${EXO.esc(f.label||'')}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
       <div style="flex:1;min-width:100px">${i===0?'<label>Type</label>':''}
         <select onchange="updateDetailCustomFieldAt(${i},'type',this.value)">
           <option value="text" ${f.type==='text'?'selected':''}>Text</option>
@@ -1186,14 +1186,14 @@ function renderDetailFieldListEntries(which){
       <div style="flex:1;min-width:150px"><label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
-            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${EXO.esc(t.label)}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
             : f.type === 'fieldtotal'
-            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${n.label}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
-            : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
+            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${EXO.esc(n.label)}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
+            : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${EXO.esc(o.label)}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>
       <div style="flex:1;min-width:130px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
-        <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
+        <input placeholder="defaults to the field's own name" value="${EXO.esc(f.label||'')}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
       </div>
       <div style="display:flex;gap:4px">
         <button class="ghost small" title="Move up" onclick="moveDetailFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑</button>
@@ -1263,7 +1263,7 @@ function renderDetailColumns(){
           <select onchange="updateDetailColumn('${c._id}','type',this.value)">
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
             <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
-            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
+            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${EXO.esc(variantCategories.map(v=>v.label).join(', '))})</option>` : ''}
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
@@ -1279,28 +1279,28 @@ function renderDetailColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
+        <input placeholder="${EXO.esc(c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading'))}" value="${EXO.esc(c.label||'')}" oninput="updateDetailColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'varianttag' ? `
         <div style="margin-top:10px">
           <label>Which tag</label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('')}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${EXO.esc(v.label)}</option>`).join('')}</select>
         </div>` : ''}
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields to the Order Form first —</option>'}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add fields to the Order Form first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'orderfield' ? `
         <div style="margin-top:10px">
           <label>Which order details field <span class="muted">— one value per order; shown the same in every row</span></label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailOrderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>'}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailOrderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add Order Details fields first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'formula' ? `
         <div style="margin-top:10px">
           <label>Formula <span class="muted">— field names and qty with + − × / ^ and parentheses, e.g. <code>(price + 50) * qty</code>. Also round(), max(), min(). Available: ${[...detailFields.filter(f=>f.type==='number').map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(add Item Master fields first)'}</span></label>
-          <input placeholder="price * qty" value="${c.formula||''}" oninput="updateDetailColumn('${c._id}','formula',this.value)">
-          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
+          <input placeholder="price * qty" value="${EXO.esc(c.formula||'')}" oninput="updateDetailColumn('${c._id}','formula',this.value)">
+          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${EXO.esc(formulaError)}</p>` : ''}
         </div>` : ''}
       ${(c.type === 'formula' || (c.type === 'field' && detailFields.find(f=>f.key===c.fieldKey)?.type === 'number')) ? `
         <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400">
@@ -1348,17 +1348,17 @@ function loadDetailFooter(tenant){
     const val = f[def.key] || '';
     let inputHtml;
     if (def.type === 'textarea') {
-      inputHtml = `<textarea id="dfooter_${def.key}" rows="2">${val}</textarea>`;
+      inputHtml = `<textarea id="dfooter_${def.key}" rows="2">${EXO.esc(val)}</textarea>`;
     } else if (def.type === 'phone') {
       const digits = val.replace(/^\+/, '');
       const cc = digits.length > 10 ? '+' + digits.slice(0, digits.length - 10) : '+91';
       const num = digits.length > 10 ? digits.slice(-10) : digits;
       inputHtml = `<div style="display:flex;gap:6px">
-        <input id="dfooter_${def.key}_cc" value="${cc}" maxlength="4" style="width:60px;flex:0 0 auto">
-        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${num}" style="flex:1" placeholder="90290 06090">
+        <input id="dfooter_${def.key}_cc" value="${EXO.esc(cc)}" maxlength="4" style="width:60px;flex:0 0 auto">
+        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="90290 06090">
       </div>`;
     } else {
-      inputHtml = `<input id="dfooter_${def.key}" value="${val}" placeholder="${def.placeholder || ''}">`;
+      inputHtml = `<input id="dfooter_${def.key}" value="${EXO.esc(val)}" placeholder="${EXO.esc(def.placeholder || '')}">`;
     }
     return `
       <div style="margin-top:12px">

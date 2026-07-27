@@ -48,7 +48,19 @@
     if (token) headers['Authorization'] = 'Bearer ' + token;
     const res = await fetch('/api' + path, Object.assign({}, opts, { headers }));
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      // Specifically the "signed in from another device" case — never
+      // set by /auth/login itself (a wrong-password attempt returns a
+      // plain error with no such flag), so this can't misfire into a
+      // redirect loop on the login page.
+      if (data.sessionInvalidated) {
+        localStorage.removeItem('exo_token');
+        localStorage.removeItem('exo_user');
+        alert(data.error);
+        location.href = '/login.html';
+      }
+      throw new Error(data.error || 'Request failed');
+    }
     return data;
   }
 
@@ -209,7 +221,26 @@
     finally { btn.disabled = false; btn.textContent = original; }
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme };
+  // Text-node escaping — for values going straight into innerHTML as
+  // display text, e.g. `<td>${EXO.esc(name)}</td>`.
+  function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])); }
+  // A different, two-stage escape for the very common
+  // onclick="doThing('${name}')" pattern used all over this app's list
+  // rendering: the value sits inside a single-quoted JS string literal,
+  // which itself sits inside a double-quoted HTML attribute. Escaping
+  // only for one context (as plain esc() above does, or as the old
+  // per-page `.replace(/'/g,"\\'")` one-liners did) leaves the other
+  // exploitable — esc() alone lets an unescaped apostrophe break out of
+  // the JS string; the old one-liners left a literal `"` free to break
+  // out of the HTML attribute entirely. This handles both: JS-escape
+  // first (backslash quotes/backslashes so the string literal can't be
+  // broken out of), then HTML-attribute-escape the result (so the
+  // attribute itself can't be broken out of either).
+  function escAttr(s) {
+    const jsEscaped = String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    return jsEscaped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

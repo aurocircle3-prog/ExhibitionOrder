@@ -84,22 +84,22 @@ async function load(){
   document.getElementById('usage').textContent = `— ${activeCount} / ${max ?? '∞'} used`;
   document.getElementById('rows').innerHTML = staff.map(s => `
     <tr>
-      <td>${s.name}</td><td>${s.loginId}</td><td>${s.phone||'—'}</td>
+      <td>${EXO.esc(s.name)}</td><td>${EXO.esc(s.loginId)}</td><td>${EXO.esc(s.phone)||'—'}</td>
       <td>${s.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
-        <button class="ghost small" onclick="sendResetLink('${s.id}','${s.name.replace(/'/g,"\\'")}')">Send reset link</button>
-        <button class="ghost small" onclick="showActivity('${s.id}','${s.name.replace(/'/g,"\\'")}',false)">Login activity</button>
+        <button class="ghost small" onclick="sendResetLink('${s.id}','${EXO.escAttr(s.name)}')">Send reset link</button>
+        <button class="ghost small" onclick="showActivity('${s.id}','${EXO.escAttr(s.name)}',false)">Login activity</button>
         <button class="ghost small" onclick="toggle('${s.id}', ${!s.active})">${s.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="remove('${s.id}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No staff yet</td></tr>';
   document.getElementById('clientRows').innerHTML = clients.map(c => `
     <tr>
-      <td>${c.name}</td><td>${c.loginId}</td><td>${c.phone||'—'}</td>
+      <td>${EXO.esc(c.name)}</td><td>${EXO.esc(c.loginId)}</td><td>${EXO.esc(c.phone)||'—'}</td>
       <td>${c.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
-        <button class="ghost small" onclick="sendClientResetLink('${c.id}','${c.name.replace(/'/g,"\\'")}')">Send reset link</button>
-        <button class="ghost small" onclick="showActivity('${c.id}','${c.name.replace(/'/g,"\\'")}',true)">Login activity</button>
+        <button class="ghost small" onclick="sendClientResetLink('${c.id}','${EXO.escAttr(c.name)}')">Send reset link</button>
+        <button class="ghost small" onclick="showActivity('${c.id}','${EXO.escAttr(c.name)}',true)">Login activity</button>
         <button class="ghost small" onclick="toggleClient('${c.id}', ${!c.active})">${c.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="removeClient('${c.id}')">Delete</button>
       </td>

@@ -1,0 +1,48 @@
+<title>Deleted orders — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Deleted orders</h3>
+      <a href="/staff/orders.html" class="muted" style="font-size:12px">← Back to Orders</a>
+    </div>
+    <p class="muted" style="margin-top:-6px">Recoverable for 30 days after deletion, then removed permanently. Restoring puts an order back exactly where it was — same status, same buyer link.</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Order #</th><th>Buyer</th><th>Deleted by</th><th>Deleted on</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+const user = EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('orders');
+
+function daysLeft(deletedAt){
+  const ageMs = Date.now() - new Date(deletedAt).getTime();
+  const left = 30 - Math.floor(ageMs / (24 * 60 * 60 * 1000));
+  return Math.max(left, 0);
+}
+async function load(){
+  const orders = await EXO.apiFetch('/orders/deleted');
+  document.getElementById('rows').innerHTML = orders.map(o => `
+    <tr>
+      <td>${o.orderNo}</td>
+      <td>${EXO.esc(o.partyName)}</td>
+      <td>${EXO.esc(o.deletedByName) || '—'}</td>
+      <td>${new Date(o.deletedAt).toLocaleDateString()} <span class="muted">(${daysLeft(o.deletedAt)}d left)</span></td>
+      <td><button class="primary small" onclick="restoreOrder('${o.id}','${o.orderNo}')">Restore</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing here — deleted orders show up for 30 days.</td></tr>';
+}
+async function restoreOrder(id, orderNo){
+  try {
+    await EXO.apiFetch('/orders/'+id+'/restore', { method: 'PUT' });
+    EXO.toast(`Order ${orderNo} restored`);
+    load();
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+load();
+</script>

@@ -65,12 +65,12 @@ async function loadCustomReportsTab(){
   // Every exhibition the company's ever been part of — current or
   // completed — since a report is just as useful for a show that already
   // wrapped up as one that's still running.
-  exSelect.innerHTML = exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('')
+  exSelect.innerHTML = exhibitions.map(e => `<option value="${e.id}">${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('')
     || '<option value="">— no exhibitions yet —</option>';
   const repSelect = document.getElementById('reportPicker');
   document.getElementById('noCustomReportsMsg').style.display = reports.length ? 'none' : 'block';
   repSelect.parentElement.style.display = reports.length ? 'block' : 'none';
-  repSelect.innerHTML = reports.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+  repSelect.innerHTML = reports.map(r => `<option value="${r.id}">${EXO.esc(r.name)}</option>`).join('');
   if (exhibitions.length && reports.length) loadReportData();
 }
 async function loadReportData(){
@@ -91,10 +91,10 @@ async function loadReportData(){
         <button class="ghost small" onclick="downloadReportExcel()">⬇ Download Excel</button>
       </div>
       <div class="table-scroll"><table>
-        <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
-        <tbody>${data.rows.map(row => `<tr>${data.columns.map(c => `<td>${fmtVal(row[c.id], c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${headers.length}" class="muted">No data for this exhibition yet</td></tr>`}</tbody>
+        <thead><tr>${headers.map(h => `<th>${EXO.esc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${data.rows.map(row => `<tr>${data.columns.map(c => `<td>${EXO.esc(fmtVal(row[c.id], c))}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${headers.length}" class="muted">No data for this exhibition yet</td></tr>`}</tbody>
       </table></div>`;
-  } catch (e) { box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`; }
+  } catch (e) { box.innerHTML = `<div class="error" style="display:block">${EXO.esc(e.message)}</div>`; }
 }
 function downloadReportExcel(){
   const exId = document.getElementById('reportExhibition').value;
@@ -107,9 +107,9 @@ function downloadReportExcel(){
   const [byParty, byItem, byStaff] = await Promise.all([
     EXO.apiFetch('/reports/party-wise'), EXO.apiFetch('/reports/item-wise'), EXO.apiFetch('/reports/staff-wise')
   ]);
-  document.getElementById('partyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
-  document.getElementById('itemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
-  document.getElementById('staffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
+  document.getElementById('partyRows').innerHTML = byParty.map(p => `<tr><td>${EXO.esc(p.partyName)}</td><td>${EXO.esc(p.partyPhone)}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
+  document.getElementById('itemRows').innerHTML = byItem.map(i => `<tr><td>${EXO.esc(i.label)}</td><td>${EXO.esc(i.scannerCode||'')}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
+  document.getElementById('staffRows').innerHTML = byStaff.map(s => `<tr><td>${EXO.esc(s.staffName)}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
   await loadCustomReportsTab();
   switchTab(localStorage.getItem('exo_reports_tab') || 'custom');
 })();

@@ -8,6 +8,7 @@
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
       <h3 style="margin:0" id="heading">Orders</h3>
       <p class="muted" id="filterNote" style="display:none;margin:0"></p>
+      <a href="/staff/orders-deleted.html" class="muted" id="deletedLink" style="display:none;font-size:12px">Deleted orders →</a>
     </div>
     <div class="table-scroll"><table>
       <thead><tr><th>Order #</th><th>Buyer</th><th id="exhibitionHeader" style="display:none">Exhibition</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
@@ -20,6 +21,7 @@
 const user = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
+if (user.role === 'admin') document.getElementById('deletedLink').style.display = 'inline';
 
 // A ?status= and/or ?date=today deep link (e.g. from a Dashboard stat
 // card) is treated as an explicit cross-exhibition request — it shows
@@ -61,9 +63,9 @@ async function load(){
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
       <td>${o.orderNo}</td>
-      <td>${o.partyName}<br><span class="muted">${o.partyPhone}</span></td>
-      ${isFiltered ? `<td>${exhibitionById[o.exhibitionId]?.name || '<span class="muted">—</span>'}</td>` : ''}
-      <td>${o.staffName}</td>
+      <td>${EXO.esc(o.partyName)}<br><span class="muted">${EXO.esc(o.partyPhone)}</span></td>
+      ${isFiltered ? `<td>${EXO.esc(exhibitionById[o.exhibitionId]?.name) || '<span class="muted">—</span>'}</td>` : ''}
+      <td>${EXO.esc(o.staffName)}</td>
       <td>${o.items.length}</td>
       <td>
         ${user.role === 'admin' ? `
@@ -72,7 +74,7 @@ async function load(){
         </select>` : `<span class="badge ${o.status}">${o.status}</span>`}
       </td>
       <td>
-        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="${o.shareUrl}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="deleteOrder('${o.id}','${o.orderNo}');return false;" style="color:var(--danger)">Delete</a>` : ''}
+        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="${o.shareUrl}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="deleteOrder('${o.id}','${EXO.escAttr(o.orderNo)}');return false;" style="color:var(--danger)">Delete</a>` : ''}
       </td>
     </tr>`).join('') || `<tr><td colspan="${isFiltered ? 7 : 6}" class="muted">No matching orders — go take one!</td></tr>`;
 }

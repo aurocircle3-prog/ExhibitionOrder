@@ -84,14 +84,14 @@ function renderRows(list){
   document.getElementById('buyerRows').innerHTML = list.map(b => `
     <tr>
       <td><input type="checkbox" ${selectedBuyerIds.has(b.id)?'checked':''} onchange="toggleSelectBuyer('${b.id}', this.checked)"></td>
-      <td>${b.firmName}</td>
-      <td>${b.contactPerson || '—'}</td>
-      <td>${b.phone}</td>
-      <td>${b.city || '—'}</td>
-      <td>${b.email || '—'}</td>
+      <td>${EXO.esc(b.firmName)}</td>
+      <td>${EXO.esc(b.contactPerson) || '—'}</td>
+      <td>${EXO.esc(b.phone)}</td>
+      <td>${EXO.esc(b.city) || '—'}</td>
+      <td>${EXO.esc(b.email) || '—'}</td>
       <td>
         <button class="ghost small" onclick="editBuyer('${b.id}')">Edit</button>
-        <button class="danger small" onclick="deleteBuyer('${b.id}','${b.firmName.replace(/'/g,"\\'")}')">Delete</button>
+        <button class="danger small" onclick="deleteBuyer('${b.id}','${EXO.escAttr(b.firmName)}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="7" class="muted">No buyers yet — they\'ll also appear here automatically once added from Take Order.</td></tr>';
 }

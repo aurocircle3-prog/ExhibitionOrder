@@ -67,15 +67,15 @@ function exhibitionCard(e){
   const closedNote = e.closed ? `<p class="muted" style="margin:2px 0">Marked completed by your team</p>` : (e.status === 'completed' ? `<p class="muted" style="margin:2px 0">Access window ended</p>` : '');
   return `
     <div class="card">
-      <h4 style="margin:0 0 4px">${e.name}</h4>
-      <p class="muted" style="margin:2px 0">${e.location || ''}${e.location && dates ? ' · ' : ''}${dates}</p>
+      <h4 style="margin:0 0 4px">${EXO.esc(e.name)}</h4>
+      <p class="muted" style="margin:2px 0">${EXO.esc(e.location) || ''}${e.location && dates ? ' · ' : ''}${dates}</p>
       ${validTillNote}${closedNote}
       <p class="muted" style="margin:8px 0">${e.itemCount} item${e.itemCount===1?'':'s'} · ${e.orderCount} order${e.orderCount===1?'':'s'}</p>
       <div class="btn-row" style="margin-top:10px">
-        <button class="primary small" onclick="enterExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
+        <button class="primary small" onclick="enterExhibition('${e.id}','${EXO.escAttr(e.name)}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
         ${e.status === 'current'
-          ? `<button class="ghost small" onclick="closeExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Mark completed</button>`
-          : (e.closed ? `<button class="ghost small" onclick="reopenExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Reopen</button>` : '')}
+          ? `<button class="ghost small" onclick="closeExhibition('${e.id}','${EXO.escAttr(e.name)}')">Mark completed</button>`
+          : (e.closed ? `<button class="ghost small" onclick="reopenExhibition('${e.id}','${EXO.escAttr(e.name)}')">Reopen</button>` : '')}
       </div>
     </div>`;
 }
@@ -106,7 +106,7 @@ async function load(){
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 
   document.getElementById('bestSellersExhibition').innerHTML = `<option value="">All exhibitions</option>` +
-    exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('');
+    exhibitions.map(e => `<option value="${e.id}">${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('');
 
   document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
 }
@@ -117,9 +117,9 @@ async function loadBestSellers(){
   grid.innerHTML = items.map(it => `
     <div class="best-seller-card">
       ${it.images?.[0]
-        ? `<img class="best-seller-thumb" src="${it.images[0]}" onclick="openSimpleLightbox('${it.images[0]}')" onerror="this.outerHTML='<div class=&quot;best-seller-thumb-empty&quot;></div>'">`
+        ? `<img class="best-seller-thumb" src="${EXO.esc(it.images[0])}" onclick="openSimpleLightbox('${EXO.escAttr(it.images[0])}')" onerror="this.outerHTML='<div class=&quot;best-seller-thumb-empty&quot;></div>'">`
         : '<div class="best-seller-thumb-empty"></div>'}
-      <p class="best-seller-label">${it.label}</p>
+      <p class="best-seller-label">${EXO.esc(it.label)}</p>
       <p class="best-seller-qty">${it.qty} sold</p>
     </div>`).join('') || '<p class="muted">No orders yet.</p>';
 }

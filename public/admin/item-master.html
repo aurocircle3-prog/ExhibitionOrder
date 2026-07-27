@@ -152,9 +152,9 @@ function renderFieldRows(){
   document.getElementById('fieldRows').innerHTML = fields.map((f, i) => {
     if (f.id === editingFieldId) {
       return `<tr class="field-row-edit">
-        <td><input id="editLabel" value="${f.label}"></td>
+        <td><input id="editLabel" value="${EXO.esc(f.label)}"></td>
         <td>${typeLabel(f)}</td>
-        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
+        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${EXO.esc(f.unit||'')}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editOptions" value="${EXO.esc((f.options||[]).join(', '))}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
           <button class="primary small" onclick="EXO.busy(this, () => saveEditField('${f.id}'))">Save</button>
           <button class="ghost small" onclick="cancelEditField()">Cancel</button>
@@ -162,7 +162,7 @@ function renderFieldRows(){
       </tr>`;
     }
     return `<tr>
-      <td>${f.label}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
       <td>${typeLabel(f)}</td>
       <td></td>
       <td>
@@ -216,9 +216,9 @@ async function deleteField(id){
 function renderItemForm(){
   document.getElementById('itemForm').innerHTML = fields.map(f => `
     <div>
-      <label>${f.label}${f.required?' <span style="color:#c0392b">*</span>':''}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
+      <label>${EXO.esc(f.label)}${f.required?' <span style="color:#c0392b">*</span>':''}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
       ${f.type==='dropdown'
-        ? `<select id="f_${f.key}"><option value="">—</option>${(f.options||[]).map(o=>`<option>${o}</option>`).join('')}</select>`
+        ? `<select id="f_${f.key}"><option value="">—</option>${(f.options||[]).map(o=>`<option>${EXO.esc(o)}</option>`).join('')}</select>`
         : `<input id="f_${f.key}" type="${f.type==='number'?'number':f.type==='date'?'date':'text'}" ${f.type==='number'?`step="${f.decimals?1/Math.pow(10,f.decimals):'any'}"`:''}>`}
     </div>`).join('');
   itemTagSelections = {};
@@ -238,10 +238,10 @@ function renderItemTagChips(){
     const selected = itemTagSelections[cat.key] || [];
     return `
       <div style="margin-top:12px">
-        <label>${cat.label} <span style="color:#c0392b">*</span></label>
+        <label>${EXO.esc(cat.label)} <span style="color:#c0392b">*</span></label>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
           ${cat.values.map(v => `
-            <button type="button" onclick="toggleItemTag('${cat.key}','${v.replace(/'/g,"\\'")}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${selected.includes(v)?'var(--brand)':'var(--line)'};background:${selected.includes(v)?'var(--brand)':'#fff'};color:${selected.includes(v)?'#fff':'inherit'}">${v}</button>`).join('')}
+            <button type="button" onclick="toggleItemTag('${cat.key}','${EXO.escAttr(v)}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${selected.includes(v)?'var(--brand)':'var(--line)'};background:${selected.includes(v)?'var(--brand)':'#fff'};color:${selected.includes(v)?'#fff':'inherit'}">${EXO.esc(v)}</button>`).join('')}
           ${!cat.values.length ? '<span class="muted">No values defined for this tag yet.</span>' : ''}
         </div>
       </div>`;
@@ -310,13 +310,13 @@ function renderItemsTable(list){
   const visibleIds = list.map(it => it.id);
   const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.has(id));
   const tagCols = enableVariants ? variantCategories : [];
-  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}${tagCols.map(c=>`<th>${c.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${EXO.esc(f.label)}</th>`).join('')}${tagCols.map(c=>`<th>${EXO.esc(c.label)}</th>`).join('')}<th>Photos</th><th></th></tr>`;
   document.getElementById('itemsBody').innerHTML = list.map(it => `
     <tr>
       <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
-      <td class="thumb-cell"><img src="${it.images?.[0]||''}" onerror="this.style.visibility='hidden'"></td>
-      ${fields.map(f=>`<td>${it.fields[f.key] ?? ''}</td>`).join('')}
-      ${tagCols.map(c=>`<td>${(it.variantSelections?.[c.key]||[]).join(', ') || '—'}</td>`).join('')}
+      <td class="thumb-cell"><img src="${EXO.esc(it.images?.[0]||'')}" onerror="this.style.visibility='hidden'"></td>
+      ${fields.map(f=>`<td>${EXO.esc(it.fields[f.key] ?? '')}</td>`).join('')}
+      ${tagCols.map(c=>`<td>${EXO.esc((it.variantSelections?.[c.key]||[]).join(', ')) || '—'}</td>`).join('')}
       <td>${(it.images||[]).length}/3</td>
       <td>
         <button class="ghost small" onclick="editItem('${it.id}')">Edit</button>
@@ -355,7 +355,7 @@ function resetForm(){
 function renderExistingPhotos(){
   document.getElementById('existingPhotos').innerHTML = editingImages.map((url,i) => `
     <div style="position:relative">
-      <img src="${url}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #e6e6e6">
+      <img src="${EXO.esc(url)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #e6e6e6">
       <button class="danger small" style="position:absolute;top:-8px;right:-8px;padding:2px 6px" onclick="removeImage(event,${i})">✕</button>
     </div>`).join('');
   const remaining = 3 - editingImages.length;

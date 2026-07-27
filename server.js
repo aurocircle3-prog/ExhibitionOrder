@@ -27,6 +27,14 @@ const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
 // back to whatever host the request actually came in on if APP_URL isn't
 // configured for production yet (e.g. local dev, or before the domain's
 // wired up) — same reasoning as the existing fallback these replaced.
+// Every "today" comparison in this app (orders today, exhibition validTill
+// expiry) means the calendar day in India, not UTC's — UTC's day boundary
+// runs 5.5 hours behind IST, so anything from midnight to 5:30am IST was
+// getting counted as "yesterday" before this. No DST in India, so a fixed
+// +5:30 offset is exact, not an approximation.
+function istDateString(d = new Date()) {
+  return new Date(d.getTime() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 function tenantBaseUrl(req, tenant) {
   if (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000') {
     const u = new URL(APP_URL);
@@ -54,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.66.0';
-const BUILD_TIME   = '2026-07-24T12:37:19Z';
+const APP_VERSION  = '1.67.0';
+const BUILD_TIME   = '2026-07-27T04:27:01Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -324,6 +332,14 @@ const userSchema = new mongoose.Schema({
   password: String,
   name: String, phone: String, email: String,
   active: { type: Boolean, default: true },
+  // Rewritten on every successful login. The JWT issued at that moment
+  // embeds this same value — auth() below checks the two match on every
+  // request, so logging in from a second device immediately invalidates
+  // the first device's session rather than letting both stay active for
+  // 7 days (the token's normal expiry). This is what actually makes a
+  // staff-count limit mean anything — without it, one login shared across
+  // 3 phones was indistinguishable from 3 separate accounts.
+  currentSessionId: String,
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -389,6 +405,7 @@ const orderSchema = new mongoose.Schema({
   showImages: { type: Boolean, default: true },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   deleted: { type: Boolean, default: false }, // soft delete — kept for audit/history, hidden from normal views
+  deletedAt: String, deletedByName: String,
   shareToken: { type: String, unique: true, sparse: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -752,13 +769,26 @@ async function resolveTenant(req, res, next) {
   next();
 }
 
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1] || req.query.token;
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     if (req.tenant && payload.tenantId !== req.tenant.id)
       return res.status(401).json({ error: 'Token does not belong to this company' });
+    // Single-session enforcement: logging in from a second device rewrites
+    // currentSessionId, which immediately invalidates every other token
+    // for this user rather than letting both stay valid for the token's
+    // full 7-day life. Tokens issued before this feature shipped have no
+    // sessionId in their payload — treated as always-valid here so
+    // deploying this doesn't force-logout everyone already signed in;
+    // they naturally start being checked the next time they log in fresh.
+    if (payload.sessionId) {
+      const user = await UserDB.findOne({ id: payload.id });
+      if (!user || user.active === false) return res.status(401).json({ error: 'Account no longer active.' });
+      if (user.currentSessionId && user.currentSessionId !== payload.sessionId)
+        return res.status(401).json({ error: 'You were signed out because this account was signed in from another device.', sessionInvalidated: true });
+    }
     req.user = payload;
     next();
   } catch { res.status(401).json({ error: 'Invalid or expired token' }); }
@@ -1485,7 +1515,13 @@ app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
     log.warn({ tenant: req.tenant.slug, loginId, ip: req.ip }, 'Failed login attempt');
     return res.status(401).json({ error: 'Invalid login ID or password' });
   }
-  const token = jwt.sign({ id: user.id, tenantId: req.tenant.id, role: user.role, loginId: user.loginId, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
+  // A fresh session ID on every login — this is what actually enforces
+  // "one device at a time" for this login. Any token issued before this
+  // moment (from another device) stops working the instant auth() next
+  // checks it, since its embedded sessionId no longer matches.
+  const sessionId = uuid();
+  await UserDB.update({ id: user.id }, { currentSessionId: sessionId });
+  const token = jwt.sign({ id: user.id, tenantId: req.tenant.id, role: user.role, loginId: user.loginId, name: user.name, sessionId }, JWT_SECRET, { expiresIn: '7d' });
   const { password: _pw, ...safeUser } = user;
   req.user = safeUser; // so logAudit can pick up actor info for this request
   logAudit(req, 'auth.login', 'user', user.id);
@@ -2784,11 +2820,10 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
   // Applied after the DB fetch, same as the !o.deleted filter above — a
   // simple string-prefix match works identically whether running on
   // Mongoose or the local JSON fallback, unlike trying to express "today"
-  // as part of the DB query object itself. Matches the same UTC-day
-  // convention /api/dashboard/stats already uses for "orders today".
+  // as part of the DB query object itself.
   if (req.query.date === 'today') {
-    const today = new Date().toISOString().slice(0, 10);
-    orders = orders.filter(o => (o.createdAt || '').slice(0, 10) === today);
+    const today = istDateString();
+    orders = orders.filter(o => istDateString(new Date(o.createdAt)) === today);
   }
   // Same tenantBaseUrl() the create route uses — always resolves to the
   // company's own subdomain regardless of which host (bare domain, www,
@@ -2848,11 +2883,38 @@ app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), asy
 
 // Soft delete — kept in the database for audit/history, just hidden from
 // every normal view (list, reports, the buyer's own share link). Admin-only.
+// Soft delete — recoverable for 30 days via /api/orders/deleted +
+// /api/orders/:id/restore, then permanently purged (see the lazy-purge
+// note on the deleted-orders list route below). Previously this was a
+// permanent, unrecoverable OrderDB.remove() — one accidental click on a
+// live order meant it was gone for good, with no trash to undo from.
 app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  await OrderDB.remove({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, {
+    deleted: true, deletedAt: new Date().toISOString(), deletedByName: req.user.name,
+  });
   logAudit(req, 'order.delete', 'order', req.params.id, { orderNo: order.orderNo });
+  res.json({ ok: true });
+});
+// Lists soft-deleted orders still inside the 30-day recovery window, and
+// — as a side effect, since there's no scheduled-job infrastructure in
+// this app — permanently purges any that have aged past it. "Lazy purge"
+// piggybacking on a route that's already querying this exact data is
+// simpler than standing up a cron job for something this low-stakes.
+app.get('/api/orders/deleted', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const all = (await OrderDB.find({ tenantId: req.tenant.id })).filter(o => o.deleted);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const [recoverable, expired] = [[], []];
+  for (const o of all) (new Date(o.deletedAt || 0).getTime() < cutoff ? expired : recoverable).push(o);
+  await Promise.all(expired.map(o => OrderDB.remove({ id: o.id, tenantId: req.tenant.id })));
+  res.json(recoverable.sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt)));
+});
+app.put('/api/orders/:id/restore', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || !order.deleted) return res.status(404).json({ error: 'Deleted order not found' });
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { deleted: false, deletedAt: null, deletedByName: null });
+  logAudit(req, 'order.restore', 'order', req.params.id, { orderNo: order.orderNo });
   res.json({ ok: true });
 });
 
@@ -2929,7 +2991,7 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
   const participants = await ExhibitionParticipantDB.find({ tenantId: req.tenant.id });
   const exhibitions = await ExhibitionDB.find({});
   const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istDateString();
   const [allItems, allOrders] = await Promise.all([
     ItemDB.find({ tenantId: req.tenant.id, active: true }),
     OrderDB.find({ tenantId: req.tenant.id }),
@@ -3173,7 +3235,7 @@ function consolidateSetLines(items) {
       itemId: group.map(g => g.itemId).join(','), label: group[0].label,
       scannerCode: [...new Set(group.map(g => g.scannerCode).filter(Boolean))].join(', '),
       images: [...new Set(group.flatMap(g => g.images || []))],
-      qty: group[0].qty,
+      qty: group[0].qty, variantTags: group[0].variantTags,
     };
   });
 }
@@ -3191,10 +3253,16 @@ async function getReportsForTenant(tenantId, exhibitionId) {
     byStaff[o.staffId].orderCount += 1;
     const lines = grouped ? consolidateSetLines(o.items) : (o.items || []);
     for (const line of lines) {
-      // Grouped mode keys by name+variant (the set's identity) since its
-      // component pieces have different Item Codes; ungrouped mode keeps
-      // keying by the real Item Code, unchanged from before.
-      const key = grouped ? (line.label + '::' + JSON.stringify(line.variantTags || {})) : line.itemId;
+      // Keyed by item + variant (not just item) in both modes now — a
+      // color/size variant is a genuinely different product line for
+      // reporting purposes. Previously this only keyed by itemId, so all
+      // variants of one item got summed together under whichever
+      // variant's label happened to be recorded first — e.g. "Necklace
+      // 5K (Red)" showing a total that actually included Blue and Green
+      // too. Since line.label already includes the variant suffix
+      // per-line, keying this way just naturally gives each variant its
+      // own correct row — no separate label-tracking needed.
+      const key = (grouped ? line.label : line.itemId) + '::' + JSON.stringify(line.variantTags || {});
       byItem[key] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: line.images || [], qty: 0 };
       byItem[key].qty += line.qty;
     }
@@ -3219,9 +3287,9 @@ app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin',
 // exhibition are already in that response — "orders today" needs its own
 // date-filtered count, so that's the only thing computed here).
 app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istDateString();
   const orders = await OrderDB.find({ tenantId: req.tenant.id });
-  const ordersToday = orders.filter(o => !o.deleted && (o.createdAt || '').slice(0, 10) === today).length;
+  const ordersToday = orders.filter(o => !o.deleted && istDateString(new Date(o.createdAt)) === today).length;
   res.json({ ordersToday });
 });
 

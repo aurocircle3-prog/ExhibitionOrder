@@ -162,7 +162,7 @@ function checkForDraft(){
   const itemCount = (draft.cart || []).reduce((s, c) => s + c.qty, 0);
   const banner = document.getElementById('draftBanner');
   const when = new Date(draft.savedAt).toLocaleTimeString();
-  banner.innerHTML = `<p style="margin:0">📝 You have an unfinished order from ${when}${draft.party ? ' for <b>' + draft.party.firmName + '</b>' : ''}${itemCount ? ` (${itemCount} item${itemCount===1?'':'s'})` : ''}.
+  banner.innerHTML = `<p style="margin:0">📝 You have an unfinished order from ${when}${draft.party ? ' for <b>' + EXO.esc(draft.party.firmName) + '</b>' : ''}${itemCount ? ` (${itemCount} item${itemCount===1?'':'s'})` : ''}.
     <button class="primary small" onclick="resumeDraft()">Resume it</button>
     <button class="ghost small" onclick="discardDraft()">Discard</button></p>`;
   banner.style.display = 'block';
@@ -227,9 +227,9 @@ function renderOrderDetailFields(){
   if (!orderCustomFields.length) { box.innerHTML = ''; return; }
   box.innerHTML = `<label style="margin-top:14px">Order details</label>` + orderCustomFields.map(f => `
     <div style="margin-top:6px">
-      <label class="muted" style="font-weight:400">${f.label}</label>
+      <label class="muted" style="font-weight:400">${EXO.esc(f.label)}</label>
       <input type="${f.type==='number'?'number':'text'}" ${f.type==='number'?`step="${1/Math.pow(10, f.decimals ?? 2)}"`:''}
-        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value;saveDraft()">
+        value="${EXO.esc(orderDetailValues[f.key] ?? '')}" oninput="orderDetailValues['${f.key}']=this.value;saveDraft()">
     </div>`).join('');
 }
 
@@ -253,12 +253,12 @@ async function showPendingOrders(){
   const pending = await ExoOffline.getReadableOutbox(tenantSlug);
   document.getElementById('pendingList').innerHTML = pending.length ? pending.map(o => `
     <div class="card" style="background:#f7f7f8;padding:12px;margin-top:8px">
-      <p style="margin:0"><b>${o.buyerName}</b>${o.buyerPhone ? ' · ' + o.buyerPhone : ''}</p>
+      <p style="margin:0"><b>${EXO.esc(o.buyerName)}</b>${o.buyerPhone ? ' · ' + EXO.esc(o.buyerPhone) : ''}</p>
       <p class="muted" style="margin:4px 0">Saved ${new Date(o.queuedAt).toLocaleString()} — not yet on the server</p>
       <ul style="margin:6px 0;padding-left:18px">
-        ${o.items.map(i => `<li>${i.label}${i.code ? ' (' + i.code + ')' : ''} × ${i.qty}${i.comment ? ' — ' + i.comment : ''}</li>`).join('')}
+        ${o.items.map(i => `<li>${EXO.esc(i.label)}${i.code ? ' (' + EXO.esc(i.code) + ')' : ''} × ${i.qty}${i.comment ? ' — ' + EXO.esc(i.comment) : ''}</li>`).join('')}
       </ul>
-      ${o.remark ? `<p class="muted" style="margin:4px 0">Remark: ${o.remark}</p>` : ''}
+      ${o.remark ? `<p class="muted" style="margin:4px 0">Remark: ${EXO.esc(o.remark)}</p>` : ''}
     </div>`).join('') : '<p class="muted">Nothing pending — everything is synced.</p>';
   document.getElementById('pendingModal').classList.add('open');
 }
@@ -305,7 +305,7 @@ async function searchParty(q){
     if (!isNetworkFailure(e)) throw e;
     results = await ExoOffline.searchPartiesOffline(tenantSlug, q);
   }
-  box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${JSON.stringify(p)})'><span>${p.firmName} — ${p.phone}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
+  box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${EXO.esc(JSON.stringify(p))})'><span>${EXO.esc(p.firmName)} — ${EXO.esc(p.phone)}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
 }
 function pickParty(p){ party = p; showPartyPicked(); }
 function showPartyPicked(){
@@ -466,7 +466,7 @@ function renderSearchSuggestions(q){
   if (!matches.length) { box.style.display = 'none'; return; }
   box.innerHTML = matches.map(it => `
     <div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
-      <b>${it.fields?.itemName || it.scannerCode}</b> <span class="muted">${it.scannerCode}</span>
+      <b>${EXO.esc(it.fields?.itemName || it.scannerCode)}</b> <span class="muted">${EXO.esc(it.scannerCode)}</span>
     </div>`).join('');
   box.style.display = 'block';
 }
@@ -550,37 +550,37 @@ function renderVariantPicker(){
   const [primaryCat, secondaryCat] = pendingCats;
   const extraCats = pendingCats.slice(2);
   box.innerHTML = `
-    <p style="margin:0 0 8px"><b>${pendingVariantItem.fields?.itemName || pendingVariantItem.scannerCode}</b> <span class="muted">${pendingVariantItem.scannerCode}</span></p>
+    <p style="margin:0 0 8px"><b>${EXO.esc(pendingVariantItem.fields?.itemName || pendingVariantItem.scannerCode)}</b> <span class="muted">${EXO.esc(pendingVariantItem.scannerCode)}</span></p>
     ${extraCats.map(cat => `
       <div style="margin-bottom:10px">
-        <label>${cat.label}</label>
+        <label>${EXO.esc(cat.label)}</label>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-          ${cat.values.map(v => `<button type="button" onclick="pendingExtraPicks['${cat.key}']='${v.replace(/'/g,"\\'")}';renderVariantPicker()" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingExtraPicks[cat.key]===v?'var(--brand)':'var(--line)'};background:${pendingExtraPicks[cat.key]===v?'var(--brand)':'#fff'};color:${pendingExtraPicks[cat.key]===v?'#fff':'inherit'}">${v}</button>`).join('')}
+          ${cat.values.map(v => `<button type="button" onclick="pendingExtraPicks['${cat.key}']='${EXO.escAttr(v)}';renderVariantPicker()" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingExtraPicks[cat.key]===v?'var(--brand)':'var(--line)'};background:${pendingExtraPicks[cat.key]===v?'var(--brand)':'#fff'};color:${pendingExtraPicks[cat.key]===v?'#fff':'inherit'}">${EXO.esc(v)}</button>`).join('')}
         </div>
       </div>`).join('')}
-    <label>${primaryCat.label} <span class="muted">— tap to enter ${secondaryCat ? secondaryCat.label.toLowerCase() + ' quantities' : 'a quantity'}</span></label>
+    <label>${EXO.esc(primaryCat.label)} <span class="muted">— tap to enter ${secondaryCat ? EXO.esc(secondaryCat.label.toLowerCase()) + ' quantities' : 'a quantity'}</span></label>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-      ${primaryCat.values.map(v => `<button type="button" onclick="toggleVariantPrimary('${v.replace(/'/g,"\\'")}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingPicks[v]?'var(--brand)':'var(--line)'};background:${pendingPicks[v]?'var(--brand)':'#fff'};color:${pendingPicks[v]?'#fff':'inherit'}">${v}${pendingPicks[v]&&Object.values(pendingPicks[v]).some(Boolean)?' · '+Object.values(pendingPicks[v]).reduce((s,n)=>s+(Number(n)||0),0):''}</button>`).join('')}
+      ${primaryCat.values.map(v => `<button type="button" onclick="toggleVariantPrimary('${EXO.escAttr(v)}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingPicks[v]?'var(--brand)':'var(--line)'};background:${pendingPicks[v]?'var(--brand)':'#fff'};color:${pendingPicks[v]?'#fff':'inherit'}">${EXO.esc(v)}${pendingPicks[v]&&Object.values(pendingPicks[v]).some(Boolean)?' · '+Object.values(pendingPicks[v]).reduce((s,n)=>s+(Number(n)||0),0):''}</button>`).join('')}
     </div>
     ${primaryCat.values.filter(v => pendingPicks[v]).map(v => `
       <div style="border:0.5px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:8px">
-        <p style="font-size:13px;font-weight:500;margin:0 0 8px">${v}</p>
+        <p style="font-size:13px;font-weight:500;margin:0 0 8px">${EXO.esc(v)}</p>
         ${secondaryCat ? `
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
           ${secondaryCat.values.map(sv => `
             <div style="text-align:center">
-              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">${sv}</label>
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">${EXO.esc(sv)}</label>
               <div style="display:flex;align-items:center;gap:2px">
-                <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',-1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
-                <input type="number" min="0" placeholder="0" value="${pendingPicks[v][sv]||''}" oninput="setVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',this.value)" style="width:100%;padding:4px 2px;text-align:center;font-size:13px">
-                <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
+                <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','${EXO.escAttr(sv)}',-1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
+                <input type="number" min="0" placeholder="0" value="${EXO.esc(pendingPicks[v][sv]||'')}" oninput="setVariantQty('${EXO.escAttr(v)}','${EXO.escAttr(sv)}',this.value)" style="width:100%;padding:4px 2px;text-align:center;font-size:13px">
+                <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','${EXO.escAttr(sv)}',1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
               </div>
             </div>`).join('')}
         </div>` : `
         <div style="display:flex;align-items:center;gap:4px;width:140px">
-          <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','_qty',-1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
-          <input type="number" min="0" placeholder="Qty" value="${pendingPicks[v]['_qty']||''}" oninput="setVariantQty('${v.replace(/'/g,"\\'")}','_qty',this.value)" style="width:100%;text-align:center">
-          <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','_qty',1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
+          <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','_qty',-1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
+          <input type="number" min="0" placeholder="Qty" value="${EXO.esc(pendingPicks[v]['_qty']||'')}" oninput="setVariantQty('${EXO.escAttr(v)}','_qty',this.value)" style="width:100%;text-align:center">
+          <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','_qty',1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
         </div>`}
       </div>`).join('')}
     <div class="btn-row" style="margin-top:12px">
@@ -651,12 +651,12 @@ function renderCart(){
   const existingScroll = document.querySelector('#cartRows .table-scroll');
   const scrollLeft = existingScroll ? existingScroll.scrollLeft : 0;
   if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; saveDraft(); return; }
-  const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
+  const fieldCols = orderFields.map(f => `<th>${EXO.esc(f.label)}${f.unit ? ' ('+EXO.esc(f.unit)+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
     <tr>
-      <td>${c.label}<br><span class="muted">${c.code}${c.tagLabel ? ' · ' + c.tagLabel : ''}</span></td>
-      ${orderFields.map(f => `<td><input style="width:80px" value="${c.extra?.[f.key] ?? ''}" oninput="updateExtra('${c.lineId}','${f.key}',this.value)"></td>`).join('')}
-      <td><input style="width:140px" placeholder="Optional note" value="${c.comment || ''}" oninput="updateComment('${c.lineId}',this.value)"></td>
+      <td>${EXO.esc(c.label)}<br><span class="muted">${EXO.esc(c.code)}${c.tagLabel ? ' · ' + EXO.esc(c.tagLabel) : ''}</span></td>
+      ${orderFields.map(f => `<td><input style="width:80px" value="${EXO.esc(c.extra?.[f.key] ?? '')}" oninput="updateExtra('${c.lineId}','${f.key}',this.value)"></td>`).join('')}
+      <td><input style="width:140px" placeholder="Optional note" value="${EXO.esc(c.comment || '')}" oninput="updateComment('${c.lineId}',this.value)"></td>
       <td class="qty-ctrl"><button class="ghost small" onclick="changeQty('${c.lineId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.lineId}',1)">+</button></td>
       <td><button class="danger small" onclick="removeLine('${c.lineId}')">✕</button></td>
     </tr>`).join('');

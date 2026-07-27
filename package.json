@@ -9,6 +9,9 @@
     "seed:platform-admin": "node db/seed-platform-admin.js"
   },
   "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1085.0",
     "bcryptjs": "^3.0.3",
@@ -25,7 +28,7 @@
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
     "uuid": "^13.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "pino-pretty": "^13.0.0"
