@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.72.1';
-const BUILD_TIME   = '2026-07-31T10:10:03Z';
+const APP_VERSION  = '1.73.0';
+const BUILD_TIME   = '2026-07-31T10:45:15Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -944,12 +944,13 @@ app.post('/api/platform/login', loginLimiter, async (req, res) => {
 app.get('/api/platform/tenants', platformAuth, async (req, res) => {
   const tenants = await TenantDB.find({});
   const summaries = await Promise.all(tenants.map(async t => {
-    const [userCount, itemCount, orderCount, partyCount] = await Promise.all([
+    const [userCount, itemCount, orders, partyCount] = await Promise.all([
       UserDB.count({ tenantId: t.id }),
       ItemDB.count({ tenantId: t.id, active: true }),
-      OrderDB.count({ tenantId: t.id }),
+      OrderDB.find({ tenantId: t.id }),
       PartyDB.count({ tenantId: t.id }),
     ]);
+    const orderCount = orders.filter(o => !o.deleted).length;
     return { id: t.id, name: t.name, slug: t.slug, natureOfBusiness: t.natureOfBusiness || '', plan: t.plan, active: t.active !== false, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
   }));
   summaries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -961,13 +962,14 @@ app.get('/api/platform/tenants/:id', platformAuth, async (req, res) => {
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const users = await UserDB.find({ tenantId: tenant.id });
   const safeUsers = users.map(({ password, ...u }) => u);
-  const [itemCount, orderCount, partyCount, exhibitionCount, fieldDefs] = await Promise.all([
+  const [itemCount, orders, partyCount, exhibitionCount, fieldDefs] = await Promise.all([
     ItemDB.count({ tenantId: tenant.id, active: true }),
-    OrderDB.count({ tenantId: tenant.id }),
+    OrderDB.find({ tenantId: tenant.id }),
     PartyDB.count({ tenantId: tenant.id }),
     ExhibitionParticipantDB.count({ tenantId: tenant.id }),
     FieldDefDB.find({ tenantId: tenant.id, active: true }),
   ]);
+  const orderCount = orders.filter(o => !o.deleted).length;
   res.json({
     tenant, users: safeUsers, fieldDefs,
     counts: { itemCount, orderCount, partyCount, exhibitionCount },
@@ -3084,7 +3086,7 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
   ]);
   const itemCountByEx = {}, orderCountByEx = {};
   allItems.forEach(i => { if (i.exhibitionId) itemCountByEx[i.exhibitionId] = (itemCountByEx[i.exhibitionId] || 0) + 1; });
-  allOrders.forEach(o => { if (o.exhibitionId) orderCountByEx[o.exhibitionId] = (orderCountByEx[o.exhibitionId] || 0) + 1; });
+  allOrders.filter(o => !o.deleted).forEach(o => { if (o.exhibitionId) orderCountByEx[o.exhibitionId] = (orderCountByEx[o.exhibitionId] || 0) + 1; });
   const result = participants
     .map(p => {
       const ex = byId[p.exhibitionId];
