@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.67.0';
-const BUILD_TIME   = '2026-07-27T04:27:01Z';
+const APP_VERSION  = '1.68.0';
+const BUILD_TIME   = '2026-07-31T08:53:20Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -71,6 +71,21 @@ if (!process.env.JWT_SECRET) {
     process.exit(1);
   }
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
+}
+
+// Without MONGO_URI, the app silently falls back to a local JSON file (see
+// connectDB below) — fine for local dev, but on Render that file lives on
+// an ephemeral disk that gets wiped on every redeploy. Missing this in
+// production doesn't crash anything; it just quietly starts throwing away
+// every order and every buyer the moment the next deploy happens, with no
+// error anyone would see. That's a worse outcome than a guessable JWT
+// secret, so it gets the same hard stop.
+if (!process.env.MONGO_URI) {
+  if (process.env.NODE_ENV === 'production') {
+    log.error('MONGO_URI env var is not set. Refusing to start in production — without it, data silently falls back to a local file that gets wiped on every redeploy. Set MONGO_URI on Render and redeploy.');
+    process.exit(1);
+  }
+  log.warn('MONGO_URI env var not set — using local JSON file for storage (fine for local dev only).');
 }
 
 // ── CLOUDFLARE R2 SETUP (same pattern as ecatlog — zero egress, R2 with local fallback) ──
