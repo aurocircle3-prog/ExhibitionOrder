@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.74.0';
-const BUILD_TIME   = '2026-07-31T11:17:51Z';
+const APP_VERSION  = '1.75.0';
+const BUILD_TIME   = '2026-07-31T12:32:09Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3387,9 +3387,34 @@ app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin',
 // date-filtered count, so that's the only thing computed here).
 app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const today = istDateString();
-  const orders = await OrderDB.find({ tenantId: req.tenant.id });
-  const ordersToday = orders.filter(o => !o.deleted && istDateString(new Date(o.createdAt)) === today).length;
-  res.json({ ordersToday });
+  const [orders, participants] = await Promise.all([
+    OrderDB.find({ tenantId: req.tenant.id }),
+    ExhibitionParticipantDB.find({ tenantId: req.tenant.id }),
+  ]);
+  const liveOrders = orders.filter(o => !o.deleted);
+  const ordersToday = liveOrders.filter(o => istDateString(new Date(o.createdAt)) === today).length;
+
+  // Which exhibitions currently count as "ongoing" — same rule GET
+  // /api/exhibitions uses (closed by the company, or AuroCircle's paid-for
+  // window expired, either way it's no longer "ongoing").
+  const currentExhibitionIds = new Set(
+    participants.filter(p => !p.closed && !(p.validTill && p.validTill < today)).map(p => p.exhibitionId)
+  );
+  const ongoingOrders = liveOrders.filter(o => currentExhibitionIds.has(o.exhibitionId));
+
+  // Whichever Order Form field(s) this company has flagged "Show total"
+  // on — the exact same flag already driving the totals footer on a
+  // single printed order — summed here across every ongoing-exhibition
+  // order instead of just one. Net weight for a gold jewellery company,
+  // amount for a garment company, whatever each company already told the
+  // app matters to them; nothing new to configure.
+  const totalFields = (req.tenant.orderFields || []).filter(f => f.showTotal);
+  const fieldTotals = totalFields.map(f => ({
+    key: f.key, label: f.label, unit: f.unit || '',
+    total: Number(ongoingOrders.reduce((sum, o) => sum + (Number(o.fieldTotals?.[f.key]) || 0), 0).toFixed(2)),
+  }));
+
+  res.json({ ordersToday, fieldTotals });
 });
 
 // ── Custom reports (client-facing) ────────────────────────────────────────

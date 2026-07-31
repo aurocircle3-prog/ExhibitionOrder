@@ -17,7 +17,7 @@
 
   <div class="tab-panel" id="dashtab-overview">
     <p class="muted" style="text-align:right;margin:0 0 6px;font-size:12px">Last updated: <span id="lastUpdated"></span> · <a href="#" onclick="load();return false;">Refresh</a></p>
-    <div class="grid cols-3" id="statRow" style="margin-bottom:18px"></div>
+    <div class="grid cols-4" id="statRow" style="margin-bottom:18px"></div>
     <h3>Current exhibitions</h3>
     <div class="grid cols-2" id="currentExhibitions"></div>
   </div>
@@ -60,6 +60,15 @@ function statCard(label, value, href){
     <div style="font-size:28px;font-weight:800;margin-top:4px">${value}</div>
   </a>`;
 }
+// Non-clickable — there's no drill-down page for "total net weight" the
+// way there is for an order count, so this doesn't get the link/hover
+// treatment statCard() above has.
+function plainStatCard(label, value){
+  return `<div class="card" style="text-align:center;padding:16px">
+    <div class="muted" style="font-size:12px">${label}</div>
+    <div style="font-size:28px;font-weight:800;margin-top:4px">${value}</div>
+  </div>`;
+}
 
 function exhibitionCard(e){
   const dates = e.startDate ? `${e.startDate}${e.endDate ? ' – ' + e.endDate : ''}` : '';
@@ -101,7 +110,8 @@ async function load(){
   document.getElementById('statRow').innerHTML =
     statCard('Orders today', stats.ordersToday, '/staff/orders.html?date=today') +
     statCard('Orders in ongoing exhibitions', ordersInCurrent, '/staff/orders.html') +
-    statCard('Pending confirmation', pendingOrders.length, '/staff/orders.html?status=pending');
+    statCard('Pending confirmation', pendingOrders.length, '/staff/orders.html?status=pending') +
+    (stats.fieldTotals || []).map(f => plainStatCard(`Total ${EXO.esc(f.label)} <span class="muted" style="font-size:11px">(ongoing)</span>`, f.total.toLocaleString('en-IN') + (f.unit ? ' ' + EXO.esc(f.unit) : ''))).join('');
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 
