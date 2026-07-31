@@ -875,8 +875,22 @@ function renderReportColumns(){
       <div style="flex:1;min-width:120px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
         <input placeholder="defaults to field name" value="${EXO.esc(c.label||'')}" oninput="updateReportColumn('${c._id}','label',this.value)">
       </div>
+      ${reportColumnIsNumeric(c, rowType, itemFieldOptions) ? `
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:8px">
+        <input type="checkbox" style="width:auto" ${c.showTotal?'checked':''} onchange="updateReportColumn('${c._id}','showTotal',this.checked)"> <span class="muted" style="font-weight:400">Show total</span>
+      </label>` : ''}
       <button class="danger small" title="Remove" onclick="removeReportColumn('${c._id}')">✕</button>
     </div>`).join('') || '<p class="muted">No columns yet — add at least one.</p>';
+}
+// A column can have a "show total" checkbox only if summing it actually
+// means something — numeric Item Master / Order Details fields, and
+// formulas (always numeric). Text fields and built-in fields (party name,
+// order number, status) can't be totaled.
+function reportColumnIsNumeric(c, rowType, itemFieldOptions){
+  if (c.type === 'formula') return true;
+  if (c.type === 'itemfield') return rowType === 'order' || itemFieldOptions.some(f => f.key === c.fieldKey && f.type === 'number');
+  if (c.type === 'orderfield') return detailOrderFieldDefs.find(f => f.key === c.fieldKey)?.type === 'number';
+  return false;
 }
 async function saveCustomReport(){
   const err = document.getElementById('reportBuilderErr'); err.style.display = 'none';
@@ -885,7 +899,7 @@ async function saveCustomReport(){
   if (!reportColumns.length) { err.textContent = 'Add at least one column'; err.style.display = 'block'; return; }
   renderReportColumns(); // self-heals any column whose dropdown was never explicitly touched
   const rowType = document.getElementById('reportRowType').value;
-  const payload = { name, rowType, columns: reportColumns.map(c => ({ id: c.id, type: c.type, fieldKey: c.fieldKey, formula: c.formula, label: c.label })) };
+  const payload = { name, rowType, columns: reportColumns.map(c => ({ id: c.id, type: c.type, fieldKey: c.fieldKey, formula: c.formula, label: c.label, showTotal: c.showTotal })) };
   try {
     if (editingReportId) await platformFetch(`/tenants/${lastTenantId}/custom-reports/${editingReportId}`, { method: 'PUT', body: JSON.stringify(payload) });
     else await platformFetch(`/tenants/${lastTenantId}/custom-reports`, { method: 'POST', body: JSON.stringify(payload) });

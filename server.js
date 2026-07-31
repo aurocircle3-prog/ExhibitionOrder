@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.73.0';
-const BUILD_TIME   = '2026-07-31T10:45:15Z';
+const APP_VERSION  = '1.74.0';
+const BUILD_TIME   = '2026-07-31T11:17:51Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3198,11 +3198,13 @@ function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields
       if (rowType === 'order' && f.type !== 'number') throw Object.assign(new Error(`"${f.label}" is text, not a number — order-level rows can only total numeric Item Master fields`), { status: 400 });
       col.fieldKey = raw.fieldKey; col.unit = f.unit || ''; col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+      if (f.type === 'number') col.showTotal = !!raw.showTotal;
     } else if (raw.type === 'orderfield') {
       const f = orderFieldByKey[raw.fieldKey];
       if (!f) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields`), { status: 400 });
       col.fieldKey = raw.fieldKey; col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+      if (f.type === 'number') col.showTotal = !!raw.showTotal;
     } else { // formula
       const formula = String(raw.formula || '').trim();
       if (!formula) throw Object.assign(new Error('Formula column needs a formula'), { status: 400 });
@@ -3210,6 +3212,7 @@ function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields
       if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
       col.formula = formula;
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+      col.showTotal = !!raw.showTotal; // formulas are always numeric
     }
     out.push(col);
   }
@@ -3295,7 +3298,15 @@ async function computeReport(tenant, reportDef, exhibitionId) {
       rows.push(row);
     }
   }
-  return rows;
+  // Grand totals — one number per showTotal column, summed across every
+  // row in the report (not per-order; this is the whole report's total,
+  // the way a printed ledger's bottom line adds up every row on the page).
+  const totals = {};
+  reportDef.columns.forEach(col => {
+    if (!col.showTotal) return;
+    totals[col.id] = rows.reduce((sum, row) => sum + (typeof row[col.id] === 'number' ? row[col.id] : 0), 0);
+  });
+  return { rows, totals };
 }
 
 // When a tenant displays multi-piece sets as one row on the buyer-facing
@@ -3361,9 +3372,9 @@ async function getReportsForTenant(tenantId, exhibitionId) {
     byStaff: Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount),
   };
 }
-// Best sellers for the Dashboard — same underlying aggregation as the
-// Reports tab's item-wise table, just capped to the top N and exposed on
-// its own lightweight endpoint so Dashboard doesn't have to pull every
+// Best sellers for the Dashboard — reuses getReportsForTenant's byItem
+// aggregation, just capped to the top N and exposed on its own
+// lightweight endpoint so Dashboard doesn't have to pull every
 // party/staff aggregate it doesn't need.
 app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
@@ -3389,20 +3400,22 @@ app.get('/api/reports/custom', resolveTenant, auth, requireRole('admin', 'staff'
 app.get('/api/reports/custom/:id', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const report = await ReportDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!report) return res.status(404).json({ error: 'Report not found' });
-  const rows = await computeReport(req.tenant, report, req.query.exhibitionId);
-  res.json({ name: report.name, rowType: report.rowType, columns: report.columns.map(c => ({ id: c.id, label: c.label, unit: c.unit, decimals: c.decimals })), rows });
+  const { rows, totals } = await computeReport(req.tenant, report, req.query.exhibitionId);
+  res.json({ name: report.name, rowType: report.rowType, columns: report.columns.map(c => ({ id: c.id, label: c.label, unit: c.unit, decimals: c.decimals, showTotal: !!c.showTotal })), rows, totals });
 });
 app.get('/api/reports/custom/:id/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const report = await ReportDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!report) return res.status(404).json({ error: 'Report not found' });
   try {
-    const rows = await computeReport(req.tenant, report, req.query.exhibitionId);
+    const { rows, totals } = await computeReport(req.tenant, report, req.query.exhibitionId);
     const headers = report.columns.map(c => c.label);
-    const dataRows = rows.map(row => report.columns.map(c => {
-      const v = row[c.id];
-      if (typeof v === 'number' && c.decimals != null) return Number(v.toFixed(c.decimals));
-      return v ?? '';
-    }));
+    const fmt = (v, c) => (typeof v === 'number' && c.decimals != null) ? Number(v.toFixed(c.decimals)) : (v ?? '');
+    const dataRows = rows.map(row => report.columns.map(c => fmt(row[c.id], c)));
+    // A totals row at the bottom, same idea as the printed-order footer
+    // totals — only if at least one column actually has showTotal on.
+    if (Object.keys(totals).length) {
+      dataRows.push(report.columns.map((c, i) => i === 0 ? 'Total' : (c.id in totals ? fmt(totals[c.id], c) : '')));
+    }
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
     ws['!cols'] = headers.map(() => ({ wch: 18 }));
@@ -3412,40 +3425,6 @@ app.get('/api/reports/custom/:id/export', resolveTenant, auth, requireRole('admi
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byParty);
-});
-app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byItem);
-});
-app.get('/api/reports/staff-wise', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byStaff);
-});
-// Excel export for the three built-in reports — previously only Custom
-// Reports had this; same XLSX pattern reused here for consistency.
-function sendReportExcel(res, filename, headers, rows) {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  ws['!cols'] = headers.map(() => ({ wch: 18 }));
-  XLSX.utils.book_append_sheet(wb, ws, filename.slice(0, 31));
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/[^\w\- ]/g, '')}.xlsx"`);
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.send(buf);
-}
-app.get('/api/reports/party-wise/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const byParty = (await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byParty;
-  sendReportExcel(res, 'Party-wise orders', ['Buyer', 'Phone', 'Orders'], byParty.map(p => [p.partyName, p.partyPhone, p.orderCount]));
-});
-app.get('/api/reports/item-wise/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const byItem = (await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byItem;
-  sendReportExcel(res, 'Item-wise orders', ['Item', 'Scan code', 'Qty ordered'], byItem.map(i => [i.label, i.scannerCode || '', i.qty]));
-});
-app.get('/api/reports/staff-wise/export', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const byStaff = (await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byStaff;
-  sendReportExcel(res, 'Staff-wise orders', ['Staff', 'Orders'], byStaff.map(s => [s.staffName, s.orderCount]));
 });
 
 // Admin-only view into the audit trail — filter by tenant automatically,
