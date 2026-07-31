@@ -90,7 +90,7 @@ function renderRows(list){
       <td>${EXO.esc(b.city) || '—'}</td>
       <td>${EXO.esc(b.email) || '—'}</td>
       <td>
-        <button class="ghost small" onclick="editBuyer('${b.id}')">Edit</button>
+        ${b.cardImageUrl ? `<a href="${EXO.esc(b.cardImageUrl)}" target="_blank">📇 Card</a> · ` : ''}<button class="ghost small" onclick="editBuyer('${b.id}')">Edit</button>
         <button class="danger small" onclick="deleteBuyer('${b.id}','${EXO.escAttr(b.firmName)}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="7" class="muted">No buyers yet — they\'ll also appear here automatically once added from Take Order.</td></tr>';

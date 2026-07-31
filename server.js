@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.68.0';
-const BUILD_TIME   = '2026-07-31T08:53:20Z';
+const APP_VERSION  = '1.70.0';
+const BUILD_TIME   = '2026-07-31T09:10:18Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -2486,26 +2486,97 @@ function callVisionApi(base64Image) {
     req.end();
   });
 }
+// Curated list of major Indian business hubs. The target market here is
+// India-based trade/jewellery businesses, so checking card text directly
+// against a compact list catches the large majority of real cards without
+// needing a geocoding API call per scan.
+const CARD_OCR_CITIES = [
+  'Mumbai','New Delhi','Delhi','Bengaluru','Bangalore','Hyderabad','Ahmedabad','Chennai',
+  'Kolkata','Surat','Pune','Jaipur','Lucknow','Kanpur','Nagpur','Indore','Thane','Bhopal',
+  'Visakhapatnam','Patna','Vadodara','Ghaziabad','Ludhiana','Agra','Nashik','Faridabad',
+  'Meerut','Rajkot','Kalyan','Vasai','Varanasi','Coimbatore','Jodhpur','Madurai','Raipur',
+  'Kota','Guwahati','Chandigarh','Mysuru','Mysore','Bareilly','Aligarh','Tiruppur','Moradabad',
+  'Jalandhar','Bhubaneswar','Salem','Guntur','Bhavnagar','Dehradun','Kochi','Cochin','Amritsar',
+  'Jamnagar','Ujjain','Noida','Gurugram','Gurgaon','Navi Mumbai','Trichy','Mangaluru','Mangalore',
+];
+const FIRM_SUFFIX_RE = /\b(pvt\.?\s*ltd\.?|private\s+limited|l\.?l\.?p\.?|ltd\.?|limited|&\s?co\.?|&\s?sons|jewell?ers?|jewell?ery|enterprises?|industries|exports?|imports?|international|trading|corporation|corp\.?|group|inc\.?|company|gems?|diamonds?|goldsmiths?|bullion|creations?|designs?)\b/i;
+const DESIGNATION_RE = /\b(proprietor|director|partner|c\.?e\.?o\.?|managing director|owner|manager|founder|chairman|president)\b/i;
+const NAME_PREFIX_RE = /^(mr|mrs|ms|miss|dr)\.?\s+/i;
 function parseCardText(text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const phoneMatch = text.match(/(\+?\d[\d\s-]{8,}\d)/);
+  const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
-  return {
-    firmName: lines[0] || '',
-    contactPerson: lines[1] || '',
-    phone: phoneMatch ? phoneMatch[1].replace(/\s+/g, '') : '',
-    email: emailMatch ? emailMatch[0] : '',
+  const email = emailMatch ? emailMatch[0] : '';
+
+  // Phone: collect every number-like sequence, not just the first match —
+  // cards often have a landline AND a mobile, or two mobiles. Score
+  // candidates instead of blindly taking whichever appears first: an
+  // explicit "+" is the clearest signal (per the original ask), then a
+  // bare "91" prefix, then the Indian-mobile digit pattern (10 digits
+  // starting 6-9). The digit-count filter also drops 6-digit PIN codes
+  // and other short numeric fragments that used to get matched by mistake.
+  const phoneCandidates = [...text.matchAll(/(\+?\d[\d\s\-().]{7,}\d)/g)]
+    .map(m => ({ raw: m[1], digits: m[1].replace(/\D/g, ''), hasPlus: m[1].trim().startsWith('+') }))
+    .filter(p => p.digits.length >= 10 && p.digits.length <= 13);
+  const phoneBest =
+    phoneCandidates.find(p => p.hasPlus) ||
+    phoneCandidates.find(p => p.digits.length === 12 && p.digits.startsWith('91')) ||
+    phoneCandidates.find(p => p.digits.length === 10 && /^[6-9]/.test(p.digits)) ||
+    phoneCandidates[0];
+  const phone = phoneBest ? (phoneBest.hasPlus ? '+' + phoneBest.digits : phoneBest.digits) : '';
+
+  // City: curated list first (fast, reliable for this market), then fall
+  // back to "the word right before a 6-digit PIN code" — how Indian
+  // addresses are almost always formatted when the city itself isn't a
+  // recognized major hub.
+  let city = '';
+  for (const c of CARD_OCR_CITIES) {
+    if (new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(text)) { city = c; break; }
+  }
+  if (!city) {
+    const pinMatch = text.match(/([A-Za-z]+)[\s,-]*\d{6}\b/);
+    if (pinMatch) city = pinMatch[1];
+  }
+
+  // Firm name / contact person: classify by keyword, not line position.
+  // A line is a firm-name candidate if it contains a business suffix
+  // (Pvt Ltd, Jewellers, Enterprises, etc); a contact-person candidate if
+  // it carries a title (Mr/Dr) or a designation (Proprietor/Director) —
+  // both far more reliable signals than "whichever line happened to be
+  // first or second" on a card whose layout varies wildly.
+  const isNoiseLine = (line) => {
+    if (email && line.includes(email)) return true;
+    if (/@|www\.|https?:\/\//i.test(line)) return true;
+    if ((line.match(/\d/g) || []).length >= 5) return true; // phone/PIN/address-heavy line
+    return false;
   };
+  const nameLines = rawLines.filter(l => !isNoiseLine(l));
+
+  let firmName = nameLines.find(l => FIRM_SUFFIX_RE.test(l)) || '';
+  const contactRaw = nameLines.find(l => DESIGNATION_RE.test(l) || NAME_PREFIX_RE.test(l)) || '';
+  let contactPerson = contactRaw
+    .replace(NAME_PREFIX_RE, '').replace(DESIGNATION_RE, '')
+    .replace(/[-,|:]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Still nothing? Fall back to position order among whatever's left —
+  // better a rough guess for staff to correct than a blank field (same
+  // "best-effort, staff always reviews" spirit as before), just now
+  // skipping lines already claimed or classified as noise instead of
+  // blindly taking line 1 / line 2 regardless of what they actually are.
+  const leftover = nameLines.filter(l => l !== firmName && l !== contactRaw);
+  if (!firmName) firmName = leftover[0] || nameLines[0] || '';
+  if (!contactPerson) contactPerson = leftover.find(l => l !== firmName) || '';
+
+  return { firmName, contactPerson, phone, email, city };
 }
 async function runVisitingCardOcr(base64Image) {
-  if (!process.env.OCR_API_KEY) return { firmName: '', contactPerson: '', phone: '', email: '' };
+  if (!process.env.OCR_API_KEY) return { firmName: '', contactPerson: '', phone: '', email: '', city: '' };
   try {
     const result = await callVisionApi(base64Image);
     const text = result?.responses?.[0]?.fullTextAnnotation?.text || '';
     return parseCardText(text);
   } catch (e) {
     log.error({ err: e }, 'OCR Vision API call failed');
-    return { firmName: '', contactPerson: '', phone: '', email: '' };
+    return { firmName: '', contactPerson: '', phone: '', email: '', city: '' };
   }
 }
 
