@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.70.0';
-const BUILD_TIME   = '2026-07-31T09:10:18Z';
+const APP_VERSION  = '1.71.0';
+const BUILD_TIME   = '2026-07-31T09:21:05Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3413,15 +3413,37 @@ app.get('/api/reports/custom/:id/export', resolveTenant, auth, requireRole('admi
 });
 
 app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id)).byParty);
+  res.json((await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byParty);
 });
-
 app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id)).byItem);
+  res.json((await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byItem);
 });
-
 app.get('/api/reports/staff-wise', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id)).byStaff);
+  res.json((await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byStaff);
+});
+// Excel export for the three built-in reports — previously only Custom
+// Reports had this; same XLSX pattern reused here for consistency.
+function sendReportExcel(res, filename, headers, rows) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = headers.map(() => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(wb, ws, filename.slice(0, 31));
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/[^\w\- ]/g, '')}.xlsx"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+}
+app.get('/api/reports/party-wise/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const byParty = (await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byParty;
+  sendReportExcel(res, 'Party-wise orders', ['Buyer', 'Phone', 'Orders'], byParty.map(p => [p.partyName, p.partyPhone, p.orderCount]));
+});
+app.get('/api/reports/item-wise/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const byItem = (await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byItem;
+  sendReportExcel(res, 'Item-wise orders', ['Item', 'Scan code', 'Qty ordered'], byItem.map(i => [i.label, i.scannerCode || '', i.qty]));
+});
+app.get('/api/reports/staff-wise/export', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const byStaff = (await getReportsForTenant(req.tenant.id, req.query.exhibitionId)).byStaff;
+  sendReportExcel(res, 'Staff-wise orders', ['Staff', 'Orders'], byStaff.map(s => [s.staffName, s.orderCount]));
 });
 
 // Admin-only view into the audit trail — filter by tenant automatically,
