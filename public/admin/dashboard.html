@@ -38,19 +38,28 @@ function switchDashTab(name){
   document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.toggle('active', p.id === 'dashtab-' + name));
 }
 
-function statCard(label, value, href){
-  return `<a class="card stat-card" href="${href}" style="text-align:center;padding:16px;display:block;text-decoration:none;color:inherit">
-    <div class="muted" style="font-size:12px">${label}</div>
-    <div style="font-size:28px;font-weight:800;margin-top:4px">${value}</div>
-  </a>`;
+function fmtMetricValue(v){
+  return typeof v === 'number' ? v.toLocaleString('en-IN') : (v ?? '');
 }
-// Non-clickable — there's no drill-down page for "total net weight" the
-// way there is for an order count, so this doesn't get the link/hover
-// treatment statCard() above has.
-function plainStatCard(label, value){
-  return `<div class="card" style="text-align:center;padding:16px">
-    <div class="muted" style="font-size:12px">${label}</div>
-    <div style="font-size:28px;font-weight:800;margin-top:4px">${value}</div>
+function renderDashboardCard(card){
+  const metrics = card.metrics || [];
+  if (metrics.length <= 1) {
+    const m = metrics[0] || { label: '', value: 0, unit: '' };
+    return `<div class="card" style="text-align:center;padding:16px">
+      <div class="muted" style="font-size:12px">${EXO.esc(card.label)}</div>
+      <div style="font-size:28px;font-weight:800;margin-top:4px">${fmtMetricValue(m.value)}${m.unit ? ' ' + EXO.esc(m.unit) : ''}</div>
+    </div>`;
+  }
+  // Multiple metrics on one card — each shown as its own labeled line
+  // instead of picking just one number to feature, since the whole point
+  // of combining them (e.g. Amount + Qty together) is seeing both at once.
+  return `<div class="card" style="padding:16px">
+    <div class="muted" style="font-size:12px;text-align:center;margin-bottom:6px">${EXO.esc(card.label)}</div>
+    ${metrics.map(m => `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px">
+        <span class="muted" style="font-size:12px">${EXO.esc(m.label)}</span>
+        <span style="font-size:18px;font-weight:700">${fmtMetricValue(m.value)}${m.unit ? ' ' + EXO.esc(m.unit) : ''}</span>
+      </div>`).join('')}
   </div>`;
 }
 
@@ -72,32 +81,18 @@ function exhibitionCard(e){
 }
 
 async function load(){
-  const [exhibitions, stats, pendingOrders] = await Promise.all([
+  const [exhibitions, stats] = await Promise.all([
     EXO.apiFetch('/exhibitions'),
     EXO.apiFetch('/dashboard/stats'),
-    EXO.apiFetch('/orders?status=pending'), // count only — no list rendered, see stat card below
   ]);
   const current = exhibitions.filter(e => e.status === 'current');
   const completed = exhibitions.filter(e => e.status === 'completed');
-  const ordersInCurrent = current.reduce((sum, e) => sum + (e.orderCount || 0), 0);
 
   document.getElementById('noExhibitionsCard').style.display = exhibitions.length ? 'none' : 'block';
   document.getElementById('dashTabs').style.display = exhibitions.length ? 'flex' : 'none';
   if (exhibitions.length && !document.querySelector('#dashTabs .tab-btn.active')) switchDashTab('overview');
 
-  // Each card IS the navigation — click "Orders today" and land straight
-  // on Orders pre-filtered to today, click "Pending confirmation" and
-  // land on exactly the ones needing a decision. No separate list here
-  // duplicating what the Orders page already does well.
-  const cards = stats.cardConfig || {};
-  document.getElementById('statRow').innerHTML =
-    (cards.ordersToday?.show !== false ? statCard(EXO.esc(cards.ordersToday?.label || 'Orders today'), stats.ordersToday, '/staff/orders.html?date=today') : '') +
-    (cards.ordersOngoing?.show !== false ? statCard(EXO.esc(cards.ordersOngoing?.label || 'Orders in ongoing exhibitions'), ordersInCurrent, '/staff/orders.html') : '') +
-    (cards.pendingConfirmation?.show !== false ? statCard(EXO.esc(cards.pendingConfirmation?.label || 'Pending confirmation'), pendingOrders.length, '/staff/orders.html?status=pending') : '') +
-    (cards.qtyToday?.show === true ? plainStatCard(EXO.esc(cards.qtyToday?.label || 'Items sold today'), stats.qtyToday) : '') +
-    (cards.qtyOngoing?.show === true ? plainStatCard(EXO.esc(cards.qtyOngoing?.label || 'Items sold (ongoing)'), stats.qtyOngoing) : '') +
-    (stats.fieldTotalsToday || []).map(f => plainStatCard(`Total ${EXO.esc(f.label)} <span class="muted" style="font-size:11px">(today)</span>`, f.total.toLocaleString('en-IN') + (f.unit ? ' ' + EXO.esc(f.unit) : ''))).join('') +
-    (stats.fieldTotals || []).map(f => plainStatCard(`Total ${EXO.esc(f.label)} <span class="muted" style="font-size:11px">(ongoing)</span>`, f.total.toLocaleString('en-IN') + (f.unit ? ' ' + EXO.esc(f.unit) : ''))).join('');
+  document.getElementById('statRow').innerHTML = (stats.cards || []).map(renderDashboardCard).join('') || '<p class="muted">No dashboard cards set up yet — ask ExpoOrders to add some.</p>';
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 

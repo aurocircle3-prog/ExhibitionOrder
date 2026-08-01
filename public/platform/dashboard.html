@@ -226,9 +226,13 @@
       <p class="muted" style="margin-top:-4px">Off by default — logging in on a second device signs the first one out immediately, with a warning shown before it happens. Turn this on only if this company has a real reason to want a login shared across devices.</p>
 
       <h4>Dashboard cards</h4>
-      <p class="muted" style="margin-top:-6px">Which of the 3 built-in stat cards this company sees on their Dashboard, and what each is labeled — e.g. a garment company might prefer "Sets confirmed" over "Pending confirmation".</p>
-      <div id="dashboardCardRows"></div>
-      <button class="primary small" style="margin-top:6px" onclick="EXO.busy(this, saveDashboardCards)">Save</button>
+      <p class="muted" style="margin-top:-6px">What this company sees on their Dashboard — build any combination of cards: pick a time scope (today, ongoing exhibitions, a specific exhibition, or a custom date range) and one or more numbers to show on it (order count, items sold, a "Show total" field, or a formula like <code>weight * rate</code>).</p>
+      <div id="dashboardCardList"></div>
+      <div style="margin-top:8px">
+        <button class="ghost small" onclick="addDashboardCard()">+ Add card</button>
+        <button class="primary small" onclick="EXO.busy(this, saveAllDashboardCards)">Save all</button>
+      </div>
+      <p class="muted" id="dashboardCardsErr" style="display:none;color:var(--danger)"></p>
 
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
@@ -682,39 +686,112 @@ async function saveAllowDualLogin(checked){
     EXO.toast(e.message, 'error');
   }
 }
-// Same 3 keys/defaults as server.js's DASHBOARD_CARD_KEYS/DASHBOARD_CARD_DEFAULTS
-// — duplicated here since there's no shared module between frontend and
-// backend in this app, same as every other config screen in this file.
-const DASHBOARD_CARD_DEFAULTS = {
-  ordersToday: 'Orders today',
-  ordersOngoing: 'Orders in ongoing exhibitions',
-  pendingConfirmation: 'Pending confirmation',
-  qtyToday: 'Items sold today',
-  qtyOngoing: 'Items sold (ongoing)',
-};
-const DASHBOARD_CARD_OPT_IN = ['qtyToday', 'qtyOngoing']; // off by default, unlike the original 3
-function renderDashboardCardRows(saved){
-  document.getElementById('dashboardCardRows').innerHTML = Object.entries(DASHBOARD_CARD_DEFAULTS).map(([key, defaultLabel]) => {
-    const isChecked = DASHBOARD_CARD_OPT_IN.includes(key) ? saved[key]?.show === true : saved[key]?.show !== false;
-    return `
-    <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-      <input type="checkbox" data-card-key="${key}" class="dc-show" style="width:auto" ${isChecked ? 'checked' : ''}>
-      <input data-card-key="${key}" class="dc-label" value="${EXO.esc(saved[key]?.label || defaultLabel)}" style="flex:1;max-width:280px">
-    </div>`;
-  }).join('');
+let dashboardCards = [], dashboardCardExhibitions = [], dashboardShowTotalFields = [];
+const DASHBOARD_METRIC_LABELS = { orderCount: 'Order count', qty: 'Items sold (qty)', pending: 'Pending count', field: 'A "Show total" field', formula: 'Formula' };
+
+function addDashboardCard(){
+  dashboardCards.push({ id: 'new-' + Date.now(), label: '', scope: { type: 'today' }, metrics: [{ type: 'orderCount', label: '' }] });
+  renderDashboardCardList();
 }
-async function saveDashboardCards(){
-  const dashboardCards = {};
-  Object.keys(DASHBOARD_CARD_DEFAULTS).forEach(key => {
-    dashboardCards[key] = {
-      show: document.querySelector(`.dc-show[data-card-key="${key}"]`).checked,
-      label: document.querySelector(`.dc-label[data-card-key="${key}"]`).value.trim(),
-    };
-  });
+function removeDashboardCard(cardId){
+  dashboardCards = dashboardCards.filter(c => c.id !== cardId);
+  renderDashboardCardList();
+}
+function updateDashboardCard(cardId, field, value){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  if (field === 'label') card.label = value;
+  else if (field === 'scopeType') card.scope = { type: value };
+  else if (field === 'scopeExhibitionId') card.scope.exhibitionId = value;
+  else if (field === 'scopeStartDate') card.scope.startDate = value;
+  else if (field === 'scopeEndDate') card.scope.endDate = value;
+  renderDashboardCardList();
+}
+function addMetric(cardId){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  card.metrics.push({ type: 'orderCount', label: '' });
+  renderDashboardCardList();
+}
+function removeMetric(cardId, idx){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  card.metrics.splice(idx, 1);
+  renderDashboardCardList();
+}
+function updateMetric(cardId, idx, field, value){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  card.metrics[idx][field] = value;
+  renderDashboardCardList();
+}
+
+function renderScopeExtra(card){
+  if (card.scope.type === 'exhibition') {
+    return `<select onchange="updateDashboardCard('${card.id}','scopeExhibitionId',this.value)" style="max-width:220px">
+      <option value="">— pick exhibition —</option>
+      ${dashboardCardExhibitions.map(e => `<option value="${e.id}" ${card.scope.exhibitionId===e.id?'selected':''}>${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('')}
+    </select>`;
+  }
+  if (card.scope.type === 'daterange') {
+    return `<input type="date" value="${card.scope.startDate||''}" onchange="updateDashboardCard('${card.id}','scopeStartDate',this.value)" style="max-width:150px">
+      <span class="muted">to</span>
+      <input type="date" value="${card.scope.endDate||''}" onchange="updateDashboardCard('${card.id}','scopeEndDate',this.value)" style="max-width:150px">`;
+  }
+  return '';
+}
+function renderMetricRow(card, m, idx){
+  let extra = '';
+  if (m.type === 'field') {
+    extra = `<select onchange="updateMetric('${card.id}',${idx},'fieldKey',this.value)" style="max-width:180px">
+      <option value="">— pick field —</option>
+      ${dashboardShowTotalFields.map(f => `<option value="${f.key}" ${m.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('')}
+    </select>`;
+    if (!dashboardShowTotalFields.length) extra += `<span class="muted" style="font-size:12px">— no fields have "Show total" on yet, see Order Form tab —</span>`;
+  } else if (m.type === 'formula') {
+    extra = `<input placeholder="e.g. weight * rate" value="${EXO.esc(m.formula||'')}" oninput="updateMetric('${card.id}',${idx},'formula',this.value)" style="max-width:180px">
+      <input placeholder="unit" value="${EXO.esc(m.unit||'')}" oninput="updateMetric('${card.id}',${idx},'unit',this.value)" style="max-width:70px">`;
+  }
+  return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding-left:16px">
+      <select onchange="updateMetric('${card.id}',${idx},'type',this.value)" style="max-width:170px">
+        ${Object.entries(DASHBOARD_METRIC_LABELS).map(([k,l]) => `<option value="${k}" ${m.type===k?'selected':''}>${l}</option>`).join('')}
+      </select>
+      ${extra}
+      <input placeholder="label (optional)" value="${EXO.esc(m.label||'')}" oninput="updateMetric('${card.id}',${idx},'label',this.value)" style="max-width:140px">
+      <button class="danger small" onclick="removeMetric('${card.id}',${idx})">✕</button>
+    </div>`;
+}
+function renderDashboardCardList(){
+  document.getElementById('dashboardCardList').innerHTML = dashboardCards.map(card => `
+    <div class="card" style="margin-top:10px;padding:14px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input placeholder="Card label, e.g. Today's Business" value="${EXO.esc(card.label)}" oninput="updateDashboardCard('${card.id}','label',this.value)" style="flex:1;min-width:180px;font-weight:600">
+        <select onchange="updateDashboardCard('${card.id}','scopeType',this.value)" style="max-width:170px">
+          <option value="today" ${card.scope.type==='today'?'selected':''}>Today</option>
+          <option value="ongoing" ${card.scope.type==='ongoing'?'selected':''}>Ongoing exhibitions</option>
+          <option value="exhibition" ${card.scope.type==='exhibition'?'selected':''}>Specific exhibition</option>
+          <option value="daterange" ${card.scope.type==='daterange'?'selected':''}>Custom date range</option>
+        </select>
+        ${renderScopeExtra(card)}
+        <button class="danger small" onclick="removeDashboardCard('${card.id}')">Delete card</button>
+      </div>
+      ${card.metrics.map((m, i) => renderMetricRow(card, m, i)).join('')}
+      <button class="ghost small" style="margin-top:8px;margin-left:16px" onclick="addMetric('${card.id}')">+ Add metric to this card</button>
+    </div>`).join('') || '<p class="muted">No cards yet — click "+ Add card" below.</p>';
+}
+async function saveAllDashboardCards(){
+  const err = document.getElementById('dashboardCardsErr');
   try {
-    await platformFetch(`/tenants/${lastTenantId}/dashboard-cards`, { method: 'PUT', body: JSON.stringify({ dashboardCards }) });
-    EXO.toast('Saved.');
-  } catch (e) { EXO.toast(e.message, 'error'); }
+    const res = await platformFetch(`/tenants/${lastTenantId}/dashboard-cards`, { method: 'PUT', body: JSON.stringify({ dashboardCards }) });
+    dashboardCards = res.dashboardCards;
+    renderDashboardCardList();
+    if (err) err.style.display = 'none';
+    EXO.toast('Dashboard cards saved.');
+  } catch (e) {
+    if (err) { err.textContent = e.message; err.style.display = 'block'; }
+    else EXO.toast(e.message, 'error');
+  }
 }
 async function toggleActive(checkbox){
   const active = checkbox.checked;
@@ -780,7 +857,10 @@ async function openDetail(id){
   document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
   document.getElementById('orderStatusesInput').value = (tenant.orderStatuses && tenant.orderStatuses.length ? tenant.orderStatuses : ['pending', 'confirmed', 'cancelled']).join(', ');
   document.getElementById('allowDualLoginToggle').checked = !!tenant.allowDualLogin;
-  renderDashboardCardRows(tenant.dashboardCards || {});
+  platformFetch(`/tenants/${id}/exhibitions`).then(exs => { dashboardCardExhibitions = exs; renderDashboardCardList(); }).catch(() => {});
+  dashboardCards = Array.isArray(tenant.dashboardCards) ? JSON.parse(JSON.stringify(tenant.dashboardCards)) : [];
+  dashboardShowTotalFields = (tenant.orderFields || []).filter(f => f.showTotal);
+  renderDashboardCardList();
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>

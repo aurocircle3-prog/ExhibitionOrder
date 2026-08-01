@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.82.0';
-const BUILD_TIME   = '2026-08-01T11:22:22Z';
+const APP_VERSION  = '1.83.0';
+const BUILD_TIME   = '2026-08-01T11:46:08Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1111,7 +1111,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     tenant.orderRowGrouping = template.orderRowGrouping || 'none';
     tenant.allowDuplicateItems = template.allowDuplicateItems !== false;
     tenant.orderStatuses = (template.orderStatuses && template.orderStatuses.length) ? template.orderStatuses : ['pending', 'confirmed', 'cancelled'];
-    tenant.dashboardCards = template.dashboardCards || {};
+    tenant.dashboardCards = Array.isArray(template.dashboardCards) ? template.dashboardCards : [];
     tenant.orderCustomFields = template.orderCustomFields || [];
     tenant.orderViewColumns = template.orderViewColumns || [];
     tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
@@ -1208,19 +1208,68 @@ app.put('/api/platform/tenants/:id/allow-dual-login', platformAuth, async (req, 
   await TenantDB.update({ id: tenant.id }, { allowDualLogin: value });
   res.json({ ok: true, allowDualLogin: value });
 });
+// Lean list for the dashboard card builder's "specific exhibition" scope
+// picker — just enough to populate a dropdown, not the full item/order
+// counts GET /api/exhibitions (tenant-side) computes for its own UI.
+app.get('/api/platform/tenants/:id/exhibitions', platformAuth, async (req, res) => {
+  const participants = await ExhibitionParticipantDB.find({ tenantId: req.params.id });
+  const exhibitions = await ExhibitionDB.find({});
+  const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
+  const today = istDateString();
+  const result = participants.map(p => {
+    const ex = byId[p.exhibitionId];
+    if (!ex) return null;
+    const expired = !!(p.validTill && p.validTill < today);
+    return { id: ex.id, name: ex.name, status: (p.closed || expired) ? 'completed' : 'current' };
+  }).filter(Boolean);
+  res.json(result);
+});
 app.put('/api/platform/tenants/:id/dashboard-cards', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  const raw = req.body.dashboardCards && typeof req.body.dashboardCards === 'object' ? req.body.dashboardCards : {};
-  const dashboardCards = {};
-  DASHBOARD_CARD_KEYS.forEach(key => {
-    dashboardCards[key] = {
-      show: raw[key]?.show !== false,
-      label: String(raw[key]?.label || '').trim().slice(0, 40) || DASHBOARD_CARD_DEFAULTS[key],
-    };
-  });
-  await TenantDB.update({ id: tenant.id }, { dashboardCards });
-  res.json({ ok: true, dashboardCards });
+  try {
+    const rawCards = Array.isArray(req.body.dashboardCards) ? req.body.dashboardCards : [];
+    const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
+    const orderCustomFields = tenant.orderCustomFields || [];
+    const allowedFormulaNames = new Set([
+      ...fieldDefs.filter(f => f.type === 'number').map(f => f.key),
+      ...orderCustomFields.filter(f => f.type === 'number').map(f => f.key),
+      'qty',
+    ]);
+    const showTotalFieldKeys = new Set((tenant.orderFields || []).filter(f => f.showTotal).map(f => f.key));
+    const fail = (msg) => { throw Object.assign(new Error(msg), { status: 400 }); };
+
+    const dashboardCards = rawCards.slice(0, 20).map((raw, i) => {
+      const label = String(raw?.label || '').trim().slice(0, 60);
+      if (!label) fail(`Card ${i + 1} needs a label`);
+      const scopeType = DASHBOARD_SCOPE_TYPES.includes(raw?.scope?.type) ? raw.scope.type : 'today';
+      const scope = { type: scopeType };
+      if (scopeType === 'exhibition') scope.exhibitionId = String(raw.scope.exhibitionId || '');
+      if (scopeType === 'daterange') { scope.startDate = String(raw.scope.startDate || ''); scope.endDate = String(raw.scope.endDate || ''); }
+      const metrics = (Array.isArray(raw?.metrics) ? raw.metrics : []).slice(0, 6).map((m, mi) => {
+        if (!DASHBOARD_METRIC_TYPES.includes(m?.type)) fail(`Card "${label}", metric ${mi + 1}: invalid type`);
+        const metric = { type: m.type, label: String(m.label || '').trim().slice(0, 40) };
+        if (m.type === 'field') {
+          if (!showTotalFieldKeys.has(m.fieldKey)) fail(`Card "${label}": "${m.fieldKey}" isn't an Order Form field with "Show total" on`);
+          const f = fieldDefs.find(f => f.key === m.fieldKey);
+          metric.fieldKey = m.fieldKey; metric.unit = f?.unit || ''; metric.decimals = f?.decimals ?? 2;
+          if (!metric.label) metric.label = f?.label || m.fieldKey;
+        } else if (m.type === 'formula') {
+          const formula = String(m.formula || '').trim();
+          const check = validateFormula(formula, allowedFormulaNames);
+          if (!check.ok) fail(`Card "${label}": ${check.error}`);
+          metric.formula = formula; metric.unit = String(m.unit || '').trim().slice(0, 10); metric.decimals = Math.min(Math.max(Number(m.decimals) || 2, 0), 6);
+          if (!metric.label) metric.label = 'Amount';
+        }
+        return metric;
+      });
+      if (!metrics.length) fail(`Card "${label}" needs at least one metric`);
+      return { id: raw.id || uuid(), label, scope, metrics };
+    });
+
+    await TenantDB.update({ id: tenant.id }, { dashboardCards });
+    res.json({ ok: true, dashboardCards });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -2022,18 +2071,18 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 // unlike every other field here, their show/hide toggle is platform-admin
 // only: the client can write the text, but AuroCircle decides whether it
 // actually goes live on the public link.
-// The Dashboard's 3 built-in stat cards — fixed set, so plain constants
-// rather than a configurable list. Platform admin can hide any of them
-// per company, or relabel them (e.g. a garment company might prefer
-// "Sets confirmed" over "Pending confirmation") via dashboardCards above.
-const DASHBOARD_CARD_KEYS = ['ordersToday', 'ordersOngoing', 'pendingConfirmation', 'qtyToday', 'qtyOngoing'];
-const DASHBOARD_CARD_DEFAULTS = {
-  ordersToday: 'Orders today',
-  ordersOngoing: 'Orders in ongoing exhibitions',
-  pendingConfirmation: 'Pending confirmation',
-  qtyToday: 'Items sold today',
-  qtyOngoing: 'Items sold (ongoing)',
-};
+// Default cards for any company that's never used the dashboard card
+// builder (tenant.dashboardCards missing or empty) — matches the original
+// fixed 3 this feature started as, so nobody's dashboard goes blank just
+// because they haven't touched the builder yet. Platform admin can freely
+// add/edit/remove from here once they do.
+const DEFAULT_DASHBOARD_CARDS = [
+  { id: 'default-today', label: 'Orders today', scope: { type: 'today' }, metrics: [{ type: 'orderCount', label: 'Orders' }] },
+  { id: 'default-ongoing', label: 'Orders in ongoing exhibitions', scope: { type: 'ongoing' }, metrics: [{ type: 'orderCount', label: 'Orders' }] },
+  { id: 'default-pending', label: 'Pending confirmation', scope: { type: 'ongoing' }, metrics: [{ type: 'pending', label: 'Pending' }] },
+];
+const DASHBOARD_METRIC_TYPES = ['orderCount', 'qty', 'pending', 'field', 'formula'];
+const DASHBOARD_SCOPE_TYPES = ['today', 'ongoing', 'exhibition', 'daterange'];
 const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage', 'note1', 'note2'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
 const PLATFORM_ONLY_SHOW_KEYS = ['note1', 'note2'];
@@ -3401,6 +3450,59 @@ function reportItemColumnValue(col, item, order) {
 // order's lines — same "compute per piece, then add the results together"
 // principle used for merged-row formulas and column totals elsewhere,
 // applied here at the whole-order level instead of a merged-item level.
+// Filters an already-fetched, already-deleted-filtered order list down to
+// one card's scope. 'exhibition'/'daterange' fall back to "every order" if
+// their own required detail (exhibitionId / start+end dates) is missing —
+// safer than silently showing zero for a half-configured card.
+function ordersForScope(orders, scope, today, currentExhibitionIds) {
+  switch (scope?.type) {
+    case 'today': return orders.filter(o => istDateString(new Date(o.createdAt)) === today);
+    case 'ongoing': return orders.filter(o => currentExhibitionIds.has(o.exhibitionId));
+    case 'exhibition': return scope.exhibitionId ? orders.filter(o => o.exhibitionId === scope.exhibitionId) : orders;
+    case 'daterange': {
+      if (!scope.startDate || !scope.endDate) return orders;
+      return orders.filter(o => { const d = istDateString(new Date(o.createdAt)); return d >= scope.startDate && d <= scope.endDate; });
+    }
+    default: return orders;
+  }
+}
+// One metric's value for a given order set. 'field' reads the same
+// pre-computed per-order fieldTotals the printed-order footer already
+// uses; 'formula' reuses reportItemColumnValue's exact evaluator (the
+// same one behind Order View Layout formula columns and Custom Reports),
+// evaluated per line item and summed across every order in the set.
+function computeMetricValue(metric, orders) {
+  switch (metric.type) {
+    case 'orderCount': return orders.length;
+    case 'pending': return orders.filter(o => o.status === 'pending').length;
+    case 'qty': return orders.reduce((sum, o) => sum + (o.items || []).reduce((s, it) => s + (Number(it.qty) || 0), 0), 0);
+    case 'field': return Number(orders.reduce((sum, o) => sum + (Number(o.fieldTotals?.[metric.fieldKey]) || 0), 0).toFixed(metric.decimals ?? 2));
+    case 'formula': {
+      let sum = 0;
+      for (const o of orders) {
+        for (const item of o.items || []) {
+          const v = reportItemColumnValue({ type: 'formula', formula: metric.formula }, item, o);
+          if (typeof v === 'number') sum += v;
+        }
+      }
+      return Number(sum.toFixed(metric.decimals ?? 2));
+    }
+    default: return 0;
+  }
+}
+function computeDashboardCards(tenant, orders, currentExhibitionIds, today) {
+  const cardDefs = Array.isArray(tenant.dashboardCards) && tenant.dashboardCards.length ? tenant.dashboardCards : DEFAULT_DASHBOARD_CARDS;
+  return cardDefs.map(card => {
+    const scoped = ordersForScope(orders, card.scope, today, currentExhibitionIds);
+    return {
+      id: card.id, label: card.label,
+      metrics: (card.metrics || []).map(m => ({
+        label: m.label || '', unit: m.unit || '',
+        value: computeMetricValue(m, scoped),
+      })),
+    };
+  });
+}
 async function computeReport(tenant, reportDef, exhibitionId) {
   const q = { tenantId: tenant.id };
   if (exhibitionId) q.exhibitionId = exhibitionId;
@@ -3529,52 +3631,14 @@ app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff
     ExhibitionParticipantDB.find({ tenantId: req.tenant.id }),
   ]);
   const liveOrders = orders.filter(o => !o.deleted);
-  const todayOrders = liveOrders.filter(o => istDateString(new Date(o.createdAt)) === today);
-  const ordersToday = todayOrders.length;
-
-  // Which exhibitions currently count as "ongoing" — same rule GET
-  // /api/exhibitions uses (closed by the company, or AuroCircle's paid-for
-  // window expired, either way it's no longer "ongoing").
+  // Same "ongoing" rule GET /api/exhibitions uses (closed by the company,
+  // or AuroCircle's paid-for window expired, either way it's no longer
+  // "ongoing").
   const currentExhibitionIds = new Set(
     participants.filter(p => !p.closed && !(p.validTill && p.validTill < today)).map(p => p.exhibitionId)
   );
-  const ongoingOrders = liveOrders.filter(o => currentExhibitionIds.has(o.exhibitionId));
-
-  // Whichever Order Form field(s) this company has flagged "Show total"
-  // on — the exact same flag already driving the totals footer on a
-  // single printed order — summed here across a set of orders instead of
-  // just one. Net weight for a gold jewellery company, amount for a
-  // garment company, whatever each company already told the app matters
-  // to them; nothing new to configure. Computed for both scopes (today
-  // and ongoing exhibitions) rather than just one, since "how much have I
-  // done today" and "how much so far at this show" are both things people
-  // actually want to glance at, not just one or the other.
-  const totalFields = (req.tenant.orderFields || []).filter(f => f.showTotal);
-  const sumField = (orderList, key) => Number(orderList.reduce((sum, o) => sum + (Number(o.fieldTotals?.[key]) || 0), 0).toFixed(2));
-  const fieldTotals = totalFields.map(f => ({ key: f.key, label: f.label, unit: f.unit || '', total: sumField(ongoingOrders, f.key) }));
-  const fieldTotalsToday = totalFields.map(f => ({ key: f.key, label: f.label, unit: f.unit || '', total: sumField(todayOrders, f.key) }));
-
-  // Total items ordered — distinct from order *count*: one order with 5
-  // items should count as 5 here, not 1. Nothing computed this before.
-  const sumQty = orderList => orderList.reduce((sum, o) => sum + (o.items || []).reduce((s, it) => s + (Number(it.qty) || 0), 0), 0);
-  const qtyToday = sumQty(todayOrders);
-  const qtyOngoing = sumQty(ongoingOrders);
-
-  // Resolve against defaults so a company that's never been customized
-  // (dashboardCards === {}) still gets all 3 original cards shown, plus
-  // the 2 new quantity cards OFF by default (opt-in, since not every
-  // company will want them cluttering the dashboard immediately).
-  const saved = req.tenant.dashboardCards || {};
-  const cardConfig = {};
-  DASHBOARD_CARD_KEYS.forEach(key => {
-    const isNewOptIn = key === 'qtyToday' || key === 'qtyOngoing';
-    cardConfig[key] = {
-      show: isNewOptIn ? saved[key]?.show === true : saved[key]?.show !== false,
-      label: saved[key]?.label || DASHBOARD_CARD_DEFAULTS[key],
-    };
-  });
-
-  res.json({ ordersToday, fieldTotals, fieldTotalsToday, qtyToday, qtyOngoing, cardConfig });
+  const cards = computeDashboardCards(req.tenant, liveOrders, currentExhibitionIds, today);
+  res.json({ cards });
 });
 
 // ── Custom reports (client-facing) ────────────────────────────────────────
