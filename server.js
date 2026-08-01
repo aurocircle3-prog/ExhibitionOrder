@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.83.0';
-const BUILD_TIME   = '2026-08-01T11:46:08Z';
+const APP_VERSION  = '1.84.0';
+const BUILD_TIME   = '2026-08-01T12:17:52Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1229,14 +1229,7 @@ app.put('/api/platform/tenants/:id/dashboard-cards', platformAuth, async (req, r
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   try {
     const rawCards = Array.isArray(req.body.dashboardCards) ? req.body.dashboardCards : [];
-    const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
-    const orderCustomFields = tenant.orderCustomFields || [];
-    const allowedFormulaNames = new Set([
-      ...fieldDefs.filter(f => f.type === 'number').map(f => f.key),
-      ...orderCustomFields.filter(f => f.type === 'number').map(f => f.key),
-      'qty',
-    ]);
-    const showTotalFieldKeys = new Set((tenant.orderFields || []).filter(f => f.showTotal).map(f => f.key));
+    const totalableColumns = (tenant.orderViewColumns || []).filter(c => c.showTotal);
     const fail = (msg) => { throw Object.assign(new Error(msg), { status: 400 }); };
 
     const dashboardCards = rawCards.slice(0, 20).map((raw, i) => {
@@ -1249,17 +1242,10 @@ app.put('/api/platform/tenants/:id/dashboard-cards', platformAuth, async (req, r
       const metrics = (Array.isArray(raw?.metrics) ? raw.metrics : []).slice(0, 6).map((m, mi) => {
         if (!DASHBOARD_METRIC_TYPES.includes(m?.type)) fail(`Card "${label}", metric ${mi + 1}: invalid type`);
         const metric = { type: m.type, label: String(m.label || '').trim().slice(0, 40) };
-        if (m.type === 'field') {
-          if (!showTotalFieldKeys.has(m.fieldKey)) fail(`Card "${label}": "${m.fieldKey}" isn't an Order Form field with "Show total" on`);
-          const f = fieldDefs.find(f => f.key === m.fieldKey);
-          metric.fieldKey = m.fieldKey; metric.unit = f?.unit || ''; metric.decimals = f?.decimals ?? 2;
-          if (!metric.label) metric.label = f?.label || m.fieldKey;
-        } else if (m.type === 'formula') {
-          const formula = String(m.formula || '').trim();
-          const check = validateFormula(formula, allowedFormulaNames);
-          if (!check.ok) fail(`Card "${label}": ${check.error}`);
-          metric.formula = formula; metric.unit = String(m.unit || '').trim().slice(0, 10); metric.decimals = Math.min(Math.max(Number(m.decimals) || 2, 0), 6);
-          if (!metric.label) metric.label = 'Amount';
+        if (m.type === 'orderViewColumn') {
+          const col = totalableColumns.find(c => c._id === m.columnId || c.id === m.columnId);
+          if (!col) fail(`Card "${label}": pick a column that has "Show total" on in Order View Layout`);
+          metric.columnId = m.columnId;
         }
         return metric;
       });
@@ -1996,6 +1982,9 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
       if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
       col.formula = formula;
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+      col.unit = String(raw.unit || '').trim().slice(0, 10);
+      const decimalsRaw = raw.decimals === undefined || raw.decimals === null || raw.decimals === '' ? 2 : Number(raw.decimals);
+      col.decimals = Math.min(Math.max(Number.isFinite(decimalsRaw) ? decimalsRaw : 2, 0), 6);
       col.showTotal = !!raw.showTotal;
     } else if (raw.type === 'images') {
       col.label = (raw.label || 'Photo').trim().slice(0, 60) || 'Photo';
@@ -2081,7 +2070,13 @@ const DEFAULT_DASHBOARD_CARDS = [
   { id: 'default-ongoing', label: 'Orders in ongoing exhibitions', scope: { type: 'ongoing' }, metrics: [{ type: 'orderCount', label: 'Orders' }] },
   { id: 'default-pending', label: 'Pending confirmation', scope: { type: 'ongoing' }, metrics: [{ type: 'pending', label: 'Pending' }] },
 ];
-const DASHBOARD_METRIC_TYPES = ['orderCount', 'qty', 'pending', 'field', 'formula'];
+// 'orderViewColumn' replaces the old separate 'field'/'formula' metric
+// types — instead of re-typing a formula in a second place, this
+// references a column that already exists in Order View Layout (and
+// already has "Show total" on there), reusing its formula/fieldKey/
+// unit/decimals exactly as configured. One source of truth for "what's
+// Amount, and how is it calculated" instead of two.
+const DASHBOARD_METRIC_TYPES = ['orderCount', 'qty', 'pending', 'orderViewColumn'];
 const DASHBOARD_SCOPE_TYPES = ['today', 'ongoing', 'exhibition', 'daterange'];
 const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage', 'note1', 'note2'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
@@ -3471,21 +3466,24 @@ function ordersForScope(orders, scope, today, currentExhibitionIds) {
 // uses; 'formula' reuses reportItemColumnValue's exact evaluator (the
 // same one behind Order View Layout formula columns and Custom Reports),
 // evaluated per line item and summed across every order in the set.
-function computeMetricValue(metric, orders) {
+function computeMetricValue(metric, orders, tenant) {
   switch (metric.type) {
     case 'orderCount': return orders.length;
     case 'pending': return orders.filter(o => o.status === 'pending').length;
     case 'qty': return orders.reduce((sum, o) => sum + (o.items || []).reduce((s, it) => s + (Number(it.qty) || 0), 0), 0);
-    case 'field': return Number(orders.reduce((sum, o) => sum + (Number(o.fieldTotals?.[metric.fieldKey]) || 0), 0).toFixed(metric.decimals ?? 2));
-    case 'formula': {
+    case 'orderViewColumn': {
+      const col = (tenant.orderViewColumns || []).find(c => c._id === metric.columnId || c.id === metric.columnId);
+      if (!col) return 0;
       let sum = 0;
       for (const o of orders) {
         for (const item of o.items || []) {
-          const v = reportItemColumnValue({ type: 'formula', formula: metric.formula }, item, o);
+          const v = col.type === 'formula'
+            ? reportItemColumnValue({ type: 'formula', formula: col.formula }, item, o)
+            : reportItemColumnValue({ type: 'itemfield', fieldKey: col.fieldKey }, item, o);
           if (typeof v === 'number') sum += v;
         }
       }
-      return Number(sum.toFixed(metric.decimals ?? 2));
+      return Number(sum.toFixed(col.decimals ?? 2));
     }
     default: return 0;
   }
@@ -3496,10 +3494,14 @@ function computeDashboardCards(tenant, orders, currentExhibitionIds, today) {
     const scoped = ordersForScope(orders, card.scope, today, currentExhibitionIds);
     return {
       id: card.id, label: card.label,
-      metrics: (card.metrics || []).map(m => ({
-        label: m.label || '', unit: m.unit || '',
-        value: computeMetricValue(m, scoped),
-      })),
+      metrics: (card.metrics || []).map(m => {
+        let label = m.label || '', unit = m.unit || '';
+        if (m.type === 'orderViewColumn') {
+          const col = (tenant.orderViewColumns || []).find(c => c._id === m.columnId || c.id === m.columnId);
+          if (col) { label = m.label || col.label || 'Amount'; unit = col.unit || ''; }
+        }
+        return { label, unit, value: computeMetricValue(m, scoped, tenant) };
+      }),
     };
   });
 }
