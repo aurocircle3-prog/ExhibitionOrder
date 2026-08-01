@@ -43,13 +43,21 @@ async function init(){
   document.getElementById('reportTabs').innerHTML = reports.map(r => `<button class="tab-btn" data-report-id="${r.id}" onclick="switchReportTab('${r.id}')">${EXO.esc(r.name)}</button>`).join('');
 
   const exOptionsHtml = '<option value="">All exhibitions</option>' + exhibitions.map(e => `<option value="${e.id}" ${e.id===preselectExhibitionId?'selected':''}>${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('');
+  const lockedExhibition = preselectExhibitionId ? exhibitions.find(e => e.id === preselectExhibitionId) : null;
+  // Locked to one exhibition (arrived via the hub — you're "inside" that
+  // show) means no picker at all, not even a disabled one: a hidden input
+  // carries the id so loadReportData/downloadReportExcel work unchanged,
+  // and a plain label shows which exhibition this is, with no way to
+  // switch to "All exhibitions" or any other show from here.
   document.getElementById('reportPanels').innerHTML = reports.map(r => `
     <div class="tab-panel report-panel" id="reportpanel-${r.id}">
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">
           <h3 style="margin:0">${EXO.esc(r.name)}</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <select id="exFilter-${r.id}" onchange="loadReportData('${r.id}')" style="max-width:200px">${exOptionsHtml}</select>
+            ${lockedExhibition
+              ? `<span class="muted" style="font-size:13px">📍 ${EXO.esc(lockedExhibition.name)}</span><input type="hidden" id="exFilter-${r.id}" value="${preselectExhibitionId}">`
+              : `<select id="exFilter-${r.id}" onchange="loadReportData('${r.id}')" style="max-width:200px">${exOptionsHtml}</select>`}
             <input id="search-${r.id}" placeholder="Search…" oninput="renderReportTable('${r.id}')" style="max-width:200px">
             <button class="ghost small" onclick="downloadReportExcel('${r.id}')">⬇ Excel</button>
           </div>

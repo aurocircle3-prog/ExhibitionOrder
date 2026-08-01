@@ -33,10 +33,10 @@
         <input type="checkbox" id="showImages" style="width:auto"> <span>Show item photos on the order link</span>
       </label>
       <div class="table-scroll"><table>
-        <thead><tr><th>Field</th><th>Show on order</th></tr></thead>
+        <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
         <tbody id="orderFieldRows"></tbody>
       </table></div>
-      <p class="muted" style="margin-top:8px">Want a total shown for a field (or a formula)? Turn on "Show total" on that column in Order View Layout instead — that works for formulas too, not just plain fields.</p>
+      <p class="muted" style="margin-top:8px">"Show total" here adds up a plain numeric field across the whole order — shown on the buyer's order link. Need a <i>formula</i> total (e.g. weight × rate) instead of a plain field? Use "Show total" on a Formula column in Order View Layout — that one supports formulas, this one doesn't.</p>
       <button class="primary" onclick="EXO.busy(this, saveOrderFields)">Save order form</button>
     </div>
   </div>
@@ -186,6 +186,7 @@ async function loadOrderFields(saved){
     <tr>
       <td>${EXO.esc(f.label)}${f.type==='number' && f.unit ? ` <span class="muted">(${EXO.esc(f.unit)})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" data-label="${EXO.esc(f.label)}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
+      <td>${f.type === 'number' ? `<input type="checkbox" data-total-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
     </tr>`).join('');
   // Field/Formula columns in Order View Layout can reference ANY active
   // Item Master field (fixed or custom) — not just ones on the Order Form.
@@ -197,9 +198,10 @@ async function loadOrderFields(saved){
 async function saveOrderFields(){
   const err = document.getElementById('err'); err.style.display='none';
   const keysToShow = new Set(Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => el.dataset.key));
+  const totalKeys = new Set(Array.from(document.querySelectorAll('.of-total')).filter(el => el.checked).map(el => el.dataset.totalKey));
   const orderFields = Array.from(keysToShow).map(key => {
     const showEl = document.querySelector(`.of-show[data-key="${key}"]`);
-    return { key, label: showEl.dataset.label };
+    return { key, label: showEl.dataset.label, showTotal: totalKeys.has(key) };
   });
   const showImages = document.getElementById('showImages').checked;
   try {
