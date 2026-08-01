@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.76.0';
-const BUILD_TIME   = '2026-08-01T06:27:25Z';
+const APP_VERSION  = '1.77.0';
+const BUILD_TIME   = '2026-08-01T09:17:34Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1006,6 +1006,28 @@ app.get('/api/platform/tenants/:tenantId/users/:userId/login-activity', platform
   const user = await UserDB.findOne({ id: req.params.userId, tenantId: req.params.tenantId });
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json(await getLoginActivity(req.params.tenantId, user.id));
+});
+app.put('/api/platform/tenants/:tenantId/users/:userId', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.tenantId });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const user = await UserDB.findOne({ id: req.params.userId, tenantId: tenant.id });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const name = String(req.body.name || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const phone = String(req.body.phone || '').trim();
+  const loginId = String(req.body.loginId || '').trim().toLowerCase();
+  if (!name || !loginId) return res.status(400).json({ error: 'Name and login ID are required' });
+  const clash = await UserDB.findOne({ tenantId: tenant.id, loginId });
+  if (clash && clash.id !== user.id) return res.status(400).json({ error: 'That login ID is already used by someone else at this company' });
+  await UserDB.update({ id: user.id }, { name, email, phone, loginId });
+  const auditEntry = {
+    id: uuid(), tenantId: tenant.id,
+    actorId: req.platformAdmin.id, actorName: `${req.platformAdmin.name} (platform admin)`, actorRole: 'platform_admin',
+    action: 'user.edited_by_platform', entityType: 'user', entityId: user.id,
+    changes: { name, email, loginId }, ip: req.ip, createdAt: new Date().toISOString(),
+  };
+  AuditLogDB.create(auditEntry).catch(err => log.error({ err }, 'Failed to write audit log'));
+  res.json({ ok: true });
 });
 
 // Companies are created here, not through a public form. The admin account

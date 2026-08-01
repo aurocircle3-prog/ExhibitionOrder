@@ -147,6 +147,18 @@
         <button class="ghost small" style="margin-top:8px" onclick="copyPlatformResetLink()">Copy link</button>
         <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('platformResetLinkCard').style.display='none'">Close</button>
       </div>
+      <div class="card" id="editUserCard" style="display:none">
+        <h4 style="margin-top:0">Edit user</h4>
+        <div class="grid cols-2">
+          <div><label>Name</label><input id="editUserName"></div>
+          <div><label>Login ID</label><input id="editUserLoginId"></div>
+          <div><label>Email</label><input id="editUserEmail" type="email"></div>
+          <div><label>Phone</label><input id="editUserPhone"></div>
+        </div>
+        <p class="muted" id="editUserErr" style="display:none;color:var(--danger)"></p>
+        <button class="primary small" style="margin-top:8px" onclick="EXO.busy(this, saveEditedUser)">Save</button>
+        <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('editUserCard').style.display='none'">Cancel</button>
+      </div>
       <div class="card" id="platformActivityCard" style="display:none">
         <h4 style="margin-top:0">Login activity — <span id="platformActivityName"></span></h4>
         <p class="muted" id="platformActivitySummary"></p>
@@ -734,7 +746,7 @@ async function openDetail(id){
     <tr>
       <td>${EXO.esc(u.name)}</td><td>${EXO.esc(u.role)}</td><td>${EXO.esc(u.loginId)}</td><td>${EXO.esc(u.phone) || '—'}</td>
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
-      <td><button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Send reset link</button> <button class="ghost small" onclick="showPlatformActivity('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Login activity</button></td>
+      <td><button class="ghost small" onclick='editUser(${EXO.esc(JSON.stringify(u))})'>Edit</button> <button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Send reset link</button> <button class="ghost small" onclick="showPlatformActivity('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Login activity</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
 
   const staffCount = users.filter(u => u.role === 'staff' && u.active !== false).length;
@@ -1440,6 +1452,32 @@ async function sendUserResetLink(tenantId, userId, name){
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 function copyPlatformResetLink(){ document.getElementById('platformResetLinkBox').select(); document.execCommand('copy'); }
+let editingUserId = null, editingUserTenantId = null;
+function editUser(u){
+  editingUserId = u.id; editingUserTenantId = u.tenantId;
+  document.getElementById('editUserName').value = u.name || '';
+  document.getElementById('editUserLoginId').value = u.loginId || '';
+  document.getElementById('editUserEmail').value = u.email || '';
+  document.getElementById('editUserPhone').value = u.phone || '';
+  document.getElementById('editUserErr').style.display = 'none';
+  document.getElementById('editUserCard').style.display = 'block';
+  document.getElementById('editUserCard').scrollIntoView({ behavior: 'smooth' });
+}
+async function saveEditedUser(){
+  const err = document.getElementById('editUserErr'); err.style.display = 'none';
+  const body = {
+    name: document.getElementById('editUserName').value.trim(),
+    loginId: document.getElementById('editUserLoginId').value.trim(),
+    email: document.getElementById('editUserEmail').value.trim(),
+    phone: document.getElementById('editUserPhone').value.trim(),
+  };
+  try {
+    await platformFetch(`/tenants/${editingUserTenantId}/users/${editingUserId}`, { method: 'PUT', body: JSON.stringify(body) });
+    document.getElementById('editUserCard').style.display = 'none';
+    EXO.toast('User updated.');
+    openDetail(editingUserTenantId);
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
 async function showPlatformActivity(tenantId, userId, name){
   try {
     const data = await platformFetch(`/tenants/${tenantId}/users/${userId}/login-activity`);

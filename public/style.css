@@ -19,6 +19,10 @@ a{color:var(--accent);text-decoration:none}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
 .stat-card{transition:transform .12s,box-shadow .12s,border-color .12s;cursor:pointer}
 .stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.08);border-color:var(--accent)}
+.hub-tile{display:flex;align-items:center;gap:16px;text-decoration:none;color:inherit;padding:20px;transition:transform .12s,box-shadow .12s,border-color .12s}
+.hub-tile:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.08);border-color:var(--accent)}
+.hub-tile-icon{font-size:32px;flex:0 0 auto;width:52px;height:52px;display:flex;align-items:center;justify-content:center;background:var(--brand-light);border-radius:12px}
+.hub-tile-arrow{margin-left:auto;font-size:20px;color:var(--muted);flex:0 0 auto}
 th.sortable{cursor:pointer;user-select:none}
 th.sortable:hover{color:var(--brand)}
 th.sortable .sort-arrow{font-size:10px;margin-left:3px;color:var(--brand)}

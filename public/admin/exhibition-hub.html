@@ -1,0 +1,58 @@
+<title>Exhibition — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div id="nav"></div>
+<div class="wrap">
+  <div class="card" style="text-align:center">
+    <h3 style="margin:0 0 4px" id="exName">Loading…</h3>
+    <p class="muted" id="exMeta" style="margin:2px 0"></p>
+  </div>
+
+  <a class="card hub-tile" href="/staff/order.html">
+    <div class="hub-tile-icon">🛒</div>
+    <div>
+      <h4 style="margin:0">Take Order</h4>
+      <p class="muted" style="margin:2px 0 0">Scan items and capture a new order</p>
+    </div>
+    <div class="hub-tile-arrow">→</div>
+  </a>
+
+  <a class="card hub-tile" href="/admin/item-master.html">
+    <div class="hub-tile-icon">📦</div>
+    <div>
+      <h4 style="margin:0">Item Master</h4>
+      <p class="muted" style="margin:2px 0 0" id="itemCountLine">Add, edit, and organize items for this exhibition</p>
+    </div>
+    <div class="hub-tile-arrow">→</div>
+  </a>
+
+  <a class="card hub-tile" href="/staff/orders.html">
+    <div class="hub-tile-icon">🧾</div>
+    <div>
+      <h4 style="margin:0">Orders</h4>
+      <p class="muted" style="margin:2px 0 0" id="orderCountLine">Review, confirm, and manage orders placed here</p>
+    </div>
+    <div class="hub-tile-arrow">→</div>
+  </a>
+</div>
+<script src="/app.js"></script>
+<script>
+const user = EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('dashboard');
+const ex = EXO.currentExhibition();
+if (!ex) location.href = '/admin/dashboard.html';
+
+(async function(){
+  document.getElementById('exName').textContent = ex.name;
+  try {
+    const exhibitions = await EXO.apiFetch('/exhibitions');
+    const full = exhibitions.find(e => e.id === ex.id);
+    if (full) {
+      document.getElementById('exMeta').textContent = `${full.location || ''}${full.location ? ' · ' : ''}${full.itemCount} item${full.itemCount===1?'':'s'} · ${full.orderCount} order${full.orderCount===1?'':'s'}`;
+      document.getElementById('itemCountLine').textContent = `${full.itemCount} item${full.itemCount===1?'':'s'} set up so far`;
+      document.getElementById('orderCountLine').textContent = `${full.orderCount} order${full.orderCount===1?'':'s'} placed so far`;
+    }
+  } catch (e) { /* non-critical — hub tiles still work without the counts */ }
+})();
+</script>

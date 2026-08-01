@@ -80,12 +80,10 @@ function exhibitionCard(e){
       <p class="muted" style="margin:2px 0">${EXO.esc(e.location) || ''}${e.location && dates ? ' · ' : ''}${dates}</p>
       ${validTillNote}${closedNote}
       <p class="muted" style="margin:8px 0">${e.itemCount} item${e.itemCount===1?'':'s'} · ${e.orderCount} order${e.orderCount===1?'':'s'}</p>
-      <div class="btn-row" style="margin-top:10px">
-        <button class="primary small" onclick="enterExhibition('${e.id}','${EXO.escAttr(e.name)}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
-        ${e.status === 'current'
-          ? `<button class="ghost small" onclick="closeExhibition('${e.id}','${EXO.escAttr(e.name)}')">Mark completed</button>`
-          : (e.closed ? `<button class="ghost small" onclick="reopenExhibition('${e.id}','${EXO.escAttr(e.name)}')">Reopen</button>` : '')}
-      </div>
+      <button class="primary" style="width:100%;padding:16px;font-size:16px;font-weight:700;margin-top:10px" onclick="enterExhibition('${e.id}','${EXO.escAttr(e.name)}')">${e.status === 'current' ? 'Enter →' : 'View →'}</button>
+      ${e.status === 'current'
+        ? `<p style="text-align:center;margin:8px 0 0"><a href="#" onclick="closeExhibition('${e.id}','${EXO.escAttr(e.name)}');return false;" class="muted" style="font-size:12px">Mark completed</a></p>`
+        : (e.closed ? `<p style="text-align:center;margin:8px 0 0"><a href="#" onclick="reopenExhibition('${e.id}','${EXO.escAttr(e.name)}');return false;" class="muted" style="font-size:12px">Reopen</a></p>` : '')}
     </div>`;
 }
 
@@ -142,7 +140,7 @@ function closeSimpleLightbox(){ document.getElementById('simpleLightbox').classL
 function enterExhibition(id, name){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
   localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
-  location.href = '/admin/item-master.html';
+  location.href = '/admin/exhibition-hub.html';
 }
 async function closeExhibition(id, name){
   if (!confirm(`Mark "${name}" as completed? It'll move to Completed and won't be offered for new items or orders — you can reopen it any time.`)) return;
