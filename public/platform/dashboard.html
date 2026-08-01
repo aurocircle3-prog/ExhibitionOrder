@@ -225,6 +225,11 @@
       </label>
       <p class="muted" style="margin-top:-4px">Off by default — logging in on a second device signs the first one out immediately, with a warning shown before it happens. Turn this on only if this company has a real reason to want a login shared across devices.</p>
 
+      <h4>Dashboard cards</h4>
+      <p class="muted" style="margin-top:-6px">Which of the 3 built-in stat cards this company sees on their Dashboard, and what each is labeled — e.g. a garment company might prefer "Sets confirmed" over "Pending confirmation".</p>
+      <div id="dashboardCardRows"></div>
+      <button class="primary small" style="margin-top:6px" onclick="EXO.busy(this, saveDashboardCards)">Save</button>
+
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
@@ -677,6 +682,34 @@ async function saveAllowDualLogin(checked){
     EXO.toast(e.message, 'error');
   }
 }
+// Same 3 keys/defaults as server.js's DASHBOARD_CARD_KEYS/DASHBOARD_CARD_DEFAULTS
+// — duplicated here since there's no shared module between frontend and
+// backend in this app, same as every other config screen in this file.
+const DASHBOARD_CARD_DEFAULTS = {
+  ordersToday: 'Orders today',
+  ordersOngoing: 'Orders in ongoing exhibitions',
+  pendingConfirmation: 'Pending confirmation',
+};
+function renderDashboardCardRows(saved){
+  document.getElementById('dashboardCardRows').innerHTML = Object.entries(DASHBOARD_CARD_DEFAULTS).map(([key, defaultLabel]) => `
+    <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+      <input type="checkbox" data-card-key="${key}" class="dc-show" style="width:auto" ${saved[key]?.show !== false ? 'checked' : ''}>
+      <input data-card-key="${key}" class="dc-label" value="${EXO.esc(saved[key]?.label || defaultLabel)}" style="flex:1;max-width:280px">
+    </div>`).join('');
+}
+async function saveDashboardCards(){
+  const dashboardCards = {};
+  Object.keys(DASHBOARD_CARD_DEFAULTS).forEach(key => {
+    dashboardCards[key] = {
+      show: document.querySelector(`.dc-show[data-card-key="${key}"]`).checked,
+      label: document.querySelector(`.dc-label[data-card-key="${key}"]`).value.trim(),
+    };
+  });
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/dashboard-cards`, { method: 'PUT', body: JSON.stringify({ dashboardCards }) });
+    EXO.toast('Saved.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -741,6 +774,7 @@ async function openDetail(id){
   document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
   document.getElementById('orderStatusesInput').value = (tenant.orderStatuses && tenant.orderStatuses.length ? tenant.orderStatuses : ['pending', 'confirmed', 'cancelled']).join(', ');
   document.getElementById('allowDualLoginToggle').checked = !!tenant.allowDualLogin;
+  renderDashboardCardRows(tenant.dashboardCards || {});
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>

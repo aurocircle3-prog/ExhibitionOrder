@@ -89,10 +89,11 @@ async function load(){
   // on Orders pre-filtered to today, click "Pending confirmation" and
   // land on exactly the ones needing a decision. No separate list here
   // duplicating what the Orders page already does well.
+  const cards = stats.cardConfig || {};
   document.getElementById('statRow').innerHTML =
-    statCard('Orders today', stats.ordersToday, '/staff/orders.html?date=today') +
-    statCard('Orders in ongoing exhibitions', ordersInCurrent, '/staff/orders.html') +
-    statCard('Pending confirmation', pendingOrders.length, '/staff/orders.html?status=pending') +
+    (cards.ordersToday?.show !== false ? statCard(EXO.esc(cards.ordersToday?.label || 'Orders today'), stats.ordersToday, '/staff/orders.html?date=today') : '') +
+    (cards.ordersOngoing?.show !== false ? statCard(EXO.esc(cards.ordersOngoing?.label || 'Orders in ongoing exhibitions'), ordersInCurrent, '/staff/orders.html') : '') +
+    (cards.pendingConfirmation?.show !== false ? statCard(EXO.esc(cards.pendingConfirmation?.label || 'Pending confirmation'), pendingOrders.length, '/staff/orders.html?status=pending') : '') +
     (stats.fieldTotals || []).map(f => plainStatCard(`Total ${EXO.esc(f.label)} <span class="muted" style="font-size:11px">(ongoing)</span>`, f.total.toLocaleString('en-IN') + (f.unit ? ' ' + EXO.esc(f.unit) : ''))).join('');
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';

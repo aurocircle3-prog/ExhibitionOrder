@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.79.0';
-const BUILD_TIME   = '2026-08-01T10:14:25Z';
+const APP_VERSION  = '1.81.0';
+const BUILD_TIME   = '2026-08-01T11:08:14Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -263,6 +263,13 @@ const tenantSchema = new mongoose.Schema({
   // the platform-admin override for that, not something a company can
   // turn on for themselves.
   allowDualLogin: { type: Boolean, default: false },
+  // Which of the Dashboard's 3 built-in stat cards this company sees, and
+  // what each is labeled — platform-admin controlled. Mixed rather than a
+  // strict sub-schema since it's just a small, fixed set of toggles/labels,
+  // not something that needs its own validation rules. Missing entirely
+  // (every existing company, before this shipped) is treated as "all 3
+  // shown, original labels" — see the fallback wherever this is read.
+  dashboardCards: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Order-notification emails are opt-in PER COMPANY, on top of the
   // platform-wide BREVO_API_KEY switch — both have to be true for a given
   // company's orders to actually send email. Default false: turning this
@@ -648,6 +655,38 @@ async function applyImagesForCode(tenantId, imageCode, images) {
   const items = await findItemsByImageCode(tenantId, imageCode);
   for (const it of items) await ItemDB.update({ id: it.id }, { images });
   return images;
+}
+// Actually deletes one stored image file — R2 or local disk, whichever's
+// active. Best-effort: an orphaned file left behind is a much smaller
+// problem than a failed delete blocking the actual request, so this logs
+// and moves on rather than throwing.
+async function deleteStoredImage(url) {
+  if (!url) return;
+  try {
+    if (useR2 && s3Client && R2_PUBLIC_URL && url.startsWith(R2_PUBLIC_URL + '/')) {
+      const key = url.slice(R2_PUBLIC_URL.length + 1);
+      await s3Client.send(new S3DeleteObjectsCommand({ Bucket: R2_BUCKET, Delete: { Objects: [{ Key: key }] } }));
+    } else if (!useR2 && url.startsWith('/uploads/')) {
+      fs.unlink(path.join(__dirname, url), () => {});
+    }
+  } catch (err) {
+    log.error({ err, url }, 'Failed to delete a stored image file (DB record was still updated)');
+  }
+}
+// Called after item(s) are deleted. Photos are shared across every item
+// using the same Image Code (that's the whole point of Image Codes — one
+// set of photos, many items), so deleting the files here would silently
+// break OTHER items still using that code. Only safe to actually remove
+// the files — and the ImageSet record itself — once no active item
+// references that code anymore.
+async function cleanupImageCodeIfOrphaned(tenantId, imageCode) {
+  if (!imageCode) return;
+  const stillUsed = await findItemsByImageCode(tenantId, imageCode);
+  if (stillUsed.length) return; // other items still use these photos — leave them alone
+  const set = await findImageSetCI(tenantId, imageCode);
+  if (!set) return;
+  await Promise.all((set.images || []).map(deleteStoredImage));
+  await ImageSetDB.remove({ id: set.id });
 }
 
 // Fire-and-forget audit write — never let a logging failure break the
@@ -1072,6 +1111,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     tenant.orderRowGrouping = template.orderRowGrouping || 'none';
     tenant.allowDuplicateItems = template.allowDuplicateItems !== false;
     tenant.orderStatuses = (template.orderStatuses && template.orderStatuses.length) ? template.orderStatuses : ['pending', 'confirmed', 'cancelled'];
+    tenant.dashboardCards = template.dashboardCards || {};
     tenant.orderCustomFields = template.orderCustomFields || [];
     tenant.orderViewColumns = template.orderViewColumns || [];
     tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
@@ -1167,6 +1207,20 @@ app.put('/api/platform/tenants/:id/allow-dual-login', platformAuth, async (req, 
   const value = !!req.body.allowDualLogin;
   await TenantDB.update({ id: tenant.id }, { allowDualLogin: value });
   res.json({ ok: true, allowDualLogin: value });
+});
+app.put('/api/platform/tenants/:id/dashboard-cards', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const raw = req.body.dashboardCards && typeof req.body.dashboardCards === 'object' ? req.body.dashboardCards : {};
+  const dashboardCards = {};
+  DASHBOARD_CARD_KEYS.forEach(key => {
+    dashboardCards[key] = {
+      show: raw[key]?.show !== false,
+      label: String(raw[key]?.label || '').trim().slice(0, 40) || DASHBOARD_CARD_DEFAULTS[key],
+    };
+  });
+  await TenantDB.update({ id: tenant.id }, { dashboardCards });
+  res.json({ ok: true, dashboardCards });
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -1968,6 +2022,16 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 // unlike every other field here, their show/hide toggle is platform-admin
 // only: the client can write the text, but AuroCircle decides whether it
 // actually goes live on the public link.
+// The Dashboard's 3 built-in stat cards — fixed set, so plain constants
+// rather than a configurable list. Platform admin can hide any of them
+// per company, or relabel them (e.g. a garment company might prefer
+// "Sets confirmed" over "Pending confirmation") via dashboardCards above.
+const DASHBOARD_CARD_KEYS = ['ordersToday', 'ordersOngoing', 'pendingConfirmation'];
+const DASHBOARD_CARD_DEFAULTS = {
+  ordersToday: 'Orders today',
+  ordersOngoing: 'Orders in ongoing exhibitions',
+  pendingConfirmation: 'Pending confirmation',
+};
 const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage', 'note1', 'note2'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
 const PLATFORM_ONLY_SHOW_KEYS = ['note1', 'note2'];
@@ -2226,11 +2290,20 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     updates.variantSelections = resolved;
   }
   await ItemDB.update({ id: req.params.id }, updates);
+  if (req.body.fields) {
+    const oldCode = String(item.fields?.imageCode || '').trim();
+    const newCode = String(updates.fields?.imageCode || '').trim();
+    if (oldCode && oldCode.toLowerCase() !== newCode.toLowerCase()) {
+      cleanupImageCodeIfOrphaned(req.tenant.id, oldCode).catch(err => log.error({ err }, 'Image cleanup failed after Image Code change'));
+    }
+  }
   res.json({ ok: true });
 });
 
 app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const item = await ItemDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   await ItemDB.remove({ id: req.params.id, tenantId: req.tenant.id });
+  if (item) cleanupImageCodeIfOrphaned(req.tenant.id, item.fields?.imageCode).catch(err => log.error({ err }, 'Image cleanup failed after item delete'));
   logAudit(req, 'item.delete', 'item', req.params.id);
   res.json({ ok: true });
 });
@@ -2238,9 +2311,15 @@ app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), as
   const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.filter(Boolean))] : [];
   if (!ids.length) return res.status(400).json({ error: 'No items selected' });
   if (ids.length > 500) return res.status(400).json({ error: 'Too many at once — delete in smaller batches (max 500)' });
+  const items = await ItemDB.find({ tenantId: req.tenant.id, id: { $in: ids } }).catch(() => []);
+  // Fallback for the lowdb path, whose query object can't express $in —
+  // fetch everything for this tenant and filter in JS instead.
+  const itemsForCleanup = items.length ? items : (await ItemDB.find({ tenantId: req.tenant.id })).filter(it => ids.includes(it.id));
+  const imageCodes = [...new Set(itemsForCleanup.map(it => it.fields?.imageCode).filter(Boolean))];
   for (const id of ids) {
     await ItemDB.remove({ id, tenantId: req.tenant.id });
   }
+  Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after bulk delete'));
   logAudit(req, 'item.bulk_delete', 'item', ids.length, { count: ids.length, ids });
   res.json({ ok: true, deleted: ids.length });
 });
@@ -2250,7 +2329,9 @@ app.post('/api/items/delete-all', resolveTenant, auth, requireRole('admin'), asy
   const q = { tenantId: req.tenant.id };
   if (req.body.exhibitionId) q.exhibitionId = req.body.exhibitionId;
   const existing = await ItemDB.find(q);
+  const imageCodes = [...new Set(existing.map(it => it.fields?.imageCode).filter(Boolean))];
   await ItemDB.remove(q);
+  Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after delete-all'));
   logAudit(req, 'item.delete_all', 'item', existing.length, { count: existing.length, exhibitionId: req.body.exhibitionId || null });
   res.json({ ok: true, deleted: existing.length });
 });
@@ -2289,7 +2370,9 @@ app.delete('/api/items/:id/images/:index', resolveTenant, auth, requireRole('adm
   if (!imageCode) return res.status(404).json({ error: 'This item has no Image Code set' });
   const idx = Number(req.params.index);
   const current = await getImagesForCode(req.tenant.id, imageCode);
+  const removedUrl = current[idx];
   const images = await applyImagesForCode(req.tenant.id, imageCode, current.filter((_, i) => i !== idx));
+  if (removedUrl) deleteStoredImage(removedUrl).catch(err => log.error({ err }, 'Image file cleanup failed after single-image delete'));
   res.json({ ok: true, images });
 });
 
@@ -3466,7 +3549,15 @@ app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff
     total: Number(ongoingOrders.reduce((sum, o) => sum + (Number(o.fieldTotals?.[f.key]) || 0), 0).toFixed(2)),
   }));
 
-  res.json({ ordersToday, fieldTotals });
+  // Resolve against defaults so a company that's never been customized
+  // (dashboardCards === {}) still gets all 3 cards, original labels.
+  const saved = req.tenant.dashboardCards || {};
+  const cardConfig = {};
+  DASHBOARD_CARD_KEYS.forEach(key => {
+    cardConfig[key] = { show: saved[key]?.show !== false, label: saved[key]?.label || DASHBOARD_CARD_DEFAULTS[key] };
+  });
+
+  res.json({ ordersToday, fieldTotals, cardConfig });
 });
 
 // ── Custom reports (client-facing) ────────────────────────────────────────
