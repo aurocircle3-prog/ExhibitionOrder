@@ -74,7 +74,11 @@
     }
   }
   function getUser() { try { return JSON.parse(localStorage.getItem('exo_user') || 'null'); } catch { return null; } }
-  function logout() { localStorage.removeItem('exo_token'); localStorage.removeItem('exo_user'); location.href = '/login.html'; }
+  function logout() {
+    const token = localStorage.getItem('exo_token');
+    if (token) fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+    localStorage.removeItem('exo_token'); localStorage.removeItem('exo_user'); location.href = '/login.html';
+  }
   function requireRole(...roles) {
     const user = getUser();
     if (!localStorage.getItem('exo_token') || !user || !roles.includes(user.role)) { location.href = '/login.html'; return null; }

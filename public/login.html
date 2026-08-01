@@ -29,7 +29,11 @@ async function login(){
   if (tenant) localStorage.setItem('exo_tenant', tenant);
   try {
     const body = { loginId: document.getElementById('loginId').value.trim(), password: document.getElementById('password').value };
-    const data = await EXO.apiFetch('/auth/login', { method:'POST', body: JSON.stringify(body) });
+    let data = await EXO.apiFetch('/auth/login', { method:'POST', body: JSON.stringify(body) });
+    if (data.needsConfirmation) {
+      if (!confirm(data.message + ' Continue signing in here?')) return;
+      data = await EXO.apiFetch('/auth/login', { method:'POST', body: JSON.stringify({ ...body, confirmDualLogin: true }) });
+    }
     EXO.saveSession(data);
     if (data.user.role === 'client') location.href = '/client/orders.html';
     else if (data.user.role === 'staff') location.href = '/staff/order.html';

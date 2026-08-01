@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.75.0';
-const BUILD_TIME   = '2026-07-31T12:32:09Z';
+const APP_VERSION  = '1.76.0';
+const BUILD_TIME   = '2026-08-01T06:27:25Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -257,6 +257,12 @@ const tenantSchema = new mongoose.Schema({
   // tenant keeps working identically until a platform admin deliberately
   // customizes this.
   orderStatuses: { type: [String], default: ['pending', 'confirmed', 'cancelled'] },
+  // Off by default — logging in from a second device kicks the first one
+  // out (see auth() below). Some companies may have a legitimate reason
+  // to want the same login usable on multiple devices at once; this is
+  // the platform-admin override for that, not something a company can
+  // turn on for themselves.
+  allowDualLogin: { type: Boolean, default: false },
   // Order-notification emails are opt-in PER COMPANY, on top of the
   // platform-wide BREVO_API_KEY switch — both have to be true for a given
   // company's orders to actually send email. Default false: turning this
@@ -801,7 +807,7 @@ async function auth(req, res, next) {
     if (payload.sessionId) {
       const user = await UserDB.findOne({ id: payload.id });
       if (!user || user.active === false) return res.status(401).json({ error: 'Account no longer active.' });
-      if (user.currentSessionId && user.currentSessionId !== payload.sessionId)
+      if (!req.tenant?.allowDualLogin && user.currentSessionId && user.currentSessionId !== payload.sessionId)
         return res.status(401).json({ error: 'You were signed out because this account was signed in from another device.', sessionInvalidated: true });
     }
     req.user = payload;
@@ -1132,6 +1138,13 @@ app.put('/api/platform/tenants/:id/order-statuses', platformAuth, async (req, re
   const deduped = [...new Set(statuses)].slice(0, 20); // sane upper bound, not a real limit anyone should hit
   await TenantDB.update({ id: tenant.id }, { orderStatuses: deduped });
   res.json({ ok: true, orderStatuses: deduped });
+});
+app.put('/api/platform/tenants/:id/allow-dual-login', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.allowDualLogin;
+  await TenantDB.update({ id: tenant.id }, { allowDualLogin: value });
+  res.json({ ok: true, allowDualLogin: value });
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -1525,12 +1538,21 @@ app.post('/api/companies/register', async (req, res) => {
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
 app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
-  const { loginId, password } = req.body;
+  const { loginId, password, confirmDualLogin } = req.body;
   if (!loginId || !password) return res.status(400).json({ error: 'Login ID and password are required' });
   const user = await UserDB.findOne({ tenantId: req.tenant.id, loginId: String(loginId).toLowerCase() });
   if (!user || !user.active || !bcrypt.compareSync(password, user.password)) {
     log.warn({ tenant: req.tenant.slug, loginId, ip: req.ip }, 'Failed login attempt');
     return res.status(401).json({ error: 'Invalid login ID or password' });
+  }
+  // Warn before kicking someone out, rather than doing it silently — but
+  // only after the password's already been checked, so this can't be used
+  // to probe whether an account is currently active without knowing its
+  // password. Skipped entirely if the company has dual-login allowed (see
+  // allowDualLogin), or if the frontend already showed this warning and
+  // the person chose to continue.
+  if (!req.tenant.allowDualLogin && !confirmDualLogin && user.currentSessionId) {
+    return res.json({ needsConfirmation: true, message: 'This account is already signed in somewhere else. Continuing will sign that device out.' });
   }
   // A fresh session ID on every login — this is what actually enforces
   // "one device at a time" for this login. Any token issued before this
@@ -1543,6 +1565,14 @@ app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
   req.user = safeUser; // so logAudit can pick up actor info for this request
   logAudit(req, 'auth.login', 'user', user.id);
   res.json({ token, user: safeUser, tenant: req.tenant });
+});
+// Clears the session marker so the NEXT login for this account doesn't
+// wrongly warn "already signed in elsewhere" — without this, that warning
+// would fire after every single login forever, since currentSessionId
+// otherwise only ever gets overwritten, never cleared.
+app.post('/api/auth/logout', resolveTenant, auth, async (req, res) => {
+  await UserDB.update({ id: req.user.id }, { currentSessionId: null });
+  res.json({ ok: true });
 });
 
 // Client self-signup — exhibition buyers create their own login within a company

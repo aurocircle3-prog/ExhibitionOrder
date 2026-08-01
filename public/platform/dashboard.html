@@ -207,6 +207,12 @@
         <button class="primary small" onclick="EXO.busy(this, saveOrderStatuses)">Save</button>
       </div>
 
+      <h4>Login sessions</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="allowDualLoginToggle" style="width:auto" onchange="saveAllowDualLogin(this.checked)"> <span>Allow the same login on multiple devices at once</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default — logging in on a second device signs the first one out immediately, with a warning shown before it happens. Turn this on only if this company has a real reason to want a login shared across devices.</p>
+
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
@@ -650,6 +656,15 @@ async function saveOrderStatuses(){
     EXO.toast('Order statuses saved.');
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
+async function saveAllowDualLogin(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/allow-dual-login`, { method: 'PUT', body: JSON.stringify({ allowDualLogin: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('allowDualLoginToggle').checked = !checked;
+    EXO.toast(e.message, 'error');
+  }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -713,6 +728,7 @@ async function openDetail(id){
   document.getElementById('allowDuplicateItemsToggle').checked = tenant.allowDuplicateItems !== false;
   document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
   document.getElementById('orderStatusesInput').value = (tenant.orderStatuses && tenant.orderStatuses.length ? tenant.orderStatuses : ['pending', 'confirmed', 'cancelled']).join(', ');
+  document.getElementById('allowDualLoginToggle').checked = !!tenant.allowDualLogin;
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
