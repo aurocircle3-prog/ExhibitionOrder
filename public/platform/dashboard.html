@@ -63,7 +63,7 @@
           <label>Admin mobile <span class="muted">(optional)</span></label>
           <div style="display:flex;gap:6px">
             <input id="newAdminPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-            <input id="newAdminPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+            <input id="newAdminPhone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
           </div>
         </div>
         <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
@@ -1518,7 +1518,7 @@ function loadDetailFooter(tenant){
       const num = digits.length > 10 ? digits.slice(-10) : digits;
       inputHtml = `<div style="display:flex;gap:6px">
         <input id="dfooter_${def.key}_cc" value="${EXO.esc(cc)}" maxlength="4" style="width:60px;flex:0 0 auto">
-        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="90290 06090">
+        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="98765 43210">
       </div>`;
     } else {
       inputHtml = `<input id="dfooter_${def.key}" value="${EXO.esc(val)}" placeholder="${EXO.esc(def.placeholder || '')}">`;

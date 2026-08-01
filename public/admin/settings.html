@@ -518,7 +518,7 @@ function loadFooter(tenant){
       const num = digits.length > 10 ? digits.slice(-10) : digits;
       inputHtml = `<div style="display:flex;gap:6px">
         <input id="footer_${def.key}_cc" value="${EXO.esc(cc)}" maxlength="4" style="width:60px;flex:0 0 auto">
-        <input id="footer_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="90290 06090">
+        <input id="footer_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="98765 43210">
       </div>`;
     } else {
       inputHtml = `<input id="footer_${def.key}" value="${EXO.esc(val)}" placeholder="${EXO.esc(def.placeholder || '')}">`;
