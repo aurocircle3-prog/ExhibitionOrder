@@ -1,0 +1,93 @@
+<title>Best Sellers — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div id="nav"></div>
+<div id="subnav" class="wrap" style="padding-bottom:0"></div>
+<div class="wrap">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <h3 style="margin:0">Best Sellers — <span id="exName" class="muted"></span></h3>
+      <input id="search" placeholder="Search items…" oninput="onSearch()" style="max-width:220px">
+    </div>
+    <div id="grid" class="best-sellers-grid"></div>
+    <div id="pagerInfo" class="muted" style="text-align:center;margin-top:14px;font-size:12px"></div>
+    <div class="btn-row" style="justify-content:center;margin-top:8px">
+      <button class="ghost small" id="prevBtn" onclick="changePage(-1)">← Previous</button>
+      <button class="ghost small" id="nextBtn" onclick="changePage(1)">Next →</button>
+    </div>
+  </div>
+</div>
+<div class="simple-lightbox" id="simpleLightbox" onclick="closeSimpleLightbox()">
+  <img id="simpleLightboxImg" src="">
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.requireRole('admin');
+document.getElementById('nav').innerHTML = EXO.adminNav('dashboard');
+document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('bestsellers');
+const ex = EXO.currentExhibition();
+if (!ex) location.href = '/admin/dashboard.html';
+document.getElementById('exName').textContent = ex.name;
+
+// 20 per page on desktop, 10 on mobile — matches the same breakpoint the
+// rest of this app already treats as "mobile" (700px).
+function pageSize(){ return window.innerWidth <= 700 ? 10 : 20; }
+
+let allItems = [];
+let filtered = [];
+let page = 0;
+
+async function load(){
+  allItems = await EXO.apiFetch(`/dashboard/best-sellers?exhibitionId=${ex.id}&limit=1000`);
+  applySearch();
+}
+function onSearch(){ page = 0; applySearch(); }
+function applySearch(){
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  filtered = q ? allItems.filter(it => (it.label || '').toLowerCase().includes(q) || (it.scannerCode || '').toLowerCase().includes(q)) : allItems;
+  render();
+}
+function changePage(delta){
+  const maxPage = Math.max(0, Math.ceil(filtered.length / pageSize()) - 1);
+  page = Math.min(Math.max(page + delta, 0), maxPage);
+  render();
+}
+function render(){
+  const size = pageSize();
+  const maxPage = Math.max(0, Math.ceil(filtered.length / size) - 1);
+  if (page > maxPage) page = maxPage;
+  const start = page * size;
+  const pageItems = filtered.slice(start, start + size);
+
+  document.getElementById('grid').innerHTML = pageItems.map(it => `
+    <div class="best-seller-card">
+      ${it.images?.[0]
+        ? `<img class="best-seller-thumb" src="${EXO.esc(it.images[0])}" onclick="openSimpleLightbox('${EXO.escAttr(it.images[0])}')" onerror="this.outerHTML='<div class=&quot;best-seller-thumb-empty&quot;></div>'">`
+        : '<div class="best-seller-thumb-empty"></div>'}
+      <p class="best-seller-label">${EXO.esc(it.label)}</p>
+      <p class="best-seller-qty">${it.qty} sold</p>
+    </div>`).join('') || '<p class="muted">No matching items.</p>';
+
+  document.getElementById('pagerInfo').textContent = filtered.length
+    ? `${start + 1}–${Math.min(start + size, filtered.length)} of ${filtered.length}`
+    : '';
+  document.getElementById('prevBtn').disabled = page === 0;
+  document.getElementById('nextBtn').disabled = page >= maxPage;
+}
+function openSimpleLightbox(src){
+  document.getElementById('simpleLightboxImg').src = src;
+  document.getElementById('simpleLightbox').classList.add('open');
+}
+function closeSimpleLightbox(){ document.getElementById('simpleLightbox').classList.remove('open'); }
+
+// Re-paginate (not re-fetch) if the window crosses the mobile/desktop
+// breakpoint — e.g. rotating a tablet, or resizing a browser window.
+let lastPageSize = pageSize();
+window.addEventListener('resize', () => {
+  const s = pageSize();
+  if (s !== lastPageSize) { lastPageSize = s; page = 0; render(); }
+});
+
+load();
+</script>

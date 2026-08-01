@@ -3,6 +3,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
+<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <p class="muted" style="margin-top:0">Catalog for <b id="exhibitionNameLabel"></b> <span class="muted">— use "Change exhibition" in the top bar to switch</span></p>
 
@@ -107,6 +108,7 @@
 <script>
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('items');
+document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('items');
 let fields = [], items = [], editingId = null, editingFieldId = null;
 let enableVariants = false, variantCategories = [];
 const tenantSlug = EXO.getTenantSlug();

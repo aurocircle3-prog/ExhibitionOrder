@@ -120,19 +120,40 @@
   }
   function adminNav(active) {
     const ex = currentExhibition();
+    // Item Master / Take Order / Orders used to conditionally appear here
+    // whenever an exhibition was selected — which meant the nav's own
+    // contents changed depending on state, the actual source of confusion.
+    // They're exhibition-scoped by nature, so they now live only in the
+    // exhibition hub (dashboard -> Enter) and the sub-nav shown on those
+    // pages themselves (see exhibitionSubNav below) — this top nav stays
+    // the same regardless of exhibition context.
     const links = [
       { key: 'dashboard', href: '/admin/dashboard.html', label: 'Dashboard' },
-      ...(ex ? [
-        { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
-        { key: 'order', href: '/staff/order.html', label: 'Take Order' },
-        { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
-      ] : []),
       { key: 'buyers', href: '/admin/buyers.html', label: 'Buyers' },
       { key: 'staff', href: '/admin/staff.html', label: 'Staff' },
       { key: 'reports', href: '/admin/reports.html', label: 'Reports' },
       { key: 'settings', href: '/admin/settings.html', label: 'Settings' },
     ];
     return navBar(links, active, ex);
+  }
+  // The exhibition-scoped counterpart to adminNav — shown as a secondary
+  // strip on Take Order / Item Master / Orders / exhibition Reports /
+  // exhibition Best Sellers, so switching between those doesn't mean going
+  // back to the hub every time, even though they're no longer in the main
+  // nav. Admin-only — staff's flow stays exactly as it was (straight to
+  // Take Order, no hub, no sub-nav; that's still the right amount of
+  // navigation for a role with one job).
+  function exhibitionSubNav(active) {
+    const ex = currentExhibition();
+    const links = [
+      { key: 'hub', href: '/admin/exhibition-hub.html', label: '☰' },
+      { key: 'order', href: '/staff/order.html', label: 'Take Order' },
+      { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
+      { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
+      { key: 'reports', href: '/admin/reports.html' + (ex ? '?exhibitionId=' + ex.id : ''), label: 'Reports' },
+      { key: 'bestsellers', href: '/admin/exhibition-bestsellers.html', label: 'Best Sellers' },
+    ];
+    return `<div class="tabs subtabs">${links.map(l => `<a href="${l.href}" class="tab-btn${l.key===active?' active':''}" style="text-decoration:none">${l.label}</a>`).join('')}</div>`;
   }
   // Item Master, Take Order, and Orders are all exhibition-scoped now —
   // this makes sure whoever lands on one of those has a current exhibition
@@ -244,7 +265,7 @@
     const jsEscaped = String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
     return jsEscaped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, exhibitionSubNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

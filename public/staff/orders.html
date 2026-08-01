@@ -3,6 +3,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
+<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
@@ -34,6 +35,7 @@ const params = new URLSearchParams(location.search);
 const statusFilter = params.get('status') || '';
 const dateFilter = params.get('date') || '';
 const isFiltered = !!(statusFilter || dateFilter);
+if (user.role === 'admin' && !isFiltered) document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('orders');
 let tenantStatuses = ['pending', 'confirmed', 'cancelled']; // overwritten by /me once loaded; this is just the pre-load default
 
 if (isFiltered) {

@@ -3,6 +3,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
+<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <div class="tabs" id="reportTabs"></div>
   <p class="muted" id="noCustomReportsMsg" style="display:none">No reports have been set up for your company yet — contact ExpoOrders to get one built.</p>
@@ -12,6 +13,12 @@
 <script>
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('reports');
+// Arriving with ?exhibitionId= (from the exhibition hub or its sub-nav)
+// means every report on this page should default to that one exhibition
+// instead of "All exhibitions" — and the sub-nav shows too, so this still
+// feels like part of that same exhibition's set of screens.
+const preselectExhibitionId = new URLSearchParams(location.search).get('exhibitionId') || '';
+if (preselectExhibitionId) document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('reports');
 
 let allExhibitions = [];
 let reportList = [];
@@ -35,7 +42,7 @@ async function init(){
   document.getElementById('noCustomReportsMsg').style.display = reports.length ? 'none' : 'block';
   document.getElementById('reportTabs').innerHTML = reports.map(r => `<button class="tab-btn" data-report-id="${r.id}" onclick="switchReportTab('${r.id}')">${EXO.esc(r.name)}</button>`).join('');
 
-  const exOptionsHtml = '<option value="">All exhibitions</option>' + exhibitions.map(e => `<option value="${e.id}">${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('');
+  const exOptionsHtml = '<option value="">All exhibitions</option>' + exhibitions.map(e => `<option value="${e.id}" ${e.id===preselectExhibitionId?'selected':''}>${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('');
   document.getElementById('reportPanels').innerHTML = reports.map(r => `
     <div class="tab-panel report-panel" id="reportpanel-${r.id}">
       <div class="card">

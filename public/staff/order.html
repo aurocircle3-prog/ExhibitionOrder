@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.js"></script>
 <div id="nav"></div>
+<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <div class="card" id="syncBanner" style="display:none"></div>
   <div class="card" id="draftBanner" style="display:none"></div>
@@ -131,6 +132,7 @@
 <script>
 const currentUser = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
+if (currentUser.role === 'admin') document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('order');
 let party = null, cart = [], lastOrder = null, orderFields = [];
 const tenantSlug = EXO.getTenantSlug();
 

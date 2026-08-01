@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.77.0';
-const BUILD_TIME   = '2026-08-01T09:17:34Z';
+const APP_VERSION  = '1.78.0';
+const BUILD_TIME   = '2026-08-01T09:46:11Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3429,7 +3429,7 @@ async function getReportsForTenant(tenantId, exhibitionId) {
 // lightweight endpoint so Dashboard doesn't have to pull every
 // party/staff aggregate it doesn't need.
 app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 1000);
   const { byItem } = await getReportsForTenant(req.tenant.id, req.query.exhibitionId);
   res.json(byItem.slice(0, limit));
 });

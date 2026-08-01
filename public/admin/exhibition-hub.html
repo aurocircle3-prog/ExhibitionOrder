@@ -35,24 +35,45 @@
     </div>
     <div class="hub-tile-arrow">→</div>
   </a>
+
+  <a class="card hub-tile" id="reportsTile" href="#">
+    <div class="hub-tile-icon">📊</div>
+    <div>
+      <h4 style="margin:0">Reports</h4>
+      <p class="muted" style="margin:2px 0 0">Party-wise, item-wise, and custom reports for this exhibition</p>
+    </div>
+    <div class="hub-tile-arrow">→</div>
+  </a>
+
+  <a class="card hub-tile" href="/admin/exhibition-bestsellers.html">
+    <div class="hub-tile-icon">🏆</div>
+    <div>
+      <h4 style="margin:0">Best Sellers</h4>
+      <p class="muted" style="margin:2px 0 0">Which items are selling best at this exhibition</p>
+    </div>
+    <div class="hub-tile-arrow">→</div>
+  </a>
 </div>
 <script src="/app.js"></script>
 <script>
 const user = EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('dashboard');
 const ex = EXO.currentExhibition();
-if (!ex) location.href = '/admin/dashboard.html';
-
-(async function(){
-  document.getElementById('exName').textContent = ex.name;
-  try {
-    const exhibitions = await EXO.apiFetch('/exhibitions');
-    const full = exhibitions.find(e => e.id === ex.id);
-    if (full) {
-      document.getElementById('exMeta').textContent = `${full.location || ''}${full.location ? ' · ' : ''}${full.itemCount} item${full.itemCount===1?'':'s'} · ${full.orderCount} order${full.orderCount===1?'':'s'}`;
-      document.getElementById('itemCountLine').textContent = `${full.itemCount} item${full.itemCount===1?'':'s'} set up so far`;
-      document.getElementById('orderCountLine').textContent = `${full.orderCount} order${full.orderCount===1?'':'s'} placed so far`;
-    }
-  } catch (e) { /* non-critical — hub tiles still work without the counts */ }
-})();
+if (!ex) {
+  location.href = '/admin/dashboard.html';
+} else {
+  document.getElementById('reportsTile').href = '/admin/reports.html?exhibitionId=' + ex.id;
+  (async function(){
+    document.getElementById('exName').textContent = ex.name;
+    try {
+      const exhibitions = await EXO.apiFetch('/exhibitions');
+      const full = exhibitions.find(e => e.id === ex.id);
+      if (full) {
+        document.getElementById('exMeta').textContent = `${full.location || ''}${full.location ? ' · ' : ''}${full.itemCount} item${full.itemCount===1?'':'s'} · ${full.orderCount} order${full.orderCount===1?'':'s'}`;
+        document.getElementById('itemCountLine').textContent = `${full.itemCount} item${full.itemCount===1?'':'s'} set up so far`;
+        document.getElementById('orderCountLine').textContent = `${full.orderCount} order${full.orderCount===1?'':'s'} placed so far`;
+      }
+    } catch (e) { /* non-critical — hub tiles still work without the counts */ }
+  })();
+}
 </script>
