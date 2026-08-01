@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.81.0';
-const BUILD_TIME   = '2026-08-01T11:08:14Z';
+const APP_VERSION  = '1.82.0';
+const BUILD_TIME   = '2026-08-01T11:22:22Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -2026,11 +2026,13 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 // rather than a configurable list. Platform admin can hide any of them
 // per company, or relabel them (e.g. a garment company might prefer
 // "Sets confirmed" over "Pending confirmation") via dashboardCards above.
-const DASHBOARD_CARD_KEYS = ['ordersToday', 'ordersOngoing', 'pendingConfirmation'];
+const DASHBOARD_CARD_KEYS = ['ordersToday', 'ordersOngoing', 'pendingConfirmation', 'qtyToday', 'qtyOngoing'];
 const DASHBOARD_CARD_DEFAULTS = {
   ordersToday: 'Orders today',
   ordersOngoing: 'Orders in ongoing exhibitions',
   pendingConfirmation: 'Pending confirmation',
+  qtyToday: 'Items sold today',
+  qtyOngoing: 'Items sold (ongoing)',
 };
 const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage', 'note1', 'note2'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
@@ -3527,7 +3529,8 @@ app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff
     ExhibitionParticipantDB.find({ tenantId: req.tenant.id }),
   ]);
   const liveOrders = orders.filter(o => !o.deleted);
-  const ordersToday = liveOrders.filter(o => istDateString(new Date(o.createdAt)) === today).length;
+  const todayOrders = liveOrders.filter(o => istDateString(new Date(o.createdAt)) === today);
+  const ordersToday = todayOrders.length;
 
   // Which exhibitions currently count as "ongoing" — same rule GET
   // /api/exhibitions uses (closed by the company, or AuroCircle's paid-for
@@ -3539,25 +3542,39 @@ app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff
 
   // Whichever Order Form field(s) this company has flagged "Show total"
   // on — the exact same flag already driving the totals footer on a
-  // single printed order — summed here across every ongoing-exhibition
-  // order instead of just one. Net weight for a gold jewellery company,
-  // amount for a garment company, whatever each company already told the
-  // app matters to them; nothing new to configure.
+  // single printed order — summed here across a set of orders instead of
+  // just one. Net weight for a gold jewellery company, amount for a
+  // garment company, whatever each company already told the app matters
+  // to them; nothing new to configure. Computed for both scopes (today
+  // and ongoing exhibitions) rather than just one, since "how much have I
+  // done today" and "how much so far at this show" are both things people
+  // actually want to glance at, not just one or the other.
   const totalFields = (req.tenant.orderFields || []).filter(f => f.showTotal);
-  const fieldTotals = totalFields.map(f => ({
-    key: f.key, label: f.label, unit: f.unit || '',
-    total: Number(ongoingOrders.reduce((sum, o) => sum + (Number(o.fieldTotals?.[f.key]) || 0), 0).toFixed(2)),
-  }));
+  const sumField = (orderList, key) => Number(orderList.reduce((sum, o) => sum + (Number(o.fieldTotals?.[key]) || 0), 0).toFixed(2));
+  const fieldTotals = totalFields.map(f => ({ key: f.key, label: f.label, unit: f.unit || '', total: sumField(ongoingOrders, f.key) }));
+  const fieldTotalsToday = totalFields.map(f => ({ key: f.key, label: f.label, unit: f.unit || '', total: sumField(todayOrders, f.key) }));
+
+  // Total items ordered — distinct from order *count*: one order with 5
+  // items should count as 5 here, not 1. Nothing computed this before.
+  const sumQty = orderList => orderList.reduce((sum, o) => sum + (o.items || []).reduce((s, it) => s + (Number(it.qty) || 0), 0), 0);
+  const qtyToday = sumQty(todayOrders);
+  const qtyOngoing = sumQty(ongoingOrders);
 
   // Resolve against defaults so a company that's never been customized
-  // (dashboardCards === {}) still gets all 3 cards, original labels.
+  // (dashboardCards === {}) still gets all 3 original cards shown, plus
+  // the 2 new quantity cards OFF by default (opt-in, since not every
+  // company will want them cluttering the dashboard immediately).
   const saved = req.tenant.dashboardCards || {};
   const cardConfig = {};
   DASHBOARD_CARD_KEYS.forEach(key => {
-    cardConfig[key] = { show: saved[key]?.show !== false, label: saved[key]?.label || DASHBOARD_CARD_DEFAULTS[key] };
+    const isNewOptIn = key === 'qtyToday' || key === 'qtyOngoing';
+    cardConfig[key] = {
+      show: isNewOptIn ? saved[key]?.show === true : saved[key]?.show !== false,
+      label: saved[key]?.label || DASHBOARD_CARD_DEFAULTS[key],
+    };
   });
 
-  res.json({ ordersToday, fieldTotals, cardConfig });
+  res.json({ ordersToday, fieldTotals, fieldTotalsToday, qtyToday, qtyOngoing, cardConfig });
 });
 
 // ── Custom reports (client-facing) ────────────────────────────────────────

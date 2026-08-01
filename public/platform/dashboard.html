@@ -689,13 +689,19 @@ const DASHBOARD_CARD_DEFAULTS = {
   ordersToday: 'Orders today',
   ordersOngoing: 'Orders in ongoing exhibitions',
   pendingConfirmation: 'Pending confirmation',
+  qtyToday: 'Items sold today',
+  qtyOngoing: 'Items sold (ongoing)',
 };
+const DASHBOARD_CARD_OPT_IN = ['qtyToday', 'qtyOngoing']; // off by default, unlike the original 3
 function renderDashboardCardRows(saved){
-  document.getElementById('dashboardCardRows').innerHTML = Object.entries(DASHBOARD_CARD_DEFAULTS).map(([key, defaultLabel]) => `
+  document.getElementById('dashboardCardRows').innerHTML = Object.entries(DASHBOARD_CARD_DEFAULTS).map(([key, defaultLabel]) => {
+    const isChecked = DASHBOARD_CARD_OPT_IN.includes(key) ? saved[key]?.show === true : saved[key]?.show !== false;
+    return `
     <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-      <input type="checkbox" data-card-key="${key}" class="dc-show" style="width:auto" ${saved[key]?.show !== false ? 'checked' : ''}>
+      <input type="checkbox" data-card-key="${key}" class="dc-show" style="width:auto" ${isChecked ? 'checked' : ''}>
       <input data-card-key="${key}" class="dc-label" value="${EXO.esc(saved[key]?.label || defaultLabel)}" style="flex:1;max-width:280px">
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 async function saveDashboardCards(){
   const dashboardCards = {};

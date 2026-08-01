@@ -94,6 +94,9 @@ async function load(){
     (cards.ordersToday?.show !== false ? statCard(EXO.esc(cards.ordersToday?.label || 'Orders today'), stats.ordersToday, '/staff/orders.html?date=today') : '') +
     (cards.ordersOngoing?.show !== false ? statCard(EXO.esc(cards.ordersOngoing?.label || 'Orders in ongoing exhibitions'), ordersInCurrent, '/staff/orders.html') : '') +
     (cards.pendingConfirmation?.show !== false ? statCard(EXO.esc(cards.pendingConfirmation?.label || 'Pending confirmation'), pendingOrders.length, '/staff/orders.html?status=pending') : '') +
+    (cards.qtyToday?.show === true ? plainStatCard(EXO.esc(cards.qtyToday?.label || 'Items sold today'), stats.qtyToday) : '') +
+    (cards.qtyOngoing?.show === true ? plainStatCard(EXO.esc(cards.qtyOngoing?.label || 'Items sold (ongoing)'), stats.qtyOngoing) : '') +
+    (stats.fieldTotalsToday || []).map(f => plainStatCard(`Total ${EXO.esc(f.label)} <span class="muted" style="font-size:11px">(today)</span>`, f.total.toLocaleString('en-IN') + (f.unit ? ' ' + EXO.esc(f.unit) : ''))).join('') +
     (stats.fieldTotals || []).map(f => plainStatCard(`Total ${EXO.esc(f.label)} <span class="muted" style="font-size:11px">(ongoing)</span>`, f.total.toLocaleString('en-IN') + (f.unit ? ' ' + EXO.esc(f.unit) : ''))).join('');
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
