@@ -318,6 +318,7 @@ async function searchParty(q){
     if (!isNetworkFailure(e)) throw e;
     results = await ExoOffline.searchPartiesOffline(tenantSlug, q);
   }
+  results = results.slice().sort((a, b) => (a.firmName || '').localeCompare(b.firmName || '', undefined, { sensitivity: 'base', numeric: true }));
   box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${EXO.esc(JSON.stringify(p))})'><span>${EXO.esc(p.firmName)} — ${EXO.esc(p.phone)}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
 }
 function pickParty(p){ party = p; showPartyPicked(); }
@@ -527,7 +528,7 @@ function renderSearchSuggestions(q){
     // picker itself (via addToCart) blocks re-adding an exact combo.
     if (!allowDuplicateItems && !hasVariants && cartItemIds.has(it.id)) return false;
     return it.scannerCode?.toLowerCase().includes(q) || String(it.fields?.itemName || '').toLowerCase().includes(q);
-  }).slice(0, 8);
+  }).sort((a, b) => String(a.fields?.itemName || a.scannerCode || '').localeCompare(String(b.fields?.itemName || b.scannerCode || ''), undefined, { sensitivity: 'base', numeric: true })).slice(0, 8);
   if (!matches.length) { box.style.display = 'none'; return; }
   box.innerHTML = matches.map(it => `
     <div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
