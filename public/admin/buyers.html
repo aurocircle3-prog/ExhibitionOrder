@@ -204,7 +204,7 @@ async function bulkDeleteBuyers(){
 async function deleteAllBuyers(){
   if (!buyers.length) { EXO.toast('No buyers to delete', 'error'); return; }
   const typed = prompt(`This permanently deletes ALL ${buyers.length} buyers — cannot be undone. Type DELETE ALL to confirm:`);
-  if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
+  if ((typed || '').trim().toUpperCase() !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
   try {
     const res = await EXO.apiFetch('/parties/delete-all', { method: 'POST' });
     EXO.toast(`Deleted all ${res.deleted} buyers`);

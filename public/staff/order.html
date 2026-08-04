@@ -261,8 +261,19 @@ async function showPendingOrders(){
         ${o.items.map(i => `<li>${EXO.esc(i.label)}${i.code ? ' (' + EXO.esc(i.code) + ')' : ''} × ${i.qty}${i.comment ? ' — ' + EXO.esc(i.comment) : ''}</li>`).join('')}
       </ul>
       ${o.remark ? `<p class="muted" style="margin:4px 0">Remark: ${EXO.esc(o.remark)}</p>` : ''}
+      <button class="danger small" style="margin-top:6px" onclick="discardPendingOrder('${o.id}','${EXO.escAttr(o.buyerName)}')">Discard — don't send this order</button>
     </div>`).join('') : '<p class="muted">Nothing pending — everything is synced.</p>';
   document.getElementById('pendingModal').classList.add('open');
+}
+async function discardPendingOrder(id, buyerName){
+  // Confirmed, not a quiet one-tap delete — this is an order that was
+  // actually completed with a buyer already, not just an in-progress
+  // draft, so losing it is a bigger deal than discarding a draft is.
+  if (!confirm(`Discard the queued order for ${buyerName || 'this buyer'}? It will never be sent — this can't be undone.`)) return;
+  await ExoOffline.removeFromOutbox(id);
+  EXO.toast('Order discarded — it will not be sent.');
+  showPendingOrders();
+  updateSyncBanner();
 }
 function closePendingModal(){ document.getElementById('pendingModal').classList.remove('open'); }
 async function downloadPendingExcel(){

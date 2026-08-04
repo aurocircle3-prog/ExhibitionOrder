@@ -55,7 +55,7 @@
         </div>
         <div>
           <label>&nbsp;</label>
-          <button class="primary" style="width:100%" onclick="importExcel()">Import items</button>
+          <button class="primary" style="width:100%" onclick="EXO.busy(this, importExcel)">Import items</button>
         </div>
       </div>
       <p class="muted" style="margin-top:10px">Columns match your fields by name — the template header shows each field's type (and decimal places for numbers) in brackets. The Item Code column is required in every row; a matching scan code updates that item instead of duplicating it, and number values are rounded to the field's configured decimals.</p>
@@ -68,7 +68,7 @@
       <p class="muted" id="bulkImgMsg" style="display:none;color:var(--ok);background:#e1f2ea;padding:10px 14px;border-radius:8px"></p>
       <label>Select photo files — name each one after the item's Image Code (e.g. <code>1.jpg</code>, <code>1_1.jpg</code>, <code>1_2.jpg</code> for image code "1")</label>
       <input type="file" id="bulkImages" multiple accept="image/*">
-      <button class="primary" style="margin-top:12px" onclick="importBulkImages()">Upload &amp; match photos</button>
+      <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, importBulkImages)">Upload &amp; match photos</button>
     </div>
   </div>
 
@@ -81,7 +81,9 @@
       <div class="btn-row" style="margin-bottom:10px">
         <button class="danger small" id="bulkDeleteBtn" style="display:none" onclick="bulkDeleteItems()">Delete selected (<span id="selectedCount">0</span>)</button>
         <button class="danger small" onclick="deleteAllItems()">Delete ALL items</button>
+        <button class="ghost small" onclick="cleanupOrphanedImages()">Fix stuck photo uploads</button>
       </div>
+      <p class="muted" id="cleanupMsg" style="display:none;margin-top:-4px"></p>
       <div class="table-scroll">
         <table>
           <thead id="itemsHead"></thead>
@@ -292,11 +294,21 @@ async function bulkDeleteItems(){
     EXO.toast('Bulk delete failed — see error above', 'error');
   }
 }
+async function cleanupOrphanedImages(){
+  const msg = document.getElementById('cleanupMsg');
+  msg.style.display = 'block'; msg.textContent = 'Checking for stuck/orphaned photo records…';
+  try {
+    const res = await EXO.apiFetch('/items/cleanup-orphaned-images', { method: 'POST' });
+    msg.textContent = res.cleaned
+      ? `Cleared ${res.cleaned} stuck photo record(s) (checked ${res.checked} total). New photo uploads for those Image Codes should work normally now.`
+      : `Checked ${res.checked} photo record(s) — nothing stuck, all good.`;
+  } catch (e) { msg.textContent = ''; msg.style.display = 'none'; EXO.toast(e.message, 'error'); }
+}
 async function deleteAllItems(){
   if (!items.length) { EXO.toast('No items to delete', 'error'); return; }
   const exName = EXO.currentExhibition()?.name || 'this exhibition';
   const typed = prompt(`This permanently deletes ALL ${items.length} items in "${exName}" — cannot be undone. Type DELETE ALL to confirm:`);
-  if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
+  if ((typed || '').trim().toUpperCase() !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
   try {
     const res = await EXO.apiFetch('/items/delete-all', { method: 'POST', body: JSON.stringify({ exhibitionId: currentExhibitionId }) });
     EXO.toast(`Deleted all ${res.deleted} items from "${exName}"`);
@@ -401,40 +413,74 @@ function authedUrl(path){
 }
 function downloadTemplate(){ location.href = authedUrl('/api/items/template/excel'); }
 function downloadExport(){ location.href = authedUrl('/api/items/export/excel') + (currentExhibitionId ? '&exhibitionId=' + currentExhibitionId : ''); }
+// EXO.apiFetch always parses the response as JSON, so it can't be used
+// for a binary file download — this does a raw authenticated fetch,
+// turns the response into a blob, and triggers a download via a
+// temporary link, the standard way to save a POST response as a file.
+async function downloadErrorsExcel(rows){
+  const res = await fetch('/api/items/error-report/excel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('exo_token'), 'X-Tenant-Slug': EXO.getTenantSlug() },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) { EXO.toast('Could not generate the error report', 'error'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'import-errors.xlsx';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 async function importExcel(){
   const err = document.getElementById('bulkErr'); err.style.display='none';
   const msg = document.getElementById('bulkMsg'); msg.style.display='none';
   if (!currentExhibitionId) { err.textContent = 'Pick or create an exhibition above first'; err.style.display='block'; return; }
   const file = document.getElementById('importFile').files[0];
   if (!file) { err.textContent = 'Choose a file first'; err.style.display='block'; return; }
+  msg.style.whiteSpace = 'normal';
+  msg.textContent = 'Importing… this can take a little while for a large file — please don\'t close this page.';
+  msg.style.display = 'block';
   try {
     const fd = new FormData(); fd.append('file', file); fd.append('exhibitionId', currentExhibitionId);
     const res = await EXO.apiFetch('/items/import/excel', { method:'POST', body: fd });
     let text = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${EXO.currentExhibition()?.name}".`;
-    if (res.tagWarnings && res.tagWarnings.length) {
-      text += '\n\nTag issues found:\n' + res.tagWarnings.map(w => '• ' + w).join('\n');
-    }
     msg.textContent = text;
-    msg.style.whiteSpace = 'pre-line';
     msg.style.display = 'block';
+    if (res.rowErrors && res.rowErrors.length) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost small'; btn.style.marginLeft = '8px'; btn.style.marginTop = '6px';
+      btn.textContent = `Download details for ${res.rowErrors.length} row(s) with issues (Excel)`;
+      btn.onclick = () => downloadErrorsExcel(res.rowErrors);
+      msg.appendChild(document.createElement('br'));
+      msg.appendChild(btn);
+    }
     document.getElementById('importFile').value = '';
     loadItems();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) { msg.style.display='none'; err.textContent = e.message; err.style.display='block'; }
 }
 async function importBulkImages(){
   const err = document.getElementById('bulkImgErr'); err.style.display='none';
   const msg = document.getElementById('bulkImgMsg'); msg.style.display='none';
   const files = document.getElementById('bulkImages').files;
   if (!files.length) { err.textContent = 'Choose photo files first'; err.style.display='block'; return; }
+  msg.textContent = `Uploading ${files.length} photo(s)… this can take a little while, especially on slow wifi — please don't close this page.`;
+  msg.style.display = 'block';
   try {
     const fd = new FormData();
     for (const f of files) fd.append('images', f);
     const res = await EXO.apiFetch('/items/bulk-images', { method:'POST', body: fd });
-    msg.textContent = `Matched ${res.matched} photo(s) to items. ${res.unmatchedCode ? res.unmatchedCode+' had no matching Image Code. ' : ''}${res.full ? res.full+' skipped — item already had 3 photos.' : ''}`;
+    msg.textContent = `${res.added} new photo(s) added, ${res.replaced} existing photo(s) replaced. ${res.unmatchedCode ? res.unmatchedCode+' had no matching Image Code.' : ''}`;
     msg.style.display = 'block';
+    if (res.fileErrors && res.fileErrors.length) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost small'; btn.style.marginLeft = '8px'; btn.style.marginTop = '6px';
+      btn.textContent = `Download details for ${res.fileErrors.length} file(s) with issues (Excel)`;
+      btn.onclick = () => downloadErrorsExcel(res.fileErrors);
+      msg.appendChild(document.createElement('br'));
+      msg.appendChild(btn);
+    }
     document.getElementById('bulkImages').value = '';
     loadItems();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) { msg.style.display='none'; err.textContent = e.message; err.style.display='block'; }
 }
 
 (async function init(){

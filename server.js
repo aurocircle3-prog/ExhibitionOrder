@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.85.0';
-const BUILD_TIME   = '2026-08-01T13:56:43Z';
+const APP_VERSION  = '1.88.0';
+const BUILD_TIME   = '2026-08-04T12:23:29Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -2340,7 +2340,12 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     const oldCode = String(item.fields?.imageCode || '').trim();
     const newCode = String(updates.fields?.imageCode || '').trim();
     if (oldCode && oldCode.toLowerCase() !== newCode.toLowerCase()) {
-      cleanupImageCodeIfOrphaned(req.tenant.id, oldCode).catch(err => log.error({ err }, 'Image cleanup failed after Image Code change'));
+      // Awaited, not fire-and-forget — if this ran in the background,
+      // creating/editing another item with the old code before cleanup
+      // finished would make it look "still in use" and the stale images
+      // would never get deleted, then get silently inherited by whatever
+      // new item reuses that code next.
+      await cleanupImageCodeIfOrphaned(req.tenant.id, oldCode).catch(err => log.error({ err }, 'Image cleanup failed after Image Code change'));
     }
   }
   res.json({ ok: true });
@@ -2349,7 +2354,7 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
 app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const item = await ItemDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   await ItemDB.remove({ id: req.params.id, tenantId: req.tenant.id });
-  if (item) cleanupImageCodeIfOrphaned(req.tenant.id, item.fields?.imageCode).catch(err => log.error({ err }, 'Image cleanup failed after item delete'));
+  if (item) await cleanupImageCodeIfOrphaned(req.tenant.id, item.fields?.imageCode).catch(err => log.error({ err }, 'Image cleanup failed after item delete'));
   logAudit(req, 'item.delete', 'item', req.params.id);
   res.json({ ok: true });
 });
@@ -2365,7 +2370,7 @@ app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), as
   for (const id of ids) {
     await ItemDB.remove({ id, tenantId: req.tenant.id });
   }
-  Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after bulk delete'));
+  await Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after bulk delete'));
   logAudit(req, 'item.bulk_delete', 'item', ids.length, { count: ids.length, ids });
   res.json({ ok: true, deleted: ids.length });
 });
@@ -2377,9 +2382,30 @@ app.post('/api/items/delete-all', resolveTenant, auth, requireRole('admin'), asy
   const existing = await ItemDB.find(q);
   const imageCodes = [...new Set(existing.map(it => it.fields?.imageCode).filter(Boolean))];
   await ItemDB.remove(q);
-  Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after delete-all'));
+  await Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after delete-all'));
   logAudit(req, 'item.delete_all', 'item', existing.length, { count: existing.length, exhibitionId: req.body.exhibitionId || null });
   res.json({ ok: true, deleted: existing.length });
+});
+// Self-heal route — sweeps every stored Image Code for this company and
+// cleans up any that are orphaned (no active item actually uses them
+// anymore) but never got cleaned up properly. Exists specifically to fix
+// the aftermath of a race condition in the delete routes above (now
+// fixed) where deleting items and then quickly re-creating new ones with
+// the same Image Code could leave stale images behind that got wrongly
+// "inherited" by the new items. Safe to run anytime — it only touches
+// Image Codes with zero current item references.
+app.post('/api/items/cleanup-orphaned-images', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const allSets = await ImageSetDB.find({ tenantId: req.tenant.id });
+  let cleaned = 0;
+  for (const set of allSets) {
+    const stillUsed = await findItemsByImageCode(req.tenant.id, set.imageCode);
+    if (stillUsed.length) continue;
+    await Promise.all((set.images || []).map(deleteStoredImage));
+    await ImageSetDB.remove({ id: set.id });
+    cleaned++;
+  }
+  logAudit(req, 'items.cleanup_orphaned_images', 'imageset', cleaned, { cleaned });
+  res.json({ ok: true, cleaned, checked: allSets.length });
 });
 
 // Photos are named from the item's Image Code (see makeItemImageUploader) —
@@ -2468,35 +2494,88 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
       (groups[key] ??= []).push({ file, slot, ext });
     });
 
-    let matched = 0, unmatchedCode = 0, full = 0;
+    let added = 0, replaced = 0, unmatchedCode = 0;
+    const fileErrors = [];
     for (const code of Object.keys(groups)) {
       const candidates = groups[code].sort((a, b) => a.slot - b.slot);
-      if (!codesInUse.has(code.toLowerCase())) { unmatchedCode += candidates.length; continue; }
+      if (!codesInUse.has(code.toLowerCase())) {
+        unmatchedCode += candidates.length;
+        candidates.forEach(c => fileErrors.push({ file: c.file.originalname, reason: `No item found with Image Code "${code}"` }));
+        continue;
+      }
 
+      // images stays a plain compact array — every other consumer (item
+      // thumbnails, "X/3 photos" counts, the order-taking cart) already
+      // assumes that shape, so storage format doesn't change. Slot
+      // identity instead comes from parsing each stored URL's own
+      // filename the same way an incoming upload's filename gets parsed
+      // — the slot is encoded right there (…_1.jpg, …_2.jpg), so this
+      // correctly finds "what's currently in slot N" regardless of the
+      // array's order, and keeps working across separate upload sessions,
+      // not just within one batch.
       const images = await getImagesForCode(req.tenant.id, code);
+      const urlBySlot = {};
+      images.forEach(url => { urlBySlot[parseImageFilename(url.split('/').pop()).slot] = url; });
+
       for (const c of candidates) {
-        if (images.length >= 3) { full++; continue; }
+        const slot = c.slot; // 0, 1, or 2 — parseImageFilename caps it there already
         const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '_');
-        const filename = `${safeCode}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
+        const filename = `${safeCode}${IMAGE_SLOT_SUFFIXES[slot]}${c.ext}`;
+        const existingUrl = urlBySlot[slot];
+        let newUrl;
         if (useR2) {
           const key = `exo/${req.tenant.id}/items/${filename}`;
           await s3Client.send(new S3PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: c.file.buffer, ContentType: c.file.mimetype }));
-          images.push(`${R2_PUBLIC_URL}/${key}`);
+          newUrl = `${R2_PUBLIC_URL}/${key}`;
         } else {
           const dest = path.join(__dirname, 'uploads', 'images', req.tenant.id);
           fs.mkdirSync(dest, { recursive: true });
           fs.writeFileSync(path.join(dest, filename), c.file.buffer);
-          images.push(`/uploads/images/${req.tenant.id}/${filename}`);
+          newUrl = `/uploads/images/${req.tenant.id}/${filename}`;
         }
-        matched++;
+        if (existingUrl) {
+          replaced++;
+          const idx = images.indexOf(existingUrl);
+          if (idx !== -1) images[idx] = newUrl; else images.push(newUrl);
+          // Same filename+extension means the write above already
+          // silently overwrote the old file in place on disk/R2 — nothing
+          // extra to delete. Different extension (jpg replaced by png,
+          // say) leaves the old file at a genuinely different path/key,
+          // now orphaned, needing an explicit cleanup.
+          if (existingUrl !== newUrl) deleteStoredImage(existingUrl).catch(err => log.error({ err }, 'Old photo cleanup failed after replace'));
+        } else {
+          images.push(newUrl);
+          added++;
+        }
+        urlBySlot[slot] = newUrl; // keep in sync for any later file in this same batch targeting the same slot
       }
       // Cascades to every item sharing this Image Code, not just one —
       // this was the actual bug: previously only the last-seen item per
       // code got the photos, silently dropping any others sharing it.
       await applyImagesForCode(req.tenant.id, code, images);
     }
-    res.json({ ok: true, totalFiles: req.files.length, matched, unmatchedCode, full });
+    res.json({ ok: true, totalFiles: req.files.length, added, replaced, unmatchedCode, fileErrors });
   });
+});
+// Turns either kind of bulk-operation error list (item import row errors,
+// or bulk photo file errors) into a downloadable Excel — POST rather than
+// GET because the error data only exists in the browser, from the JSON
+// response of the import/upload that just ran; nothing's stored
+// server-side to fetch by reference.
+app.post('/api/items/error-report/excel', resolveTenant, auth, requireRole('admin', 'staff'), (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ error: 'No errors to export' });
+  const isImportErrors = 'row' in (rows[0] || {});
+  const headers = isImportErrors ? ['Row', 'Scan Code', 'Reason'] : ['File', 'Reason'];
+  const dataRows = isImportErrors ? rows.map(r => [r.row, r.scannerCode || '', r.reason]) : rows.map(r => [r.file, r.reason]);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+  ws['!cols'] = headers.map(() => ({ wch: 28 }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Errors');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="import-errors.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
 });
 
 // ── EXCEL TEMPLATE / BULK IMPORT / EXPORT ─────────────────────────────────────
@@ -2593,8 +2672,10 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
       const labelToCategory = {};
       categories.forEach(c => { labelToCategory[c.label.trim().toLowerCase()] = c; });
 
-      let created = 0, updated = 0, skipped = 0, tagWarnings = [];
+      let created = 0, updated = 0, skipped = 0, rowErrors = [];
+      let rowNum = 1; // header is row 1 in the spreadsheet, first data row is 2
       for (const row of rows) {
+        rowNum++;
         const rawFields = {};
         Object.keys(row).forEach(header => {
           const key = labelToKey[baseLabelFromHeader(header)];
@@ -2602,8 +2683,9 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         });
         const fields = normalizeFieldValues(fieldDefs, rawFields);
         const scannerCode = scannerField ? String(fields[scannerField.key] || '').trim() : '';
-        if (!scannerCode) { skipped++; continue; }
-        if (validateRequiredFields(fieldDefs, fields)) { skipped++; continue; }
+        if (!scannerCode) { skipped++; rowErrors.push({ row: rowNum, scannerCode: '', reason: `Missing ${scannerField?.label || 'scan code'} — required to identify the item` }); continue; }
+        const missingErr = validateRequiredFields(fieldDefs, fields);
+        if (missingErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: missingErr }); continue; }
 
         // Match each tag column's comma-separated text against that
         // category's own value list — case/whitespace-insensitive, same
@@ -2621,7 +2703,7 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           const matched = [], unmatched = [];
           typed.forEach(v => { const c = canonicalByLower[v.toLowerCase()]; if (c) matched.push(c); else unmatched.push(v); });
           if (matched.length) variantSelections[cat.key] = [...new Set(matched)];
-          if (unmatched.length) { rowHasUnmatched = true; tagWarnings.push(`"${scannerCode}": ${cat.label} value(s) not recognized — ${unmatched.join(', ')}`); }
+          if (unmatched.length) { rowHasUnmatched = true; rowErrors.push({ row: rowNum, scannerCode, reason: `${cat.label} value(s) not recognized (kept the rest, dropped these) — ${unmatched.join(', ')}` }); }
         });
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
         // Validated against the MERGED result, not just this row's own tag
@@ -2632,7 +2714,7 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           ? { ...(existing?.variantSelections || {}), ...variantSelections }
           : {};
         const completenessErr = validateVariantSelectionsComplete(req.tenant, mergedTags);
-        if (completenessErr) { skipped++; tagWarnings.push(`"${scannerCode}": skipped — ${completenessErr}`); continue; }
+        if (completenessErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: `Skipped — ${completenessErr}` }); continue; }
 
         if (existing) {
           await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields }, variantSelections: mergedTags });
@@ -2642,7 +2724,7 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           created++;
         }
       }
-      res.json({ ok: true, created, updated, skipped, total: rows.length, tagWarnings: tagWarnings.slice(0, 20) });
+      res.json({ ok: true, created, updated, skipped, total: rows.length, rowErrors });
     } catch (err) { res.status(500).json({ error: 'Could not read that file — please use the template format. (' + err.message + ')' }); }
   });
 });
