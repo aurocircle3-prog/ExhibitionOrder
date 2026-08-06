@@ -2,6 +2,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
+<script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.css">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -113,6 +114,7 @@
     </div>
     <div class="card">
       <h3 style="margin-top:0">Cart <span class="muted" id="cartTotal"></span></h3>
+      <div id="cartLiveTotals" style="display:none;margin-bottom:10px"></div>
       <div id="cartRows"><p class="muted">No items scanned yet</p></div>
       <button class="primary" style="margin-top:14px" onclick="switchOrderTab('details')">Next: Details →</button>
     </div>
@@ -197,7 +199,7 @@ function isNetworkFailure(e){
 
 // Warms the offline cache (items + parties) whenever we're online, so scan
 // lookups and buyer search still work if the connection drops mid-booth.
-let catalogItems = [], enableVariants = false, variantCategories = [], allowDuplicateItems = true;
+let catalogItems = [], enableVariants = false, variantCategories = [], allowDuplicateItems = true, cartTotalColumns = [];
 async function refreshOfflineCache(){
   try {
     const exhibitionId = EXO.currentExhibition()?.id;
@@ -210,6 +212,7 @@ async function refreshOfflineCache(){
     allowDuplicateItems = me.tenant?.allowDuplicateItems !== false;
     localStorage.setItem('exo_tenant_logo', me.tenant?.logoUrl || '');
     orderFields = me.tenant?.orderFields || [];
+    cartTotalColumns = (me.tenant?.orderViewColumns || []).filter(c => c.showTotal);
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];
       renderOrderDetailFields();
@@ -702,9 +705,51 @@ function changeQty(lineId, delta){
   line.qty = Math.max(1, line.qty + delta);
   renderCart();
 }
-function updateExtra(lineId, key, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.extra[key] = value; }
+function updateExtra(lineId, key, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.extra[key] = value; renderCartLiveTotals(); saveDraft(); }
 function updateComment(lineId, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.comment = value; }
 function removeLine(lineId){ cart = cart.filter(c => c.lineId !== lineId); renderCart(); }
+function preprocessPercent(expr){
+  let result = expr.replace(/\(([^()]*)\)\s*%/g, '(($1)/100)');
+  result = result.replace(/([A-Za-z_][A-Za-z0-9_]*|\d+(\.\d+)?)\s*%(?!\w)/g, '($1/100)');
+  return result;
+}
+// Same evaluation rules as order/view.html's getNumericColumnValue, just
+// against an in-progress cart line instead of a saved order's item — so a
+// running total updates live as items are scanned, not only after the
+// order's actually submitted.
+function getCartColumnValue(col, cartItem){
+  if (col.type === 'field') {
+    const raw = cartItem.extra?.[col.fieldKey];
+    return (raw !== '' && raw !== undefined && raw !== null && !isNaN(Number(raw))) ? Number(raw) : null;
+  }
+  if (col.type === 'formula') {
+    try {
+      const scope = { qty: Number(cartItem.qty) || 0 };
+      Object.entries(cartItem.extra || {}).forEach(([key, val]) => {
+        if (val !== '' && val !== undefined && val !== null && !isNaN(Number(val))) scope[key] = Number(val);
+      });
+      Object.entries(orderDetailValues || {}).forEach(([key, val]) => {
+        if (!(key in scope) && val !== '' && val !== undefined && !isNaN(Number(val))) scope[key] = Number(val);
+      });
+      const result = math.evaluate(preprocessPercent(col.formula), scope);
+      return typeof result === 'number' ? result : null;
+    } catch (e) { return null; }
+  }
+  return null;
+}
+function renderCartLiveTotals(){
+  const box = document.getElementById('cartLiveTotals');
+  if (!cartTotalColumns.length || !cart.length) { box.style.display = 'none'; return; }
+  const lines = cartTotalColumns.map(col => {
+    let sum = 0;
+    cart.forEach(item => { const v = getCartColumnValue(col, item); if (v !== null) sum += v; });
+    const decimals = col.decimals ?? 2;
+    const formatted = Number(sum.toFixed(decimals)).toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    return `<span style="margin-right:16px"><b>${EXO.esc(col.label)}:</b> ${formatted}${col.unit ? ' ' + EXO.esc(col.unit) : ''}</span>`;
+  }).join('');
+  box.innerHTML = `<div class="card" style="background:var(--brand-light);padding:10px 14px;font-size:14px">${lines}</div>`;
+  box.style.display = 'block';
+}
 function renderCart(){
   const itemCount = cart.reduce((s,c)=>s+c.qty,0);
   document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
@@ -716,7 +761,7 @@ function renderCart(){
   // every single time, right after you scrolled right to reach the button.
   const existingScroll = document.querySelector('#cartRows .table-scroll');
   const scrollLeft = existingScroll ? existingScroll.scrollLeft : 0;
-  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; saveDraft(); return; }
+  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; renderCartLiveTotals(); saveDraft(); return; }
   const fieldCols = orderFields.map(f => `<th>${EXO.esc(f.label)}${f.unit ? ' ('+EXO.esc(f.unit)+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
     <tr>
@@ -732,6 +777,7 @@ function renderCart(){
       <tbody>${rows}</tbody>
     </table></div>`;
   document.querySelector('#cartRows .table-scroll').scrollLeft = scrollLeft;
+  renderCartLiveTotals();
   saveDraft();
 }
 
