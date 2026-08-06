@@ -286,12 +286,22 @@ async function load(){
       { label: 'Phone', value: order.partyPhone },
       order.partyEmail ? { label: 'Email', value: order.partyEmail } : null,
     ].filter(Boolean);
+    // Same message format already used the moment an order is first
+    // created and shared — lets staff re-send the same link later from
+    // this page too (e.g. the buyer says they lost it), without needing
+    // to go back to Take Order's confirmation screen.
+    const partyWaLink = order.partyPhone
+      ? `https://wa.me/${order.partyPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Your order ${order.orderNo}\n${location.href}`)}`
+      : '';
 
     box.innerHTML = `
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${esc(order.orderNo)}</b> · <span class="badge ${esc(order.status)}">${esc(order.status)}</span></p>
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
-        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          ${renderFieldList(buyerFields)}
+          ${partyWaLink ? `<a href="${partyWaLink}" target="_blank" class="ghost small" style="text-decoration:none;white-space:nowrap">📤 WhatsApp this link</a>` : ''}
+        </div>
         ${resolvedHeaderFields.length ? `<div style="margin-bottom:14px">${renderFieldList(resolvedHeaderFields)}</div>` : ''}
         <div class="table-scroll desktop-order-view" id="tableViewWrap"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>

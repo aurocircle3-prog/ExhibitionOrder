@@ -234,6 +234,15 @@
       </div>
       <p class="muted" id="dashboardCardsErr" style="display:none;color:var(--danger)"></p>
 
+      <h4>Live cart total (Take Order screen)</h4>
+      <p class="muted" style="margin-top:-6px">A running total shown as items are scanned, before the order's even placed — separate from the printed-order total. Only uses fields already selected to show on this company's Order Form.</p>
+      <div id="cartTotalList"></div>
+      <div style="margin-top:8px">
+        <button class="ghost small" onclick="addCartTotalEntry()">+ Add total</button>
+        <button class="primary small" onclick="EXO.busy(this, saveCartTotalConfig)">Save all</button>
+      </div>
+      <p class="muted" id="cartTotalErr" style="display:none;color:var(--danger)"></p>
+
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
       <div id="permissionRows"></div>
@@ -790,6 +799,58 @@ async function saveAllDashboardCards(){
     else EXO.toast(e.message, 'error');
   }
 }
+let cartTotalConfig = [], cartNumericOrderFields = [];
+function addCartTotalEntry(){
+  cartTotalConfig.push({ id: 'new-' + Date.now(), type: 'field', label: '' });
+  renderCartTotalList();
+}
+function removeCartTotalEntry(id){
+  cartTotalConfig = cartTotalConfig.filter(e => e.id !== id);
+  renderCartTotalList();
+}
+function updateCartTotalEntry(id, field, value){
+  const entry = cartTotalConfig.find(e => e.id === id);
+  if (entry) entry[field] = value;
+  renderCartTotalList();
+}
+function renderCartTotalList(){
+  document.getElementById('cartTotalList').innerHTML = cartTotalConfig.map(e => {
+    let extra = '';
+    if (e.type === 'field') {
+      extra = `<select onchange="updateCartTotalEntry('${e.id}','fieldKey',this.value)" style="max-width:200px">
+        <option value="">— pick field —</option>
+        ${cartNumericOrderFields.map(f => `<option value="${f.key}" ${e.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('')}
+      </select>`;
+      if (!cartNumericOrderFields.length) extra += `<span class="muted" style="font-size:12px">— no numeric fields on the Order Form yet —</span>`;
+    } else {
+      extra = `<input placeholder="e.g. weight * rate" value="${EXO.esc(e.formula||'')}" oninput="updateCartTotalEntry('${e.id}','formula',this.value)" style="max-width:180px">
+        <input placeholder="unit" value="${EXO.esc(e.unit||'')}" oninput="updateCartTotalEntry('${e.id}','unit',this.value)" style="max-width:70px">`;
+    }
+    return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <select onchange="updateCartTotalEntry('${e.id}','type',this.value)" style="max-width:120px">
+        <option value="field" ${e.type==='field'?'selected':''}>Field total</option>
+        <option value="formula" ${e.type==='formula'?'selected':''}>Formula</option>
+      </select>
+      ${extra}
+      <input placeholder="label (optional)" value="${EXO.esc(e.label||'')}" oninput="updateCartTotalEntry('${e.id}','label',this.value)" style="max-width:140px">
+      <button class="danger small" onclick="removeCartTotalEntry('${e.id}')">✕</button>
+    </div>`;
+  }).join('') || '<p class="muted">No live totals yet — click "+ Add total" below.</p>';
+}
+async function saveCartTotalConfig(){
+  const err = document.getElementById('cartTotalErr');
+  try {
+    const res = await platformFetch(`/tenants/${lastTenantId}/cart-total-config`, { method: 'PUT', body: JSON.stringify({ cartTotalConfig }) });
+    cartTotalConfig = res.cartTotalConfig;
+    renderCartTotalList();
+    if (err) err.style.display = 'none';
+    EXO.toast('Live cart total saved.');
+  } catch (e) {
+    if (err) { err.textContent = e.message; err.style.display = 'block'; }
+    else EXO.toast(e.message, 'error');
+  }
+}
 async function toggleActive(checkbox){
   const active = checkbox.checked;
   const verb = active ? 'reactivate' : 'deactivate';
@@ -858,6 +919,11 @@ async function openDetail(id){
   dashboardCards = Array.isArray(tenant.dashboardCards) ? JSON.parse(JSON.stringify(tenant.dashboardCards)) : [];
   dashboardTotalableColumns = (tenant.orderViewColumns || []).filter(c => c.showTotal);
   renderDashboardCardList();
+  cartTotalConfig = Array.isArray(tenant.cartTotalConfig) ? JSON.parse(JSON.stringify(tenant.cartTotalConfig)) : [];
+  cartNumericOrderFields = (tenant.orderFields || [])
+    .map(f => ({ ...f, def: fieldDefs.find(d => d.key === f.key) }))
+    .filter(f => f.def && f.def.type === 'number');
+  renderCartTotalList();
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>

@@ -212,7 +212,7 @@ async function refreshOfflineCache(){
     allowDuplicateItems = me.tenant?.allowDuplicateItems !== false;
     localStorage.setItem('exo_tenant_logo', me.tenant?.logoUrl || '');
     orderFields = me.tenant?.orderFields || [];
-    cartTotalColumns = (me.tenant?.orderViewColumns || []).filter(c => c.showTotal);
+    cartTotalColumns = me.tenant?.cartTotalConfig || [];
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];
       renderOrderDetailFields();

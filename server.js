@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.90.0';
-const BUILD_TIME   = '2026-08-06T03:45:34Z';
+const APP_VERSION  = '1.92.0';
+const BUILD_TIME   = '2026-08-06T06:02:17Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -263,13 +263,19 @@ const tenantSchema = new mongoose.Schema({
   // the platform-admin override for that, not something a company can
   // turn on for themselves.
   allowDualLogin: { type: Boolean, default: false },
-  // Which of the Dashboard's 3 built-in stat cards this company sees, and
-  // what each is labeled — platform-admin controlled. Mixed rather than a
-  // strict sub-schema since it's just a small, fixed set of toggles/labels,
-  // not something that needs its own validation rules. Missing entirely
-  // (every existing company, before this shipped) is treated as "all 3
-  // shown, original labels" — see the fallback wherever this is read.
-  dashboardCards: { type: mongoose.Schema.Types.Mixed, default: {} },
+  // Free-form dashboard stat cards (scope + one or more metrics each) —
+  // platform-admin controlled. Missing/empty (every company before this
+  // shipped) falls back to the original 3 fixed cards — see
+  // DEFAULT_DASHBOARD_CARDS wherever this is read.
+  dashboardCards: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Live running total shown on the Take Order screen as items are
+  // scanned — deliberately separate from orderViewColumns' showTotal
+  // (which drives the printed order footer) and from dashboardCards.
+  // Scoped to whichever fields are already selected to show on the Order
+  // Form (tenant.orderFields) — each entry is either a direct total of
+  // one of those numeric fields, or a formula combining them. Empty by
+  // default: nothing shows on Take Order until this is set up.
+  cartTotalConfig: { type: [mongoose.Schema.Types.Mixed], default: [] },
   // Order-notification emails are opt-in PER COMPANY, on top of the
   // platform-wide BREVO_API_KEY switch — both have to be true for a given
   // company's orders to actually send email. Default false: turning this
@@ -1112,6 +1118,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     tenant.allowDuplicateItems = template.allowDuplicateItems !== false;
     tenant.orderStatuses = (template.orderStatuses && template.orderStatuses.length) ? template.orderStatuses : ['pending', 'confirmed', 'cancelled'];
     tenant.dashboardCards = Array.isArray(template.dashboardCards) ? template.dashboardCards : [];
+    tenant.cartTotalConfig = Array.isArray(template.cartTotalConfig) ? template.cartTotalConfig : [];
     tenant.orderCustomFields = template.orderCustomFields || [];
     tenant.orderViewColumns = template.orderViewColumns || [];
     tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
@@ -1255,6 +1262,46 @@ app.put('/api/platform/tenants/:id/dashboard-cards', platformAuth, async (req, r
 
     await TenantDB.update({ id: tenant.id }, { dashboardCards });
     res.json({ ok: true, dashboardCards });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/cart-total-config', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  try {
+    const fail = (msg) => { throw Object.assign(new Error(msg), { status: 400 }); };
+    // Deliberately scoped to fields already on the Order Form, not every
+    // Item Master field — matches "use the fields already selected to
+    // show on the order" rather than opening up the whole catalog.
+    const orderFields = tenant.orderFields || [];
+    const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
+    const numericOrderFields = orderFields
+      .map(f => ({ ...f, def: fieldDefs.find(d => d.key === f.key) }))
+      .filter(f => f.def && f.def.type === 'number');
+    const numericKeys = new Set(numericOrderFields.map(f => f.key));
+    const allowedFormulaNames = new Set([...numericKeys, 'qty']);
+
+    const raw = Array.isArray(req.body.cartTotalConfig) ? req.body.cartTotalConfig : [];
+    const cartTotalConfig = raw.slice(0, 10).map((m, i) => {
+      if (!['field', 'formula'].includes(m?.type)) fail(`Entry ${i + 1}: invalid type`);
+      const entry = { id: m.id || uuid(), type: m.type, label: String(m.label || '').trim().slice(0, 40) };
+      if (m.type === 'field') {
+        if (!numericKeys.has(m.fieldKey)) fail(`"${m.fieldKey}" isn't a numeric field currently shown on the Order Form`);
+        const f = numericOrderFields.find(f => f.key === m.fieldKey);
+        entry.fieldKey = m.fieldKey; entry.unit = f.def.unit || ''; entry.decimals = f.def.decimals ?? 2;
+        if (!entry.label) entry.label = f.label || f.def.label || m.fieldKey;
+      } else {
+        const formula = String(m.formula || '').trim();
+        const check = validateFormula(formula, allowedFormulaNames);
+        if (!check.ok) fail(check.error);
+        entry.formula = formula; entry.unit = String(m.unit || '').trim().slice(0, 10);
+        entry.decimals = Math.min(Math.max(Number(m.decimals) || 2, 0), 6);
+        if (!entry.label) entry.label = 'Amount';
+      }
+      return entry;
+    });
+
+    await TenantDB.update({ id: tenant.id }, { cartTotalConfig });
+    res.json({ ok: true, cartTotalConfig });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
