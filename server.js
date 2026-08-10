@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.92.0';
-const BUILD_TIME   = '2026-08-06T06:02:17Z';
+const APP_VERSION  = '1.93.0';
+const BUILD_TIME   = '2026-08-10T05:47:21Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3465,12 +3465,12 @@ const REPORT_META_COLUMNS = {
     { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
     { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
     { key: 'staff_name', label: 'Staff' }, { key: 'item_code', label: 'Item Code' },
-    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark' },
+    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark (item, falls back to order)' }, { key: 'order_remark', label: 'Order Remark' },
   ],
   order: [
     { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
     { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
-    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' }, { key: 'order_remark', label: 'Order Remark' },
   ],
 };
 function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields, variantCategories) {
@@ -3548,6 +3548,7 @@ function reportItemColumnValue(col, item, order) {
       case 'item_name': return item.label || '';
       case 'qty': return item.qty;
       case 'remark': return item.comment || order.remark || '';
+      case 'order_remark': return order.remark || '';
       default: return '';
     }
   }
