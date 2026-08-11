@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.93.0';
-const BUILD_TIME   = '2026-08-10T05:47:21Z';
+const APP_VERSION  = '1.94.0';
+const BUILD_TIME   = '2026-08-10T10:13:51Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -420,7 +420,7 @@ const orderSchema = new mongoose.Schema({
   id: String, orderNo: String, tenantId: String, exhibitionId: String,
   partyId: String, partyName: String, partyPhone: String, partyContactPerson: String, partyEmail: String,
   staffId: String, staffName: String,
-  items: Array,                       // [{itemId, label, scannerCode, images, qty, extra}]
+  items: Array,                       // [{itemId, label, scannerCode, qty, extra}] — images deliberately NOT stored here; see attachLiveImages()
   remark: String,
   // Snapshot of the tenant's Order Form config at the time this order was
   // placed, plus the computed per-field totals — kept on the order so it
@@ -3041,6 +3041,22 @@ app.get('/api/parties/:id', resolveTenant, auth, async (req, res) => {
 // from creation — but a line's own `extra` values (if the staff typed an
 // override, e.g. this sale's actual melting % differs from the item
 // master default) win over the item master default for that field.
+// Order line items deliberately don't store photos — this looks them up
+// fresh from the item's CURRENT state every time an order is displayed,
+// so photos added after an order was placed still show up on it, and a
+// photo swapped out for a better one updates everywhere immediately
+// instead of old orders being stuck with whatever existed at the moment
+// they were created. Fetches the whole tenant's catalog and matches in
+// JS rather than an $in query, since $in isn't supported by the lowdb
+// fallback and this way behaves identically on both storage backends.
+async function attachLiveImages(order) {
+  const itemIds = new Set((order.items || []).map(i => i.itemId).filter(Boolean));
+  if (!itemIds.size) return order;
+  const allItems = await ItemDB.find({ tenantId: order.tenantId });
+  const byId = {}; allItems.forEach(it => { byId[it.id] = it; });
+  order.items = (order.items || []).map(line => ({ ...line, images: byId[line.itemId]?.images || [] }));
+  return order;
+}
 async function buildOrderLines(tenant, items) {
   const orderFields = tenant.orderFields || [];
   const orderKeys = new Set(orderFields.map(f => f.key));
@@ -3079,7 +3095,7 @@ async function buildOrderLines(tenant, items) {
     const baseLabel = item.fields?.itemName || item.fields?.productName || item.scannerCode || item.id;
     lineItems.push({
       itemId: item.id, label: hasTags ? `${baseLabel} (${Object.values(variantTags).join(' / ')})` : baseLabel,
-      scannerCode: item.scannerCode, images: item.images || [],
+      scannerCode: item.scannerCode,
       qty, extra, comment: typeof line.comment === 'string' ? line.comment.trim().slice(0, 500) : '',
       ...(hasTags ? { variantTags } : {}),
     });
@@ -3236,6 +3252,7 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
 app.get('/api/orders/:id', resolveTenant, auth, async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  await attachLiveImages(order);
   const baseUrl = tenantBaseUrl(req, req.tenant);
   res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
 });
@@ -3368,6 +3385,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
   if (footer.whatsappNumber && rawFooter.whatsappMessage) footer.whatsappMessage = rawFooter.whatsappMessage;
   const showLogo = !!(rawFooter.show?.logo && tenant?.logoUrl);
   const platformSettings = await PlatformSettingsDB.findOne({ id: 'singleton' });
+  await attachLiveImages(order);
   res.json({
     order: { ...order, columnsSnapshot: columns },
     company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
@@ -3702,9 +3720,8 @@ function consolidateSetLines(items) {
     const group = groups[key];
     if (group.length === 1) return group[0];
     return {
-      itemId: group.map(g => g.itemId).join(','), label: group[0].label,
+      itemId: group.map(g => g.itemId).join(','), itemIds: group.map(g => g.itemId), label: group[0].label,
       scannerCode: [...new Set(group.map(g => g.scannerCode).filter(Boolean))].join(', '),
-      images: [...new Set(group.flatMap(g => g.images || []))],
       qty: group[0].qty, variantTags: group[0].variantTags,
     };
   });
@@ -3715,6 +3732,12 @@ async function getReportsForTenant(tenantId, exhibitionId) {
   if (exhibitionId) q.exhibitionId = exhibitionId;
   const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
   const grouped = tenant?.orderRowGrouping === 'itemName';
+  // Current photos, not whatever was true when each order happened to be
+  // placed — same reasoning as attachLiveImages, applied here since Best
+  // Sellers builds its own item summary straight from order lines rather
+  // than going through that helper.
+  const allItems = await ItemDB.find({ tenantId });
+  const itemImagesById = {}; allItems.forEach(it => { itemImagesById[it.id] = it.images || []; });
   const byParty = {}, byItem = {}, byStaff = {};
   for (const o of orders) {
     byParty[o.partyId] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
@@ -3733,7 +3756,9 @@ async function getReportsForTenant(tenantId, exhibitionId) {
       // per-line, keying this way just naturally gives each variant its
       // own correct row — no separate label-tracking needed.
       const key = (grouped ? line.label : line.itemId) + '::' + JSON.stringify(line.variantTags || {});
-      byItem[key] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: line.images || [], qty: 0 };
+      const lineItemIds = line.itemIds || [line.itemId];
+      const lineImages = [...new Set(lineItemIds.flatMap(id => itemImagesById[id] || []))];
+      byItem[key] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: lineImages, qty: 0 };
       byItem[key].qty += line.qty;
     }
   }
