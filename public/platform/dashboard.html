@@ -111,7 +111,7 @@
       </div>
       <h4>Companies in this exhibition</h4>
       <div class="table-scroll"><table>
-        <thead><tr><th>Company</th><th>Nature of Business</th><th>Valid till</th><th></th></tr></thead>
+        <thead><tr><th>Company</th><th>Nature of Business</th><th>Valid till</th><th>Item limit</th><th></th></tr></thead>
         <tbody id="participantRows"></tbody>
       </table></div>
 
@@ -546,8 +546,12 @@ async function loadParticipants(){
       <td>${EXO.esc(p.tenantName)}</td>
       <td>${p.natureOfBusiness || '—'}</td>
       <td><input type="date" value="${p.validTill||''}" onchange="updateParticipantValidTill('${p.tenantId}', this.value)" style="width:150px"></td>
+      <td>
+        <input type="number" min="0" placeholder="No limit" value="${p.maxItems ?? ''}" onchange="updateParticipantMaxItems('${p.tenantId}', this.value)" style="width:90px">
+        <span class="muted" style="font-size:12px">${p.itemCount} used${p.maxItems != null ? ' / ' + p.maxItems : ''}</span>
+      </td>
       <td><button class="danger small" onclick="removeParticipant('${p.tenantId}','${EXO.escAttr(p.tenantName)}')">Remove</button></td>
-    </tr>`).join('') || '<tr><td colspan="4" class="muted">No companies added yet</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No companies added yet</td></tr>';
   const alreadyIn = new Set(participants.map(p => p.tenantId));
   const available = tenants.filter(t => !alreadyIn.has(t.id));
   document.getElementById('companyCheckboxList').innerHTML = available.map(t => `
@@ -558,6 +562,13 @@ async function updateParticipantValidTill(tenantId, validTill){
   try {
     await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants/${tenantId}`, { method: 'PUT', body: JSON.stringify({ validTill }) });
     EXO.toast('Updated');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function updateParticipantMaxItems(tenantId, value){
+  try {
+    await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants/${tenantId}`, { method: 'PUT', body: JSON.stringify({ maxItems: value }) });
+    EXO.toast('Updated');
+    loadParticipants(); // refresh the usage count display too
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 async function removeParticipant(tenantId, name){

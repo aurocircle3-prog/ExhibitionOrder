@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.96.0';
-const BUILD_TIME   = '2026-08-12T13:39:19Z';
+const APP_VERSION  = '1.97.0';
+const BUILD_TIME   = '2026-08-12T14:25:59Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -524,6 +524,13 @@ const exhibitionSchema = new mongoose.Schema({
 const exhibitionParticipantSchema = new mongoose.Schema({
   id: String, exhibitionId: String, tenantId: String,
   validTill: String, // date, platform-admin-controlled — expired means no new items/orders in this exhibition, but past data stays visible
+  // Item count cap for THIS company's participation in THIS exhibition —
+  // platform-admin controlled, matching the pricing model (e.g. "up to
+  // 1000 SKU per exhibition"), not a flat per-company limit, since a
+  // company doing multiple shows might have a different cap per show.
+  // null/0 means unlimited (default — existing participations before this
+  // shipped are unaffected until a platform admin sets a real number).
+  maxItems: { type: Number, default: null },
   closed: { type: Boolean, default: false }, // company admin's own manual close/reopen — independent of validTill, private to this company only
   // Order numbering for this company's orders within this exhibition —
   // client-admin configured, not platform admin, since each company wants
@@ -1528,9 +1535,15 @@ app.get('/api/platform/exhibitions/:id/participants', platformAuth, async (req, 
   const participants = await ExhibitionParticipantDB.find({ exhibitionId: req.params.id });
   const tenants = await TenantDB.find({});
   const tenantById = {}; tenants.forEach(t => { tenantById[t.id] = t; });
+  // One query for every participant's item count, not one query per
+  // participant — grouped in JS since exhibitionId + active is the only
+  // filter that's actually shared across all of them.
+  const allItemsInExhibition = await ItemDB.find({ exhibitionId: req.params.id, active: true });
+  const itemCountByTenant = {};
+  allItemsInExhibition.forEach(it => { itemCountByTenant[it.tenantId] = (itemCountByTenant[it.tenantId] || 0) + 1; });
   const result = participants.map(p => {
     const t = tenantById[p.tenantId];
-    return { participantId: p.id, tenantId: p.tenantId, tenantName: t?.name || '(deleted company)', natureOfBusiness: t?.natureOfBusiness || '', validTill: p.validTill, addedAt: p.addedAt };
+    return { participantId: p.id, tenantId: p.tenantId, tenantName: t?.name || '(deleted company)', natureOfBusiness: t?.natureOfBusiness || '', validTill: p.validTill, maxItems: p.maxItems ?? null, itemCount: itemCountByTenant[p.tenantId] || 0, addedAt: p.addedAt };
   });
   result.sort((a, b) => a.tenantName.localeCompare(b.tenantName));
   res.json(result);
@@ -1555,7 +1568,14 @@ app.post('/api/platform/exhibitions/:id/participants', platformAuth, async (req,
   res.json({ ok: true, added, skipped: tenantIds.length - added });
 });
 app.put('/api/platform/exhibitions/:id/participants/:tenantId', platformAuth, async (req, res) => {
-  await ExhibitionParticipantDB.update({ exhibitionId: req.params.id, tenantId: req.params.tenantId }, { validTill: req.body.validTill || '' });
+  const update = {};
+  if ('validTill' in req.body) update.validTill = req.body.validTill || '';
+  if ('maxItems' in req.body) {
+    const maxItems = req.body.maxItems === '' || req.body.maxItems === null ? null : Number(req.body.maxItems);
+    if (maxItems !== null && (!Number.isFinite(maxItems) || maxItems < 0)) return res.status(400).json({ error: 'Invalid item limit' });
+    update.maxItems = maxItems;
+  }
+  await ExhibitionParticipantDB.update({ exhibitionId: req.params.id, tenantId: req.params.tenantId }, update);
   res.json({ ok: true });
 });
 app.delete('/api/platform/exhibitions/:id/participants/:tenantId', platformAuth, async (req, res) => {
@@ -2305,6 +2325,21 @@ app.get('/api/items/scan/:code', resolveTenant, auth, async (req, res) => {
 // the tenant's field defs actually has a value. Unlike the scanner-key
 // (Unique Barcode) uniqueness check above, this has nothing to do with
 // duplicates — Item Name is required but duplicate names are fine.
+// Checks the item cap for this company's participation in this specific
+// exhibition (see maxItems on ExhibitionParticipant) — not a flat
+// per-company limit, since different shows can have different caps.
+// Returns an error message string if the limit's been reached, or null
+// if there's room (or no limit set, or no exhibition to check against).
+async function checkItemLimit(tenant, exhibitionId) {
+  if (!exhibitionId) return null;
+  const participant = await ExhibitionParticipantDB.findOne({ tenantId: tenant.id, exhibitionId });
+  if (!participant || participant.maxItems == null) return null;
+  const count = await ItemDB.count({ tenantId: tenant.id, exhibitionId, active: true });
+  if (count >= participant.maxItems) {
+    return `Item limit reached for this exhibition (${participant.maxItems}). Contact ExpoOrders to increase it.`;
+  }
+  return null;
+}
 function validateRequiredFields(fieldDefs, fields) {
   for (const def of fieldDefs) {
     if (def.required && !String(fields?.[def.key] ?? '').trim()) {
@@ -2355,6 +2390,8 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   // items actually start getting assigned to real exhibitions.
   if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId: exhibitionId || '', scannerCode, active: true }))
     return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists${exhibitionId ? ' in this exhibition' : ''}` });
+  const limitErr = await checkItemLimit(req.tenant, exhibitionId || '');
+  if (limitErr) return res.status(400).json({ error: limitErr });
   const imageCode = String(fields.imageCode || '').trim();
   // Variant selections only apply if this company has the feature turned
   // on — silently ignored otherwise, so a jewelry company's item payload
@@ -2734,6 +2771,12 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
 
       let created = 0, updated = 0, skipped = 0, rowErrors = [];
       let rowNum = 1; // header is row 1 in the spreadsheet, first data row is 2
+      // Fetched once, not re-queried per row — a running in-memory count is
+      // enough to know when a batch of creates crosses the cap partway
+      // through, without hitting the DB for a fresh count on every row.
+      const participant = await ExhibitionParticipantDB.findOne({ tenantId: req.tenant.id, exhibitionId });
+      const maxItems = participant?.maxItems ?? null;
+      let itemCount = maxItems != null ? await ItemDB.count({ tenantId: req.tenant.id, exhibitionId, active: true }) : 0;
       for (const row of rows) {
         rowNum++;
         const rawFields = {};
@@ -2780,8 +2823,13 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields }, variantSelections: mergedTags });
           updated++;
         } else {
+          if (maxItems != null && itemCount >= maxItems) {
+            skipped++;
+            rowErrors.push({ row: rowNum, scannerCode, reason: `Skipped — item limit reached for this exhibition (${maxItems})` });
+            continue;
+          }
           await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, variantSelections: mergedTags, images: [], active: true, createdAt: new Date().toISOString() });
-          created++;
+          created++; itemCount++;
         }
       }
       res.json({ ok: true, created, updated, skipped, total: rows.length, rowErrors });
