@@ -714,7 +714,7 @@ function updateDashboardCard(cardId, field, value){
   else if (field === 'scopeExhibitionId') card.scope.exhibitionId = value;
   else if (field === 'scopeStartDate') card.scope.startDate = value;
   else if (field === 'scopeEndDate') card.scope.endDate = value;
-  renderDashboardCardList();
+  if (field === 'scopeType') renderDashboardCardList();
 }
 function addMetric(cardId){
   const card = dashboardCards.find(c => c.id === cardId);
@@ -732,7 +732,7 @@ function updateMetric(cardId, idx, field, value){
   const card = dashboardCards.find(c => c.id === cardId);
   if (!card) return;
   card.metrics[idx][field] = value;
-  renderDashboardCardList();
+  if (field === 'type') renderDashboardCardList();
 }
 
 function renderScopeExtra(card){
@@ -811,7 +811,7 @@ function removeCartTotalEntry(id){
 function updateCartTotalEntry(id, field, value){
   const entry = cartTotalConfig.find(e => e.id === id);
   if (entry) entry[field] = value;
-  renderCartTotalList();
+  if (field === 'type') renderCartTotalList();
 }
 function renderCartTotalList(){
   document.getElementById('cartTotalList').innerHTML = cartTotalConfig.map(e => {
