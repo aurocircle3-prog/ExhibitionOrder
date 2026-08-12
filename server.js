@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.95.0';
-const BUILD_TIME   = '2026-08-12T13:22:51Z';
+const APP_VERSION  = '1.96.0';
+const BUILD_TIME   = '2026-08-12T13:39:19Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -263,6 +263,12 @@ const tenantSchema = new mongoose.Schema({
   // the platform-admin override for that, not something a company can
   // turn on for themselves.
   allowDualLogin: { type: Boolean, default: false },
+  // Shows a "Download PDF" button on the buyer-facing order page —
+  // platform-admin controlled, off by default. The PDF itself isn't
+  // generated server-side; it's the browser's own print-to-PDF, driven by
+  // a dedicated @media print stylesheet on that page (see order/view.html)
+  // so it doesn't need a heavy server-side rendering dependency.
+  allowPdfDownload: { type: Boolean, default: false },
   // Free-form dashboard stat cards (scope + one or more metrics each) —
   // platform-admin controlled. Missing/empty (every company before this
   // shipped) falls back to the original 3 fixed cards — see
@@ -1214,6 +1220,13 @@ app.put('/api/platform/tenants/:id/allow-dual-login', platformAuth, async (req, 
   const value = !!req.body.allowDualLogin;
   await TenantDB.update({ id: tenant.id }, { allowDualLogin: value });
   res.json({ ok: true, allowDualLogin: value });
+});
+app.put('/api/platform/tenants/:id/allow-pdf-download', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.allowPdfDownload;
+  await TenantDB.update({ id: tenant.id }, { allowPdfDownload: value });
+  res.json({ ok: true, allowPdfDownload: value });
 });
 // Lean list for the dashboard card builder's "specific exhibition" scope
 // picker — just enough to populate a dropdown, not the full item/order
@@ -3388,7 +3401,7 @@ app.get('/api/orders/public/:token', async (req, res) => {
   await attachLiveImages(order);
   res.json({
     order: { ...order, columnsSnapshot: columns },
-    company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
+    company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer, allowPdfDownload: !!tenant?.allowPdfDownload },
     platformLogoUrl: platformSettings?.logoUrl || '',
     // Live like the column layout, not frozen at order-creation time — same
     // reasoning: this is a display method AuroCircle chose for the client,

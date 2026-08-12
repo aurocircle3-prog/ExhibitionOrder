@@ -225,6 +225,12 @@
       </label>
       <p class="muted" style="margin-top:-4px">Off by default — logging in on a second device signs the first one out immediately, with a warning shown before it happens. Turn this on only if this company has a real reason to want a login shared across devices.</p>
 
+      <h4>Order PDF download</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="allowPdfDownloadToggle" style="width:auto" onchange="saveAllowPdfDownload(this.checked)"> <span>Show a "Download PDF" button on the buyer-facing order page</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default. Uses the browser's own print-to-PDF with a compact print layout — no extra setup needed once turned on.</p>
+
       <h4>Dashboard cards</h4>
       <p class="muted" style="margin-top:-6px">What this company sees on their Dashboard — build any combination of cards: pick a time scope (today, ongoing exhibitions, a specific exhibition, or a custom date range) and one or more numbers to show on it (order count, items sold, a "Show total" field, or a formula like <code>weight * rate</code>).</p>
       <div id="dashboardCardList"></div>
@@ -695,6 +701,15 @@ async function saveAllowDualLogin(checked){
     EXO.toast(e.message, 'error');
   }
 }
+async function saveAllowPdfDownload(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/allow-pdf-download`, { method: 'PUT', body: JSON.stringify({ allowPdfDownload: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('allowPdfDownloadToggle').checked = !checked;
+    EXO.toast(e.message, 'error');
+  }
+}
 let dashboardCards = [], dashboardCardExhibitions = [], dashboardTotalableColumns = [];
 const DASHBOARD_METRIC_LABELS = { orderCount: 'Order count', qty: 'Items sold (qty)', pending: 'Pending count', orderViewColumn: 'A column from Order View Layout' };
 
@@ -915,6 +930,7 @@ async function openDetail(id){
   document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
   document.getElementById('orderStatusesInput').value = (tenant.orderStatuses && tenant.orderStatuses.length ? tenant.orderStatuses : ['pending', 'confirmed', 'cancelled']).join(', ');
   document.getElementById('allowDualLoginToggle').checked = !!tenant.allowDualLogin;
+  document.getElementById('allowPdfDownloadToggle').checked = !!tenant.allowPdfDownload;
   platformFetch(`/tenants/${id}/exhibitions`).then(exs => { dashboardCardExhibitions = exs; renderDashboardCardList(); }).catch(() => {});
   dashboardCards = Array.isArray(tenant.dashboardCards) ? JSON.parse(JSON.stringify(tenant.dashboardCards)) : [];
   dashboardTotalableColumns = (tenant.orderViewColumns || []).filter(c => c.showTotal);

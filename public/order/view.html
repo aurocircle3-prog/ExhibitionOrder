@@ -2,6 +2,35 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
+<style>
+@media print {
+  /* Nothing here is part of the order record — just UI chrome that
+     makes sense on screen and wastes space on paper. */
+  .topbar, #lightbox, .btn-row, button, #orderPagination { display: none !important; }
+
+  /* Always the compact desktop table, never the mobile card stack —
+     regardless of what device actually triggered the print, since the
+     whole point is one consistent, space-efficient layout. */
+  .desktop-order-view { display: block !important; }
+  .mobile-order-view { display: none !important; }
+
+  /* The screen layout's generous padding/margins/shadows/rounded corners
+     are exactly what was eating space — this is the actual fix. */
+  body { font-size: 12px; }
+  .wrap { max-width: 100%; padding: 0; margin: 0; }
+  .card { box-shadow: none; border-radius: 0; border: none; border-bottom: 1px solid #ccc; padding: 8px 0; margin-bottom: 8px; }
+  table { font-size: 11px; }
+  th, td { padding: 3px 6px !important; }
+  .order-thumbs img { width: 48px !important; height: 48px !important; }
+  tr { page-break-inside: avoid; }
+
+  /* Social icon buttons and the ExpoOrders promotional link are neither
+     part of the order nor useful once printed — the address/GST/notes
+     right next to them stay, since those are genuine order content. */
+  a[href*="wa.me"], a[href*="instagram.com"], a[href*="facebook.com"],
+  a[href*="twitter.com"], a[href*="youtube.com"], a[href="https://expoorders.com"] { display: none !important; }
+}
+</style>
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <div class="topbar"><div class="brand" id="companyName" style="display:flex;align-items:center;gap:8px"><img src="/logo.svg" alt="" style="height:26px;width:auto;object-fit:contain;display:block"><span>Expo Orders</span></div></div>
 <div class="wrap" id="content">
@@ -300,7 +329,10 @@ async function load(){
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
           ${renderFieldList(buyerFields)}
-          ${partyWaLink ? `<a href="${partyWaLink}" target="_blank" class="ghost small" style="text-decoration:none;white-space:nowrap">📤 WhatsApp this link</a>` : ''}
+          <span style="display:flex;gap:8px;flex-wrap:wrap">
+            ${partyWaLink ? `<a href="${partyWaLink}" target="_blank" class="ghost small" style="text-decoration:none;white-space:nowrap">📤 WhatsApp this link</a>` : ''}
+            ${company.allowPdfDownload ? `<button class="ghost small" onclick="downloadPdf()" style="white-space:nowrap">⬇ Download PDF</button>` : ''}
+          </span>
         </div>
         ${resolvedHeaderFields.length ? `<div style="margin-bottom:14px">${renderFieldList(resolvedHeaderFields)}</div>` : ''}
         <div class="table-scroll desktop-order-view" id="tableViewWrap"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
@@ -564,6 +596,18 @@ function renderTablePage(){
       <button class="ghost small" onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ›</button>
     </div>`;
 }
+// Printing (or saving as PDF) only ever captures whatever's currently in
+// the DOM — since the item table is paginated 10 rows at a time, printing
+// naively would silently cut an order off after its first page. This
+// renders every row first, prints, then puts pagination back afterward.
+function downloadPdf(){
+  document.getElementById('orderRowsBody').innerHTML = allRowsHtml.join('');
+  document.getElementById('orderMobileCards').innerHTML = allMobileCardsHtml.join('');
+  document.getElementById('orderPagination').innerHTML = '';
+  window.print();
+}
+window.addEventListener('afterprint', () => { if (allRowsHtml.length > PAGE_SIZE) renderTablePage(); });
+
 function goToPage(n){
   currentPage = n;
   renderTablePage();
