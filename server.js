@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.97.0';
-const BUILD_TIME   = '2026-08-12T14:25:59Z';
+const APP_VERSION  = '1.97.1';
+const BUILD_TIME   = '2026-08-12T14:35:40Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3906,7 +3906,17 @@ app.get('/api/audit-log', resolveTenant, auth, requireRole('admin'), async (req,
 });
 
 // ── STATIC PAGES ──────────────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html') || filePath.endsWith('.js')) {
+      // no-cache still allows caching, it just forces a revalidation
+      // round-trip (a cheap 304 if nothing changed) before ever reusing a
+      // cached copy — so a fresh deploy is visible immediately, not only
+      // after a manual hard-refresh.
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
+}));
 // A request to "/" on a company subdomain (meridian.expoorders.com) should
 // go straight to that company's login, not the generic marketing page —
 // the marketing page is only for the bare/www domain, where there's no
