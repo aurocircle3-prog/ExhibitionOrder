@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.98.3';
-const BUILD_TIME   = '2026-08-13T12:16:41Z';
+const APP_VERSION  = '1.98.4';
+const BUILD_TIME   = '2026-08-13T12:28:23Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3315,6 +3315,43 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
   res.json(orders.map(o => ({ ...o, shareUrl: `${baseUrl}/order/${o.shareToken}` })));
 });
 
+// Lists soft-deleted orders still inside the 30-day recovery window, and
+// — as a side effect, since there's no scheduled-job infrastructure in
+// this app — permanently purges any that have aged past it. "Lazy purge"
+// piggybacking on a route that's already querying this exact data is
+// simpler than standing up a cron job for something this low-stakes.
+// MUST be declared before /api/orders/:id below — Express matches routes
+// in declaration order, and :id is a wildcard that matches literally any
+// path segment, including the word "deleted". Declared after it (as this
+// was, for a long time), every request here silently got swallowed by the
+// :id route instead, treating "deleted" as if it were an order ID, never
+// finding one, and returning a plain 404 "Order not found" — which is
+// exactly why this whole feature looked broken despite the underlying
+// soft-delete logic being correct all along.
+app.get('/api/orders/deleted', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const allOrdersForTenant = await OrderDB.find({ tenantId: req.tenant.id });
+  const all = allOrdersForTenant.filter(o => o.deleted);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const [recoverable, expired] = [[], []];
+  for (const o of all) (new Date(o.deletedAt || 0).getTime() < cutoff ? expired : recoverable).push(o);
+  await Promise.all(expired.map(o => OrderDB.remove({ id: o.id, tenantId: req.tenant.id })));
+  // Temporary diagnostic — ?debug=1 returns raw counts and a sample of
+  // actual field values instead of just the filtered list, so a mismatch
+  // between "what SHOULD be there" and "what's actually stored" can be
+  // seen directly rather than guessed at from code review alone.
+  if (req.query.debug) {
+    return res.json({
+      tenantId: req.tenant.id,
+      totalOrdersForTenant: allOrdersForTenant.length,
+      countWithDeletedTrue: all.length,
+      countRecoverable: recoverable.length,
+      countJustExpiredAndPurged: expired.length,
+      sampleOfAllOrders: allOrdersForTenant.slice(0, 5).map(o => ({ id: o.id, orderNo: o.orderNo, deleted: o.deleted, deletedType: typeof o.deleted, deletedAt: o.deletedAt })),
+    });
+  }
+  res.json(recoverable.sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt)));
+});
+
 app.get('/api/orders/:id', resolveTenant, auth, async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
@@ -3377,34 +3414,6 @@ app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (
   });
   logAudit(req, 'order.delete', 'order', req.params.id, { orderNo: order.orderNo });
   res.json({ ok: true });
-});
-// Lists soft-deleted orders still inside the 30-day recovery window, and
-// — as a side effect, since there's no scheduled-job infrastructure in
-// this app — permanently purges any that have aged past it. "Lazy purge"
-// piggybacking on a route that's already querying this exact data is
-// simpler than standing up a cron job for something this low-stakes.
-app.get('/api/orders/deleted', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const allOrdersForTenant = await OrderDB.find({ tenantId: req.tenant.id });
-  const all = allOrdersForTenant.filter(o => o.deleted);
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const [recoverable, expired] = [[], []];
-  for (const o of all) (new Date(o.deletedAt || 0).getTime() < cutoff ? expired : recoverable).push(o);
-  await Promise.all(expired.map(o => OrderDB.remove({ id: o.id, tenantId: req.tenant.id })));
-  // Temporary diagnostic — ?debug=1 returns raw counts and a sample of
-  // actual field values instead of just the filtered list, so a mismatch
-  // between "what SHOULD be there" and "what's actually stored" can be
-  // seen directly rather than guessed at from code review alone.
-  if (req.query.debug) {
-    return res.json({
-      tenantId: req.tenant.id,
-      totalOrdersForTenant: allOrdersForTenant.length,
-      countWithDeletedTrue: all.length,
-      countRecoverable: recoverable.length,
-      countJustExpiredAndPurged: expired.length,
-      sampleOfAllOrders: allOrdersForTenant.slice(0, 5).map(o => ({ id: o.id, orderNo: o.orderNo, deleted: o.deleted, deletedType: typeof o.deleted, deletedAt: o.deletedAt })),
-    });
-  }
-  res.json(recoverable.sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt)));
 });
 app.put('/api/orders/:id/restore', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
