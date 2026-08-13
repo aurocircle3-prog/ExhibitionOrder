@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.98.0';
-const BUILD_TIME   = '2026-08-13T10:39:09Z';
+const APP_VERSION  = '1.98.1';
+const BUILD_TIME   = '2026-08-13T11:54:45Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {

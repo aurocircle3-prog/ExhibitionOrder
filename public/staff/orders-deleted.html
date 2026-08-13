@@ -27,7 +27,13 @@ function daysLeft(deletedAt){
   return Math.max(left, 0);
 }
 async function load(){
-  const orders = await EXO.apiFetch('/orders/deleted');
+  let orders;
+  try {
+    orders = await EXO.apiFetch('/orders/deleted');
+  } catch (e) {
+    document.getElementById('rows').innerHTML = `<tr><td colspan="5"><div class="error" style="display:block">${EXO.esc(e.message)}</div></td></tr>`;
+    return;
+  }
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
       <td>${o.orderNo}</td>
