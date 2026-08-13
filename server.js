@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.98.2';
-const BUILD_TIME   = '2026-08-13T12:00:40Z';
+const APP_VERSION  = '1.98.3';
+const BUILD_TIME   = '2026-08-13T12:16:41Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3384,11 +3384,26 @@ app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (
 // piggybacking on a route that's already querying this exact data is
 // simpler than standing up a cron job for something this low-stakes.
 app.get('/api/orders/deleted', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  const all = (await OrderDB.find({ tenantId: req.tenant.id })).filter(o => o.deleted);
+  const allOrdersForTenant = await OrderDB.find({ tenantId: req.tenant.id });
+  const all = allOrdersForTenant.filter(o => o.deleted);
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const [recoverable, expired] = [[], []];
   for (const o of all) (new Date(o.deletedAt || 0).getTime() < cutoff ? expired : recoverable).push(o);
   await Promise.all(expired.map(o => OrderDB.remove({ id: o.id, tenantId: req.tenant.id })));
+  // Temporary diagnostic — ?debug=1 returns raw counts and a sample of
+  // actual field values instead of just the filtered list, so a mismatch
+  // between "what SHOULD be there" and "what's actually stored" can be
+  // seen directly rather than guessed at from code review alone.
+  if (req.query.debug) {
+    return res.json({
+      tenantId: req.tenant.id,
+      totalOrdersForTenant: allOrdersForTenant.length,
+      countWithDeletedTrue: all.length,
+      countRecoverable: recoverable.length,
+      countJustExpiredAndPurged: expired.length,
+      sampleOfAllOrders: allOrdersForTenant.slice(0, 5).map(o => ({ id: o.id, orderNo: o.orderNo, deleted: o.deleted, deletedType: typeof o.deleted, deletedAt: o.deletedAt })),
+    });
+  }
   res.json(recoverable.sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt)));
 });
 app.put('/api/orders/:id/restore', resolveTenant, auth, requireRole('admin'), async (req, res) => {
