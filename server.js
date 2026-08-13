@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.98.1';
-const BUILD_TIME   = '2026-08-13T11:54:45Z';
+const APP_VERSION  = '1.98.2';
+const BUILD_TIME   = '2026-08-13T12:00:40Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -855,11 +855,11 @@ async function resolveTenant(req, res, next) {
 
 async function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1] || req.query.token;
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  if (!token) return res.status(401).json({ error: 'Unauthorized', authFailed: true });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     if (req.tenant && payload.tenantId !== req.tenant.id)
-      return res.status(401).json({ error: 'Token does not belong to this company' });
+      return res.status(401).json({ error: 'Token does not belong to this company', authFailed: true });
     // Single-session enforcement: logging in from a second device rewrites
     // currentSessionId, which immediately invalidates every other token
     // for this user rather than letting both stay valid for the token's
@@ -869,13 +869,13 @@ async function auth(req, res, next) {
     // they naturally start being checked the next time they log in fresh.
     if (payload.sessionId) {
       const user = await UserDB.findOne({ id: payload.id });
-      if (!user || user.active === false) return res.status(401).json({ error: 'Account no longer active.' });
+      if (!user || user.active === false) return res.status(401).json({ error: 'Account no longer active.', authFailed: true });
       if (!req.tenant?.allowDualLogin && user.currentSessionId && user.currentSessionId !== payload.sessionId)
         return res.status(401).json({ error: 'You were signed out because this account was signed in from another device.', sessionInvalidated: true });
     }
     req.user = payload;
     next();
-  } catch { res.status(401).json({ error: 'Invalid or expired token' }); }
+  } catch { res.status(401).json({ error: 'Invalid or expired token', authFailed: true }); }
 }
 
 function requireRole(...roles) {

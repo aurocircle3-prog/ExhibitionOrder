@@ -49,14 +49,16 @@
     const res = await fetch('/api' + path, Object.assign({}, opts, { headers }));
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      // Specifically the "signed in from another device" case — never
-      // set by /auth/login itself (a wrong-password attempt returns a
-      // plain error with no such flag), so this can't misfire into a
-      // redirect loop on the login page.
-      if (data.sessionInvalidated) {
+      // authFailed covers every 401 the auth() middleware itself produces
+      // (expired token, malformed token, deactivated account, wrong
+      // tenant) — sessionInvalidated is the one specific sub-case that
+      // gets its own clearer wording. Neither is ever set by /auth/login's
+      // own wrong-password response, so this can't misfire into a
+      // redirect loop on the login page itself.
+      if (data.sessionInvalidated || data.authFailed) {
         localStorage.removeItem('exo_token');
         localStorage.removeItem('exo_user');
-        alert(data.error);
+        alert(data.sessionInvalidated ? data.error : 'Your session has expired. Please sign in again.');
         location.href = '/login.html';
       }
       throw new Error(data.error || 'Request failed');
