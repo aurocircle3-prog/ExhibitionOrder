@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.97.1';
-const BUILD_TIME   = '2026-08-12T14:35:40Z';
+const APP_VERSION  = '1.98.0';
+const BUILD_TIME   = '2026-08-13T10:39:09Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -446,6 +446,11 @@ const orderSchema = new mongoose.Schema({
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   deleted: { type: Boolean, default: false }, // soft delete — kept for audit/history, hidden from normal views
   deletedAt: String, deletedByName: String,
+  // Independent of both 'deleted' and 'status' — lets the buyer's share
+  // link be turned off without touching the order itself (still fully
+  // visible/editable internally, still not cancelled). A link staying
+  // active isn't implied by an order being active; this is its own switch.
+  linkActive: { type: Boolean, default: true },
   shareToken: { type: String, unique: true, sparse: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -3393,6 +3398,17 @@ app.put('/api/orders/:id/restore', resolveTenant, auth, requireRole('admin'), as
   logAudit(req, 'order.restore', 'order', req.params.id, { orderNo: order.orderNo });
   res.json({ ok: true });
 });
+// Independent of delete/restore and of order status — this only ever
+// touches whether the buyer's own link works, nothing else about the
+// order changes either way.
+app.put('/api/orders/:id/toggle-link', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  const linkActive = !!req.body.linkActive;
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { linkActive });
+  logAudit(req, linkActive ? 'order.link_activated' : 'order.link_deactivated', 'order', req.params.id, { orderNo: order.orderNo });
+  res.json({ ok: true, linkActive });
+});
 
 // Public — no auth, no tenant header required. shareToken is a random uuid so it
 // doubles as the access secret; the order's own tenant is looked up from it so the
@@ -3400,6 +3416,7 @@ app.put('/api/orders/:id/restore', resolveTenant, auth, requireRole('admin'), as
 app.get('/api/orders/public/:token', async (req, res) => {
   const order = await OrderDB.findOne({ shareToken: req.params.token });
   if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  if (order.linkActive === false) return res.status(403).json({ error: 'This order link has been deactivated by the seller.', linkDeactivated: true });
   const tenant = await TenantDB.findOne({ id: order.tenantId });
   // Order View Layout is live, not frozen at order-creation time — unlike
   // orderFieldsSnapshot (which preserves what was actually collected on the
