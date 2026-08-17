@@ -21,6 +21,18 @@
 <div class="simple-lightbox" id="simpleLightbox" onclick="closeSimpleLightbox()">
   <img id="simpleLightboxImg" src="">
 </div>
+<div class="simple-lightbox" id="ordersModal" onclick="if(event.target===this)closeOrdersModal()">
+  <div class="card" style="max-width:480px;width:92vw;max-height:80vh;overflow-y:auto;cursor:default" onclick="event.stopPropagation()">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+      <h4 style="margin:0" id="ordersModalTitle"></h4>
+      <button class="ghost small" onclick="closeOrdersModal()">✕</button>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Order #</th><th>Buyer</th><th>Qty</th></tr></thead>
+      <tbody id="ordersModalRows"></tbody>
+    </table></div>
+  </div>
+</div>
 <script src="/app.js"></script>
 <script>
 EXO.requireRole('admin');
@@ -60,13 +72,15 @@ function render(){
   const start = page * size;
   const pageItems = filtered.slice(start, start + size);
 
-  document.getElementById('grid').innerHTML = pageItems.map(it => `
+  document.getElementById('grid').innerHTML = pageItems.map((it, i) => `
     <div class="best-seller-card">
       ${it.images?.[0]
         ? `<img class="best-seller-thumb" src="${EXO.esc(it.images[0])}" onclick="openSimpleLightbox('${EXO.escAttr(it.images[0])}')" onerror="this.outerHTML='<div class=&quot;best-seller-thumb-empty&quot;></div>'">`
         : '<div class="best-seller-thumb-empty"></div>'}
-      <p class="best-seller-label">${EXO.esc(it.label)}</p>
-      <p class="best-seller-qty">${it.qty} sold</p>
+      <div style="cursor:pointer" onclick="openOrdersModal(${start + i})">
+        <p class="best-seller-label">${EXO.esc(it.label)}</p>
+        <p class="best-seller-qty">${it.qty} sold — view orders</p>
+      </div>
     </div>`).join('') || '<p class="muted">No matching items.</p>';
 
   document.getElementById('pagerInfo').textContent = filtered.length
@@ -80,6 +94,26 @@ function openSimpleLightbox(src){
   document.getElementById('simpleLightbox').classList.add('open');
 }
 function closeSimpleLightbox(){ document.getElementById('simpleLightbox').classList.remove('open'); }
+
+async function openOrdersModal(filteredIndex){
+  const it = filtered[filteredIndex];
+  if (!it) return;
+  document.getElementById('ordersModalTitle').textContent = it.label;
+  document.getElementById('ordersModalRows').innerHTML = `<tr><td colspan="3" class="muted">Loading…</td></tr>`;
+  document.getElementById('ordersModal').classList.add('open');
+  try {
+    const orders = await EXO.apiFetch('/dashboard/best-sellers/orders', {
+      method: 'POST',
+      body: JSON.stringify({ exhibitionId: ex.id, itemIds: it.itemIds || [it.itemId], variantTags: it.variantTags || {} }),
+    });
+    document.getElementById('ordersModalRows').innerHTML = orders.map(o => `
+      <tr><td>${EXO.esc(o.orderNo)}</td><td>${EXO.esc(o.partyName)}</td><td>${o.qty}</td></tr>
+    `).join('') || '<tr><td colspan="3" class="muted">No orders found.</td></tr>';
+  } catch (e) {
+    document.getElementById('ordersModalRows').innerHTML = `<tr><td colspan="3"><div class="error" style="display:block">${EXO.esc(e.message)}</div></td></tr>`;
+  }
+}
+function closeOrdersModal(){ document.getElementById('ordersModal').classList.remove('open'); }
 
 // Re-paginate (not re-fetch) if the window crosses the mobile/desktop
 // breakpoint — e.g. rotating a tablet, or resizing a browser window.

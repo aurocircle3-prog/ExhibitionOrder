@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.98.4';
-const BUILD_TIME   = '2026-08-13T12:28:23Z';
+const APP_VERSION  = '1.99.0';
+const BUILD_TIME   = '2026-08-17T10:13:37Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3860,7 +3860,7 @@ async function getReportsForTenant(tenantId, exhibitionId) {
       const key = (grouped ? line.label : line.itemId) + '::' + JSON.stringify(line.variantTags || {});
       const lineItemIds = line.itemIds || [line.itemId];
       const lineImages = [...new Set(lineItemIds.flatMap(id => itemImagesById[id] || []))];
-      byItem[key] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: lineImages, qty: 0 };
+      byItem[key] ??= { itemId: line.itemId, itemIds: lineItemIds, variantTags: line.variantTags || {}, label: line.label, scannerCode: line.scannerCode, images: lineImages, qty: 0 };
       byItem[key].qty += line.qty;
     }
   }
@@ -3878,6 +3878,30 @@ app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin',
   const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 1000);
   const { byItem } = await getReportsForTenant(req.tenant.id, req.query.exhibitionId);
   res.json(byItem.slice(0, limit));
+});
+// Drill-down for one Best Sellers row — which specific orders (and
+// buyers) contributed to it. itemIds is an array since a "set" row can be
+// multiple merged items; variantTags must match exactly, since a
+// different color/size of the same item is a different row and shouldn't
+// bleed into this one's order list.
+app.post('/api/dashboard/best-sellers/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const { exhibitionId, itemIds, variantTags } = req.body;
+  if (!exhibitionId || !Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ error: 'exhibitionId and itemIds are required' });
+  const orders = (await OrderDB.find({ tenantId: req.tenant.id, exhibitionId })).filter(o => !o.deleted);
+  const idSet = new Set(itemIds);
+  const targetTags = JSON.stringify(variantTags || {});
+  const rows = [];
+  for (const o of orders) {
+    let qty = 0;
+    for (const line of o.items || []) {
+      if (!idSet.has(line.itemId)) continue;
+      if (JSON.stringify(line.variantTags || {}) !== targetTags) continue;
+      qty += line.qty;
+    }
+    if (qty > 0) rows.push({ orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, qty });
+  }
+  rows.sort((a, b) => b.qty - a.qty);
+  res.json(rows);
 });
 // Backs the Overview tab's stat row. Kept to just what isn't already
 // derivable from /api/exhibitions on the client (order counts per
