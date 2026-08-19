@@ -35,9 +35,9 @@ async function load(){
     return;
   }
   document.getElementById('exhibitionList').innerHTML = current.map(e => `
-    <button class="ghost" style="display:block;width:100%;text-align:left;margin-top:10px;padding:14px" onclick="pick('${e.id}','${EXO.escAttr(e.name)}')">
-      <b>${EXO.esc(e.name)}</b>
-      ${e.location ? `<br><span class="muted">${EXO.esc(e.location)}</span>` : ''}
+    <button class="ghost" style="display:block;width:100%;text-align:left;margin-top:10px;padding:14px" onclick="pick('${e.id}','${e.name.replace(/'/g,"\\'")}')">
+      <b>${e.name}</b>
+      ${e.location ? `<br><span class="muted">${e.location}</span>` : ''}
     </button>`).join('');
 }
 function pick(id, name){

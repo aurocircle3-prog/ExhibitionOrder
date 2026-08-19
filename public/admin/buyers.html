@@ -33,7 +33,7 @@
         <label>Phone <span class="muted">(unique — used to find this buyer)</span></label>
         <div style="display:flex;gap:6px">
           <input id="fPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-          <input id="fPhone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
+          <input id="fPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
         </div>
       </div>
       <div><label>City</label><input id="fCity"></div>
@@ -84,14 +84,14 @@ function renderRows(list){
   document.getElementById('buyerRows').innerHTML = list.map(b => `
     <tr>
       <td><input type="checkbox" ${selectedBuyerIds.has(b.id)?'checked':''} onchange="toggleSelectBuyer('${b.id}', this.checked)"></td>
-      <td>${EXO.esc(b.firmName)}</td>
-      <td>${EXO.esc(b.contactPerson) || '—'}</td>
-      <td>${EXO.esc(b.phone)}</td>
-      <td>${EXO.esc(b.city) || '—'}</td>
-      <td>${EXO.esc(b.email) || '—'}</td>
+      <td>${b.firmName}</td>
+      <td>${b.contactPerson || '—'}</td>
+      <td>${b.phone}</td>
+      <td>${b.city || '—'}</td>
+      <td>${b.email || '—'}</td>
       <td>
-        ${b.cardImageUrl ? `<a href="${EXO.esc(b.cardImageUrl)}" target="_blank">📇 Card</a> · ` : ''}<button class="ghost small" onclick="editBuyer('${b.id}')">Edit</button>
-        <button class="danger small" onclick="deleteBuyer('${b.id}','${EXO.escAttr(b.firmName)}')">Delete</button>
+        <button class="ghost small" onclick="editBuyer('${b.id}')">Edit</button>
+        <button class="danger small" onclick="deleteBuyer('${b.id}','${b.firmName.replace(/'/g,"\\'")}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="7" class="muted">No buyers yet — they\'ll also appear here automatically once added from Take Order.</td></tr>';
 }
@@ -204,7 +204,7 @@ async function bulkDeleteBuyers(){
 async function deleteAllBuyers(){
   if (!buyers.length) { EXO.toast('No buyers to delete', 'error'); return; }
   const typed = prompt(`This permanently deletes ALL ${buyers.length} buyers — cannot be undone. Type DELETE ALL to confirm:`);
-  if ((typed || '').trim().toUpperCase() !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
+  if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
   try {
     const res = await EXO.apiFetch('/parties/delete-all', { method: 'POST' });
     EXO.toast(`Deleted all ${res.deleted} buyers`);

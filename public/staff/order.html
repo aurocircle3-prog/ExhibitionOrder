@@ -2,13 +2,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
-<script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.css">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cropperjs@1/dist/cropper.min.js"></script>
 <div id="nav"></div>
-<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <div class="card" id="syncBanner" style="display:none"></div>
   <div class="card" id="draftBanner" style="display:none"></div>
@@ -32,7 +30,6 @@
     <input id="shareUrl" readonly onclick="this.select()">
     <div class="btn-row" style="margin-top:12px">
       <button class="primary" onclick="window.open(waLink(),'_blank')">Send on WhatsApp</button>
-      <button class="ghost" id="sendEmailBtn" onclick="EXO.busy(this, sendPartyEmail)" style="display:none">Send Email</button>
       <button class="ghost" onclick="copyLink()">Copy link</button>
       <button class="ghost" onclick="newOrder()">Start new order</button>
     </div>
@@ -54,7 +51,7 @@
     <div class="card" id="partyCard">
       <div class="error" id="partyErr"></div>
       <div id="partyPicked" style="display:none">
-        <p><b id="partyName"></b> — <span id="partyPhone" class="muted"></span> <a id="partyCardLink" href="#" target="_blank" style="display:none">📇 Visiting card</a> <button class="ghost small" onclick="clearParty()">Change</button></p>
+        <p><b id="partyName"></b> — <span id="partyPhone" class="muted"></span> <button class="ghost small" onclick="clearParty()">Change</button></p>
       </div>
       <div id="partyPicker">
         <label>Search existing buyer by phone</label>
@@ -72,7 +69,7 @@
             <label>Phone</label>
             <div style="display:flex;gap:6px">
               <input id="phoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-              <input id="phone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
+              <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
             </div>
           </div>
           <div><label>City</label><input id="city"></div>
@@ -103,7 +100,7 @@
         <div style="position:relative">
           <input id="scanCode" placeholder="Scan, or type a code or name…" autofocus autocomplete="off"
             onkeydown="if(event.key==='Enter'){event.preventDefault();lookupItem();}" oninput="renderSearchSuggestions(this.value)">
-          <div id="searchSuggestions" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:var(--surface);border:0.5px solid var(--line);border-radius:8px;margin-top:2px;max-height:260px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.08)"></div>
+          <div id="searchSuggestions" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:var(--card-bg,#fff);border:0.5px solid var(--line);border-radius:8px;margin-top:2px;max-height:260px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.08)"></div>
         </div>
         <div class="btn-row">
           <button class="primary" onclick="lookupItem()">Add item</button>
@@ -114,7 +111,6 @@
     </div>
     <div class="card">
       <h3 style="margin-top:0">Cart <span class="muted" id="cartTotal"></span></h3>
-      <div id="cartLiveTotals" style="display:none;margin-bottom:10px"></div>
       <div id="cartRows"><p class="muted">No items scanned yet</p></div>
       <button class="primary" style="margin-top:14px" onclick="switchOrderTab('details')">Next: Details →</button>
     </div>
@@ -123,10 +119,8 @@
   <div class="tab-panel" id="otab-details">
     <div class="card">
       <div id="orderDetailFields"></div>
-      <div id="builtInRemarkWrap">
-        <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
-        <textarea id="remark" rows="2" oninput="saveDraft()"></textarea>
-      </div>
+      <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
+      <textarea id="remark" rows="2" oninput="saveDraft()"></textarea>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, submitOrder)">Create order</button>
     </div>
   </div>
@@ -136,7 +130,6 @@
 <script>
 const currentUser = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = currentUser.role === 'admin' ? EXO.adminNav('order') : EXO.staffNav('order');
-if (currentUser.role === 'admin') document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('order');
 let party = null, cart = [], lastOrder = null, orderFields = [];
 const tenantSlug = EXO.getTenantSlug();
 
@@ -168,7 +161,7 @@ function checkForDraft(){
   const itemCount = (draft.cart || []).reduce((s, c) => s + c.qty, 0);
   const banner = document.getElementById('draftBanner');
   const when = new Date(draft.savedAt).toLocaleTimeString();
-  banner.innerHTML = `<p style="margin:0">📝 You have an unfinished order from ${when}${draft.party ? ' for <b>' + EXO.esc(draft.party.firmName) + '</b>' : ''}${itemCount ? ` (${itemCount} item${itemCount===1?'':'s'})` : ''}.
+  banner.innerHTML = `<p style="margin:0">📝 You have an unfinished order from ${when}${draft.party ? ' for <b>' + draft.party.firmName + '</b>' : ''}${itemCount ? ` (${itemCount} item${itemCount===1?'':'s'})` : ''}.
     <button class="primary small" onclick="resumeDraft()">Resume it</button>
     <button class="ghost small" onclick="discardDraft()">Discard</button></p>`;
   banner.style.display = 'block';
@@ -201,7 +194,7 @@ function isNetworkFailure(e){
 
 // Warms the offline cache (items + parties) whenever we're online, so scan
 // lookups and buyer search still work if the connection drops mid-booth.
-let catalogItems = [], enableVariants = false, variantCategories = [], allowDuplicateItems = true, cartTotalColumns = [];
+let catalogItems = [], enableVariants = false, variantCategories = [], allowDuplicateItems = true;
 async function refreshOfflineCache(){
   try {
     const exhibitionId = EXO.currentExhibition()?.id;
@@ -214,8 +207,6 @@ async function refreshOfflineCache(){
     allowDuplicateItems = me.tenant?.allowDuplicateItems !== false;
     localStorage.setItem('exo_tenant_logo', me.tenant?.logoUrl || '');
     orderFields = me.tenant?.orderFields || [];
-    cartTotalColumns = me.tenant?.cartTotalConfig || [];
-    document.getElementById('builtInRemarkWrap').style.display = me.tenant?.hideBuiltInRemark ? 'none' : 'block';
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];
       renderOrderDetailFields();
@@ -235,9 +226,9 @@ function renderOrderDetailFields(){
   if (!orderCustomFields.length) { box.innerHTML = ''; return; }
   box.innerHTML = `<label style="margin-top:14px">Order details</label>` + orderCustomFields.map(f => `
     <div style="margin-top:6px">
-      <label class="muted" style="font-weight:400">${EXO.esc(f.label)}</label>
+      <label class="muted" style="font-weight:400">${f.label}</label>
       <input type="${f.type==='number'?'number':'text'}" ${f.type==='number'?`step="${1/Math.pow(10, f.decimals ?? 2)}"`:''}
-        value="${EXO.esc(orderDetailValues[f.key] ?? '')}" oninput="orderDetailValues['${f.key}']=this.value;saveDraft()">
+        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value;saveDraft()">
     </div>`).join('');
 }
 
@@ -261,25 +252,14 @@ async function showPendingOrders(){
   const pending = await ExoOffline.getReadableOutbox(tenantSlug);
   document.getElementById('pendingList').innerHTML = pending.length ? pending.map(o => `
     <div class="card" style="background:#f7f7f8;padding:12px;margin-top:8px">
-      <p style="margin:0"><b>${EXO.esc(o.buyerName)}</b>${o.buyerPhone ? ' · ' + EXO.esc(o.buyerPhone) : ''}</p>
+      <p style="margin:0"><b>${o.buyerName}</b>${o.buyerPhone ? ' · ' + o.buyerPhone : ''}</p>
       <p class="muted" style="margin:4px 0">Saved ${new Date(o.queuedAt).toLocaleString()} — not yet on the server</p>
       <ul style="margin:6px 0;padding-left:18px">
-        ${o.items.map(i => `<li>${EXO.esc(i.label)}${i.code ? ' (' + EXO.esc(i.code) + ')' : ''} × ${i.qty}${i.comment ? ' — ' + EXO.esc(i.comment) : ''}</li>`).join('')}
+        ${o.items.map(i => `<li>${i.label}${i.code ? ' (' + i.code + ')' : ''} × ${i.qty}${i.comment ? ' — ' + i.comment : ''}</li>`).join('')}
       </ul>
-      ${o.remark ? `<p class="muted" style="margin:4px 0">Remark: ${EXO.esc(o.remark)}</p>` : ''}
-      <button class="danger small" style="margin-top:6px" onclick="discardPendingOrder('${o.id}','${EXO.escAttr(o.buyerName)}')">Discard — don't send this order</button>
+      ${o.remark ? `<p class="muted" style="margin:4px 0">Remark: ${o.remark}</p>` : ''}
     </div>`).join('') : '<p class="muted">Nothing pending — everything is synced.</p>';
   document.getElementById('pendingModal').classList.add('open');
-}
-async function discardPendingOrder(id, buyerName){
-  // Confirmed, not a quiet one-tap delete — this is an order that was
-  // actually completed with a buyer already, not just an in-progress
-  // draft, so losing it is a bigger deal than discarding a draft is.
-  if (!confirm(`Discard the queued order for ${buyerName || 'this buyer'}? It will never be sent — this can't be undone.`)) return;
-  await ExoOffline.removeFromOutbox(id);
-  EXO.toast('Order discarded — it will not be sent.');
-  showPendingOrders();
-  updateSyncBanner();
 }
 function closePendingModal(){ document.getElementById('pendingModal').classList.remove('open'); }
 async function downloadPendingExcel(){
@@ -324,8 +304,7 @@ async function searchParty(q){
     if (!isNetworkFailure(e)) throw e;
     results = await ExoOffline.searchPartiesOffline(tenantSlug, q);
   }
-  results = results.slice().sort((a, b) => (a.firmName || '').localeCompare(b.firmName || '', undefined, { sensitivity: 'base', numeric: true }));
-  box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${EXO.esc(JSON.stringify(p))})'><span>${EXO.esc(p.firmName)} — ${EXO.esc(p.phone)}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
+  box.innerHTML = results.slice(0,5).map(p => `<div class="cart-row" style="cursor:pointer" onclick='pickParty(${JSON.stringify(p)})'><span>${p.firmName} — ${p.phone}</span><span class="muted">use</span></div>`).join('') || '<p class="muted">No match — capture a new card below</p>';
 }
 function pickParty(p){ party = p; showPartyPicked(); }
 function showPartyPicked(){
@@ -333,9 +312,6 @@ function showPartyPicked(){
   document.getElementById('partyPicked').style.display = 'block';
   document.getElementById('partyName').textContent = party.firmName;
   document.getElementById('partyPhone').textContent = party.phone;
-  const cardLink = document.getElementById('partyCardLink');
-  if (party.cardImageUrl) { cardLink.href = party.cardImageUrl; cardLink.style.display = 'inline'; }
-  else { cardLink.style.display = 'none'; }
   switchOrderTab('scan'); // buyer done — move straight to scanning, the main event
 }
 function clearParty(){ party = null; document.getElementById('partyPicker').style.display='block'; document.getElementById('partyPicked').style.display='none'; switchOrderTab('buyer'); }
@@ -392,61 +368,19 @@ function skipCrop(){
 // phone/email out by pattern first, then picks the two longest remaining
 // text lines as firm/contact name guesses — usually the most prominent
 // text on a card, and no longer confused by a phone or email landing first.
-const CARD_OCR_CITIES = [
-  'Mumbai','New Delhi','Delhi','Bengaluru','Bangalore','Hyderabad','Ahmedabad','Chennai',
-  'Kolkata','Surat','Pune','Jaipur','Lucknow','Kanpur','Nagpur','Indore','Thane','Bhopal',
-  'Visakhapatnam','Patna','Vadodara','Ghaziabad','Ludhiana','Agra','Nashik','Faridabad',
-  'Meerut','Rajkot','Kalyan','Vasai','Varanasi','Coimbatore','Jodhpur','Madurai','Raipur',
-  'Kota','Guwahati','Chandigarh','Mysuru','Mysore','Bareilly','Aligarh','Tiruppur','Moradabad',
-  'Jalandhar','Bhubaneswar','Salem','Guntur','Bhavnagar','Dehradun','Kochi','Cochin','Amritsar',
-  'Jamnagar','Ujjain','Noida','Gurugram','Gurgaon','Navi Mumbai','Trichy','Mangaluru','Mangalore',
-];
-const FIRM_SUFFIX_RE = /\b(pvt\.?\s*ltd\.?|private\s+limited|l\.?l\.?p\.?|ltd\.?|limited|&\s?co\.?|&\s?sons|jewell?ers?|jewell?ery|enterprises?|industries|exports?|imports?|international|trading|corporation|corp\.?|group|inc\.?|company|gems?|diamonds?|goldsmiths?|bullion|creations?|designs?)\b/i;
-const DESIGNATION_RE = /\b(proprietor|director|partner|c\.?e\.?o\.?|managing director|owner|manager|founder|chairman|president)\b/i;
-const NAME_PREFIX_RE = /^(mr|mrs|ms|miss|dr)\.?\s+/i;
-function parseCardText(text) {
-  const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
-  const email = emailMatch ? emailMatch[0] : '';
-  const phoneCandidates = [...text.matchAll(/(\+?\d[\d\s\-().]{7,}\d)/g)]
-    .map(m => ({ raw: m[1], digits: m[1].replace(/\D/g, ''), hasPlus: m[1].trim().startsWith('+') }))
-    .filter(p => p.digits.length >= 10 && p.digits.length <= 13);
-  const phoneBest =
-    phoneCandidates.find(p => p.hasPlus) ||
-    phoneCandidates.find(p => p.digits.length === 12 && p.digits.startsWith('91')) ||
-    phoneCandidates.find(p => p.digits.length === 10 && /^[6-9]/.test(p.digits)) ||
-    phoneCandidates[0];
-  const phone = phoneBest ? (phoneBest.hasPlus ? '+' + phoneBest.digits : phoneBest.digits) : '';
-  let city = '';
-  for (const c of CARD_OCR_CITIES) {
-    if (new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(text)) { city = c; break; }
-  }
-  if (!city) {
-    const pinMatch = text.match(/([A-Za-z]+)[\s,-]*\d{6}\b/);
-    if (pinMatch) city = pinMatch[1];
-  }
-  const isNoiseLine = (line) => {
-    if (email && line.includes(email)) return true;
-    if (/@|www\.|https?:\/\//i.test(line)) return true;
-    if ((line.match(/\d/g) || []).length >= 5) return true;
-    return false;
-  };
-  const nameLines = rawLines.filter(l => !isNoiseLine(l));
-  let firmName = nameLines.find(l => FIRM_SUFFIX_RE.test(l)) || '';
-  const contactRaw = nameLines.find(l => DESIGNATION_RE.test(l) || NAME_PREFIX_RE.test(l)) || '';
-  let contactPerson = contactRaw
-    .replace(NAME_PREFIX_RE, '').replace(DESIGNATION_RE, '')
-    .replace(/[-,|:]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const leftover = nameLines.filter(l => l !== firmName && l !== contactRaw);
-  if (!firmName) firmName = leftover[0] || nameLines[0] || '';
-  if (!contactPerson) contactPerson = leftover.find(l => l !== firmName) || '';
-  return { firmName, contactPerson, phone, email, city };
-}
 async function readCardWithTesseract(file){
   try {
     const { data: { text } } = await Tesseract.recognize(file, 'eng');
-    return parseCardText(text);
-  } catch (e) { console.error('[OCR] Tesseract failed:', e); return { firmName: '', contactPerson: '', phone: '', email: '', city: '' }; }
+    const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const phoneMatches = [...text.matchAll(/(\+?\d[\d\s-]{8,}\d)/g)].map(m => m[1].replace(/\s+/g, ''));
+    const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    const isNoise = l => /(@|www\.|\.com|^\+?\d[\d\s-]{7,}\d$)/i.test(l) || l.length < 2;
+    const nameLines = rawLines.filter(l => !isNoise(l)).sort((a, b) => b.length - a.length);
+    return {
+      firmName: nameLines[0] || '', contactPerson: nameLines[1] || '',
+      phone: phoneMatches[0] || '', email: emailMatch ? emailMatch[0] : '',
+    };
+  } catch (e) { console.error('[OCR] Tesseract failed:', e); return { firmName: '', contactPerson: '', phone: '', email: '' }; }
 }
 async function processCardImage(fileOrBlob, filename){
   const err = document.getElementById('partyErr'); err.style.display='none';
@@ -467,20 +401,13 @@ async function processCardImage(fileOrBlob, filename){
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; }
     cardImageUrl = ''; // no connection — card image just won't be attached to the buyer record
   }
-  const guess = {
-    firmName: serverGuess?.firmName || ocrGuess.firmName || '',
-    contactPerson: serverGuess?.contactPerson || ocrGuess.contactPerson || '',
-    phone: serverGuess?.phone || ocrGuess.phone || '',
-    email: serverGuess?.email || ocrGuess.email || '',
-    city: serverGuess?.city || ocrGuess.city || '',
-  };
+  const guess = (ocrGuess.firmName || ocrGuess.phone) ? ocrGuess : (serverGuess || {});
   document.getElementById('firmName').value = guess.firmName || '';
   document.getElementById('contactPerson').value = guess.contactPerson || '';
   const phoneParts = splitPhone(guess.phone);
   document.getElementById('phoneCC').value = phoneParts.cc;
   document.getElementById('phone').value = phoneParts.num;
   document.getElementById('email').value = guess.email || '';
-  document.getElementById('city').value = guess.city || '';
   status.style.display = 'none';
   if (!guess.firmName && !guess.phone) {
     status.style.display = 'block';
@@ -534,11 +461,11 @@ function renderSearchSuggestions(q){
     // picker itself (via addToCart) blocks re-adding an exact combo.
     if (!allowDuplicateItems && !hasVariants && cartItemIds.has(it.id)) return false;
     return it.scannerCode?.toLowerCase().includes(q) || String(it.fields?.itemName || '').toLowerCase().includes(q);
-  }).sort((a, b) => String(a.fields?.itemName || a.scannerCode || '').localeCompare(String(b.fields?.itemName || b.scannerCode || ''), undefined, { sensitivity: 'base', numeric: true })).slice(0, 8);
+  }).slice(0, 8);
   if (!matches.length) { box.style.display = 'none'; return; }
   box.innerHTML = matches.map(it => `
     <div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
-      <b>${EXO.esc(it.fields?.itemName || it.scannerCode)}</b> <span class="muted">${EXO.esc(it.scannerCode)}</span>
+      <b>${it.fields?.itemName || it.scannerCode}</b> <span class="muted">${it.scannerCode}</span>
     </div>`).join('');
   box.style.display = 'block';
 }
@@ -586,11 +513,8 @@ function openVariantPicker(item){
   pendingVariantItem = item;
   // Only categories this specific item actually comes in — an item
   // narrowed to just 2 colors shouldn't show the company's full 10.
-  // Values sorted naturally (numeric-aware) so codes like 1/2/10 and
-  // sizes like 28/30/38-S land in a sensible order regardless of
-  // whatever order they happened to be typed/imported in.
   pendingCats = variantCategories
-    .map(cat => ({ ...cat, values: [...(item.variantSelections?.[cat.key] || [])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })) }))
+    .map(cat => ({ ...cat, values: item.variantSelections?.[cat.key] || [] }))
     .filter(cat => cat.values.length);
   pendingExtraPicks = {}; pendingPicks = {};
   // Categories beyond the first two apply uniformly to everything added
@@ -625,37 +549,37 @@ function renderVariantPicker(){
   const [primaryCat, secondaryCat] = pendingCats;
   const extraCats = pendingCats.slice(2);
   box.innerHTML = `
-    <p style="margin:0 0 8px"><b>${EXO.esc(pendingVariantItem.fields?.itemName || pendingVariantItem.scannerCode)}</b> <span class="muted">${EXO.esc(pendingVariantItem.scannerCode)}</span></p>
+    <p style="margin:0 0 8px"><b>${pendingVariantItem.fields?.itemName || pendingVariantItem.scannerCode}</b> <span class="muted">${pendingVariantItem.scannerCode}</span></p>
     ${extraCats.map(cat => `
       <div style="margin-bottom:10px">
-        <label>${EXO.esc(cat.label)}</label>
+        <label>${cat.label}</label>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-          ${cat.values.map(v => `<button type="button" onclick="pendingExtraPicks['${cat.key}']='${EXO.escAttr(v)}';renderVariantPicker()" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingExtraPicks[cat.key]===v?'var(--brand)':'var(--line)'};background:${pendingExtraPicks[cat.key]===v?'var(--brand)':'#fff'};color:${pendingExtraPicks[cat.key]===v?'#fff':'inherit'}">${EXO.esc(v)}</button>`).join('')}
+          ${cat.values.map(v => `<button type="button" onclick="pendingExtraPicks['${cat.key}']='${v.replace(/'/g,"\\'")}';renderVariantPicker()" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingExtraPicks[cat.key]===v?'var(--brand)':'var(--line)'};background:${pendingExtraPicks[cat.key]===v?'var(--brand)':'#fff'};color:${pendingExtraPicks[cat.key]===v?'#fff':'inherit'}">${v}</button>`).join('')}
         </div>
       </div>`).join('')}
-    <label>${EXO.esc(primaryCat.label)} <span class="muted">— tap to enter ${secondaryCat ? EXO.esc(secondaryCat.label.toLowerCase()) + ' quantities' : 'a quantity'}</span></label>
+    <label>${primaryCat.label} <span class="muted">— tap to enter ${secondaryCat ? secondaryCat.label.toLowerCase() + ' quantities' : 'a quantity'}</span></label>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-      ${primaryCat.values.map(v => `<button type="button" onclick="toggleVariantPrimary('${EXO.escAttr(v)}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingPicks[v]?'var(--brand)':'var(--line)'};background:${pendingPicks[v]?'var(--brand)':'#fff'};color:${pendingPicks[v]?'#fff':'inherit'}">${EXO.esc(v)}${pendingPicks[v]&&Object.values(pendingPicks[v]).some(Boolean)?' · '+Object.values(pendingPicks[v]).reduce((s,n)=>s+(Number(n)||0),0):''}</button>`).join('')}
+      ${primaryCat.values.map(v => `<button type="button" onclick="toggleVariantPrimary('${v.replace(/'/g,"\\'")}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${pendingPicks[v]?'var(--brand)':'var(--line)'};background:${pendingPicks[v]?'var(--brand)':'#fff'};color:${pendingPicks[v]?'#fff':'inherit'}">${v}${pendingPicks[v]&&Object.values(pendingPicks[v]).some(Boolean)?' · '+Object.values(pendingPicks[v]).reduce((s,n)=>s+(Number(n)||0),0):''}</button>`).join('')}
     </div>
     ${primaryCat.values.filter(v => pendingPicks[v]).map(v => `
       <div style="border:0.5px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:8px">
-        <p style="font-size:13px;font-weight:500;margin:0 0 8px">${EXO.esc(v)}</p>
+        <p style="font-size:13px;font-weight:500;margin:0 0 8px">${v}</p>
         ${secondaryCat ? `
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
           ${secondaryCat.values.map(sv => `
             <div style="text-align:center">
-              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">${EXO.esc(sv)}</label>
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">${sv}</label>
               <div style="display:flex;align-items:center;gap:2px">
-                <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','${EXO.escAttr(sv)}',-1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
-                <input type="number" min="0" placeholder="0" value="${EXO.esc(pendingPicks[v][sv]||'')}" oninput="setVariantQty('${EXO.escAttr(v)}','${EXO.escAttr(sv)}',this.value)" style="width:100%;padding:4px 2px;text-align:center;font-size:13px">
-                <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','${EXO.escAttr(sv)}',1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
+                <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',-1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
+                <input type="number" min="0" placeholder="0" value="${pendingPicks[v][sv]||''}" oninput="setVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',this.value)" style="width:100%;padding:4px 2px;text-align:center;font-size:13px">
+                <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','${sv.replace(/'/g,"\\'")}',1)" style="width:24px;height:26px;padding:0;font-size:15px;line-height:1;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
               </div>
             </div>`).join('')}
         </div>` : `
         <div style="display:flex;align-items:center;gap:4px;width:140px">
-          <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','_qty',-1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
-          <input type="number" min="0" placeholder="Qty" value="${EXO.esc(pendingPicks[v]['_qty']||'')}" oninput="setVariantQty('${EXO.escAttr(v)}','_qty',this.value)" style="width:100%;text-align:center">
-          <button type="button" onclick="bumpVariantQty('${EXO.escAttr(v)}','_qty',1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
+          <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','_qty',-1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">−</button>
+          <input type="number" min="0" placeholder="Qty" value="${pendingPicks[v]['_qty']||''}" oninput="setVariantQty('${v.replace(/'/g,"\\'")}','_qty',this.value)" style="width:100%;text-align:center">
+          <button type="button" onclick="bumpVariantQty('${v.replace(/'/g,"\\'")}','_qty',1)" style="width:28px;height:30px;padding:0;font-size:16px;border-radius:5px;border:0.5px solid var(--line);background:#fff;flex-shrink:0">+</button>
         </div>`}
       </div>`).join('')}
     <div class="btn-row" style="margin-top:12px">
@@ -711,51 +635,9 @@ function changeQty(lineId, delta){
   line.qty = Math.max(1, line.qty + delta);
   renderCart();
 }
-function updateExtra(lineId, key, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.extra[key] = value; renderCartLiveTotals(); saveDraft(); }
+function updateExtra(lineId, key, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.extra[key] = value; }
 function updateComment(lineId, value){ const line = cart.find(c => c.lineId === lineId); if (line) line.comment = value; }
 function removeLine(lineId){ cart = cart.filter(c => c.lineId !== lineId); renderCart(); }
-function preprocessPercent(expr){
-  let result = expr.replace(/\(([^()]*)\)\s*%/g, '(($1)/100)');
-  result = result.replace(/([A-Za-z_][A-Za-z0-9_]*|\d+(\.\d+)?)\s*%(?!\w)/g, '($1/100)');
-  return result;
-}
-// Same evaluation rules as order/view.html's getNumericColumnValue, just
-// against an in-progress cart line instead of a saved order's item — so a
-// running total updates live as items are scanned, not only after the
-// order's actually submitted.
-function getCartColumnValue(col, cartItem){
-  if (col.type === 'field') {
-    const raw = cartItem.extra?.[col.fieldKey];
-    return (raw !== '' && raw !== undefined && raw !== null && !isNaN(Number(raw))) ? Number(raw) : null;
-  }
-  if (col.type === 'formula') {
-    try {
-      const scope = { qty: Number(cartItem.qty) || 0 };
-      Object.entries(cartItem.extra || {}).forEach(([key, val]) => {
-        if (val !== '' && val !== undefined && val !== null && !isNaN(Number(val))) scope[key] = Number(val);
-      });
-      Object.entries(orderDetailValues || {}).forEach(([key, val]) => {
-        if (!(key in scope) && val !== '' && val !== undefined && !isNaN(Number(val))) scope[key] = Number(val);
-      });
-      const result = math.evaluate(preprocessPercent(col.formula), scope);
-      return typeof result === 'number' ? result : null;
-    } catch (e) { return null; }
-  }
-  return null;
-}
-function renderCartLiveTotals(){
-  const box = document.getElementById('cartLiveTotals');
-  if (!cartTotalColumns.length || !cart.length) { box.style.display = 'none'; return; }
-  const lines = cartTotalColumns.map(col => {
-    let sum = 0;
-    cart.forEach(item => { const v = getCartColumnValue(col, item); if (v !== null) sum += v; });
-    const decimals = col.decimals ?? 2;
-    const formatted = Number(sum.toFixed(decimals)).toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-    return `<span style="margin-right:16px"><b>${EXO.esc(col.label)}:</b> ${formatted}${col.unit ? ' ' + EXO.esc(col.unit) : ''}</span>`;
-  }).join('');
-  box.innerHTML = `<div class="card" style="background:var(--brand-light);padding:10px 14px;font-size:14px">${lines}</div>`;
-  box.style.display = 'block';
-}
 function renderCart(){
   const itemCount = cart.reduce((s,c)=>s+c.qty,0);
   document.getElementById('cartTotal').textContent = cart.length ? `— ${itemCount} item${itemCount===1?'':'s'}` : '';
@@ -767,13 +649,13 @@ function renderCart(){
   // every single time, right after you scrolled right to reach the button.
   const existingScroll = document.querySelector('#cartRows .table-scroll');
   const scrollLeft = existingScroll ? existingScroll.scrollLeft : 0;
-  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; renderCartLiveTotals(); saveDraft(); return; }
-  const fieldCols = orderFields.map(f => `<th>${EXO.esc(f.label)}${f.unit ? ' ('+EXO.esc(f.unit)+')' : ''}</th>`).join('');
+  if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items scanned yet</p>'; saveDraft(); return; }
+  const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
     <tr>
-      <td>${EXO.esc(c.label)}<br><span class="muted">${EXO.esc(c.code)}${c.tagLabel ? ' · ' + EXO.esc(c.tagLabel) : ''}</span></td>
-      ${orderFields.map(f => `<td><input style="width:80px" value="${EXO.esc(c.extra?.[f.key] ?? '')}" oninput="updateExtra('${c.lineId}','${f.key}',this.value)"></td>`).join('')}
-      <td><input style="width:140px" placeholder="Optional note" value="${EXO.esc(c.comment || '')}" oninput="updateComment('${c.lineId}',this.value)"></td>
+      <td>${c.label}<br><span class="muted">${c.code}${c.tagLabel ? ' · ' + c.tagLabel : ''}</span></td>
+      ${orderFields.map(f => `<td><input style="width:80px" value="${c.extra?.[f.key] ?? ''}" oninput="updateExtra('${c.lineId}','${f.key}',this.value)"></td>`).join('')}
+      <td><input style="width:140px" placeholder="Optional note" value="${c.comment || ''}" oninput="updateComment('${c.lineId}',this.value)"></td>
       <td class="qty-ctrl"><button class="ghost small" onclick="changeQty('${c.lineId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.lineId}',1)">+</button></td>
       <td><button class="danger small" onclick="removeLine('${c.lineId}')">✕</button></td>
     </tr>`).join('');
@@ -783,7 +665,6 @@ function renderCart(){
       <tbody>${rows}</tbody>
     </table></div>`;
   document.querySelector('#cartRows .table-scroll').scrollLeft = scrollLeft;
-  renderCartLiveTotals();
   saveDraft();
 }
 
@@ -798,7 +679,6 @@ async function submitOrder(){
     document.getElementById('shareCard').style.display = 'block';
     document.getElementById('orderNo').textContent = lastOrder.orderNo;
     document.getElementById('shareUrl').value = lastOrder.shareUrl;
-    document.getElementById('sendEmailBtn').style.display = lastOrder.partyEmail ? 'inline-block' : 'none';
     document.getElementById('shareCard').scrollIntoView({behavior:'smooth'});
   } catch(e) {
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
@@ -814,12 +694,6 @@ async function submitOrder(){
 function waLink(){
   const msg = encodeURIComponent(`Your order ${lastOrder.orderNo}\n${lastOrder.shareUrl}`);
   return `https://wa.me/${(lastOrder.partyPhone||'').replace(/\D/g,'')}?text=${msg}`;
-}
-async function sendPartyEmail(){
-  try {
-    await EXO.apiFetch(`/orders/${lastOrder.id}/send-email`, { method: 'POST' });
-    EXO.toast(`Email sent to ${lastOrder.partyEmail}`);
-  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 function copyLink(){ document.getElementById('shareUrl').select(); document.execCommand('copy'); }
 function clearForm(){

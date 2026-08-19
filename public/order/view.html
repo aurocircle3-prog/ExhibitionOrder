@@ -2,35 +2,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
-<style>
-@media print {
-  /* Nothing here is part of the order record — just UI chrome that
-     makes sense on screen and wastes space on paper. */
-  .topbar, #lightbox, .btn-row, button, #orderPagination { display: none !important; }
-
-  /* Always the compact desktop table, never the mobile card stack —
-     regardless of what device actually triggered the print, since the
-     whole point is one consistent, space-efficient layout. */
-  .desktop-order-view { display: block !important; }
-  .mobile-order-view { display: none !important; }
-
-  /* The screen layout's generous padding/margins/shadows/rounded corners
-     are exactly what was eating space — this is the actual fix. */
-  body { font-size: 12px; }
-  .wrap { max-width: 100%; padding: 0; margin: 0; }
-  .card { box-shadow: none; border-radius: 0; border: none; border-bottom: 1px solid #ccc; padding: 8px 0; margin-bottom: 8px; }
-  table { font-size: 11px; }
-  th, td { padding: 3px 6px !important; }
-  .order-thumbs img { width: 48px !important; height: 48px !important; }
-  tr { page-break-inside: avoid; }
-
-  /* Social icon buttons and the ExpoOrders promotional link are neither
-     part of the order nor useful once printed — the address/GST/notes
-     right next to them stay, since those are genuine order content. */
-  a[href*="wa.me"], a[href*="instagram.com"], a[href*="facebook.com"],
-  a[href*="twitter.com"], a[href*="youtube.com"], a[href="https://expoorders.com"] { display: none !important; }
-}
-</style>
 <script src="https://cdn.jsdelivr.net/npm/mathjs@13/lib/browser/math.js"></script>
 <div class="topbar"><div class="brand" id="companyName" style="display:flex;align-items:center;gap:8px"><img src="/logo.svg" alt="" style="height:26px;width:auto;object-fit:contain;display:block"><span>Expo Orders</span></div></div>
 <div class="wrap" id="content">
@@ -256,10 +227,7 @@ async function load(){
   const token = location.pathname.split('/').pop();
   const box = document.getElementById('content');
   try {
-    const res = await fetch('/api/orders/public/' + token).then(async r => {
-      if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(body.error || 'Order not found'); }
-      return r.json();
-    });
+    const res = await fetch('/api/orders/public/' + token).then(r => { if (!r.ok) throw new Error('Order not found'); return r.json(); });
     const { order, company, rowGrouping, viewHeaderFields, viewFooterFields } = res;
     const logoHtml = company.logoUrl ? `<img src="${esc(company.logoUrl)}" alt="" style="height:26px;width:auto;object-fit:contain;display:block">` : '🎪';
     document.getElementById('companyName').innerHTML = `${logoHtml}<span>${esc(company.name || 'Expo Orders')}</span>`;
@@ -318,25 +286,12 @@ async function load(){
       { label: 'Phone', value: order.partyPhone },
       order.partyEmail ? { label: 'Email', value: order.partyEmail } : null,
     ].filter(Boolean);
-    // Same message format already used the moment an order is first
-    // created and shared — lets staff re-send the same link later from
-    // this page too (e.g. the buyer says they lost it), without needing
-    // to go back to Take Order's confirmation screen.
-    const partyWaLink = order.partyPhone
-      ? `https://wa.me/${order.partyPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Your order ${order.orderNo}\n${location.href}`)}`
-      : '';
 
     box.innerHTML = `
       <div class="card">
         <p class="muted" style="margin:0 0 4px">Order <b>${esc(order.orderNo)}</b> · <span class="badge ${esc(order.status)}">${esc(order.status)}</span></p>
         <p class="muted" style="margin:0 0 14px">${new Date(order.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p>
-        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-          ${renderFieldList(buyerFields)}
-          <span style="display:flex;gap:8px;flex-wrap:wrap">
-            ${partyWaLink ? `<a href="${partyWaLink}" target="_blank" class="ghost small" style="text-decoration:none;white-space:nowrap">📤 WhatsApp this link</a>` : ''}
-            ${company.allowPdfDownload ? `<button class="ghost small" onclick="downloadPdf()" style="white-space:nowrap">⬇ Download PDF</button>` : ''}
-          </span>
-        </div>
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)">${renderFieldList(buyerFields)}</div>
         ${resolvedHeaderFields.length ? `<div style="margin-bottom:14px">${renderFieldList(resolvedHeaderFields)}</div>` : ''}
         <div class="table-scroll desktop-order-view" id="tableViewWrap"><table class="${isDynamic ? 'dynamic-order-table' : ''}">
           <thead><tr>${headerCells}</tr></thead>
@@ -346,7 +301,7 @@ async function load(){
         <div id="clubbedItems" style="display:none"></div>
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
-        ${(order.remark && !order.suppressAutoOrderRemark) ? `<p class="muted" style="margin-top:10px">Remark: ${esc(order.remark)}</p>` : ''}
+        ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${esc(order.remark)}</p>` : ''}
         ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
       ${renderFooter(company, order)}
@@ -524,17 +479,10 @@ function extraCardFields(group, order){
         let sum = 0, any = false;
         group.lines.forEach(line => { const n = getNumericColumnValue(col, line, order); if (n !== null) { sum += n; any = true; } });
         value = any ? (Number.isInteger(sum) ? String(sum) : sum.toFixed(2)) : null;
-      } else if (col.type === 'remark') {
-        // Same reasoning as formula — a clubbed row can merge several
-        // lines that each had their OWN remark typed in while taking the
-        // order; showing only the first line's would silently drop every
-        // other variant's remark from view, even though it was saved.
-        const remarks = [...new Set(group.lines.map(line => (line.comment || '').trim()).filter(Boolean))];
-        value = remarks.length ? esc(remarks.join(' · ')) : null;
       } else {
         value = getColumnValue(col, group.lines[0], order, null, 0);
       }
-      return value ? { id: col.id, label: esc(col.label), value } : null;
+      return value ? { label: esc(col.label), value } : null;
     })
     .filter(Boolean);
 }
@@ -551,10 +499,7 @@ function renderClubbedItems(items, order){
   // separately below as the group's clubbed total, not per-line.
   const otherCols = (order.columnsSnapshot || []).filter(c => !['varianttag', 'qty', 'serial', 'images', 'itemcode'].includes(c.type));
 
-  const desktopRows = groups.map(g => {
-    const extras = extraCardFields(g, order);
-    const extrasById = {}; extras.forEach(e => { extrasById[e.id] = e.value; });
-    return `
+  const desktopRows = groups.map(g => `
     <tr>
       <td>
         <div style="display:flex;gap:10px;align-items:flex-start">
@@ -566,10 +511,9 @@ function renderClubbedItems(items, order){
         </div>
       </td>
       <td>${tagChipsHtml(g)}</td>
-      ${otherCols.map(col => `<td>${extrasById[col.id] ?? ''}</td>`).join('')}
+      ${otherCols.map(col => `<td>${getColumnValue(col, g.lines[0], order, null, 0) || ''}</td>`).join('')}
       <td style="font-weight:600">${g.total}</td>
-    </tr>`;
-  }).join('');
+    </tr>`).join('');
 
   const mobileCards = groups.map(g => {
     const extras = extraCardFields(g, order);
@@ -610,18 +554,6 @@ function renderTablePage(){
       <button class="ghost small" onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ›</button>
     </div>`;
 }
-// Printing (or saving as PDF) only ever captures whatever's currently in
-// the DOM — since the item table is paginated 10 rows at a time, printing
-// naively would silently cut an order off after its first page. This
-// renders every row first, prints, then puts pagination back afterward.
-function downloadPdf(){
-  document.getElementById('orderRowsBody').innerHTML = allRowsHtml.join('');
-  document.getElementById('orderMobileCards').innerHTML = allMobileCardsHtml.join('');
-  document.getElementById('orderPagination').innerHTML = '';
-  window.print();
-}
-window.addEventListener('afterprint', () => { if (allRowsHtml.length > PAGE_SIZE) renderTablePage(); });
-
 function goToPage(n){
   currentPage = n;
   renderTablePage();
@@ -643,7 +575,7 @@ const SOCIAL_ICONS = {
 };
 function renderFooter(company, order){
   const f = company.footer || {};
-  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website || f.note1 || f.note2;
+  const hasContent = f.address || f.gstNumber || f.whatsappNumber || f.instagram || f.facebook || f.twitter || f.youtube || f.website;
   if (!hasContent) return '';
   const waMessageTemplate = f.whatsappMessage || 'Would like to discuss about order No – {orderNo}';
   const waMessage = waMessageTemplate.replace(/\{orderNo\}/g, order?.orderNo || '');
@@ -660,8 +592,6 @@ function renderFooter(company, order){
       ${f.address ? `<p class="muted" style="margin:4px 0">${esc(f.address)}</p>` : ''}
       ${f.gstNumber ? `<p class="muted" style="margin:4px 0">GSTIN: ${esc(f.gstNumber)}</p>` : ''}
       ${socialLinks.length ? `<div style="margin-top:10px">${socialLinks.map(s => `<a href="${esc(s.url)}" target="_blank" title="${s.label}" aria-label="${s.label}" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--bg);color:var(--brand);margin:0 5px">${SOCIAL_ICONS[s.key]}</a>`).join('')}</div>` : ''}
-      ${f.note1 ? `<p class="muted" style="margin:10px 0 0;white-space:pre-wrap">${esc(f.note1)}</p>` : ''}
-      ${f.note2 ? `<p class="muted" style="margin:6px 0 0;white-space:pre-wrap">${esc(f.note2)}</p>` : ''}
     </div>`;
 }
 // Copyright + "Powered by" credit — always shown regardless of whether

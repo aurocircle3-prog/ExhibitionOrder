@@ -3,17 +3,12 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
-<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0" id="heading">Orders</h3>
-      <p class="muted" id="filterNote" style="display:none;margin:0"></p>
-      <a href="/staff/orders-deleted.html" class="muted" id="deletedLink" style="display:none;font-size:12px">Deleted orders →</a>
-    </div>
+    <h3 style="margin-top:0" id="heading">Orders</h3>
     <div class="table-scroll"><table>
-      <thead><tr><th>Order #</th><th>Buyer</th><th id="exhibitionHeader" style="display:none">Exhibition</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+      <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Items</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
     </table></div>
   </div>
 </div>
@@ -22,70 +17,27 @@
 const user = EXO.requireRole('admin','staff');
 document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders');
 document.getElementById('heading').textContent = user.role === 'admin' ? 'All orders' : 'My orders';
-if (user.role === 'admin') document.getElementById('deletedLink').style.display = 'inline';
-
-// A ?status= and/or ?date=today deep link (e.g. from a Dashboard stat
-// card) is treated as an explicit cross-exhibition request — it shows
-// matching orders from EVERY exhibition, with an Exhibition column added,
-// rather than being scoped to whatever single exhibition happens to be
-// "current" in this browser. Without this, clicking a Dashboard stat card
-// would only ever show orders from one arbitrary exhibition, silently
-// hiding matches from every other one.
-const params = new URLSearchParams(location.search);
-const statusFilter = params.get('status') || '';
-const dateFilter = params.get('date') || '';
-const isFiltered = !!(statusFilter || dateFilter);
-if (user.role === 'admin' && !isFiltered) document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('orders');
-let tenantStatuses = ['pending', 'confirmed', 'cancelled']; // overwritten by /me once loaded; this is just the pre-load default
-
-if (isFiltered) {
-  const bits = [];
-  if (statusFilter) bits.push(`status "${statusFilter}"`);
-  if (dateFilter === 'today') bits.push('placed today');
-  const note = document.getElementById('filterNote');
-  note.innerHTML = `Showing ${bits.join(', ')}, across every exhibition — <a href="/staff/orders.html">Clear filter</a>`;
-  note.style.display = 'block';
-  document.getElementById('exhibitionHeader').style.display = '';
-}
-
-function buildQuery(params){
-  const parts = Object.entries(params).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
-  return parts.length ? '?' + parts.join('&') : '';
-}
-
 async function load(){
-  const exhibitionId = isFiltered ? '' : EXO.currentExhibition()?.id;
-  const [me, orders, exhibitions] = await Promise.all([
-    EXO.apiFetch('/me'),
-    EXO.apiFetch('/orders' + buildQuery({ exhibitionId, status: statusFilter, date: dateFilter })),
-    isFiltered ? EXO.apiFetch('/exhibitions') : Promise.resolve([]),
-  ]);
-  tenantStatuses = (me.tenant?.orderStatuses && me.tenant.orderStatuses.length) ? me.tenant.orderStatuses : tenantStatuses;
-  const exhibitionById = {}; exhibitions.forEach(e => { exhibitionById[e.id] = e; });
+  const exhibitionId = EXO.currentExhibition()?.id;
+  const orders = await EXO.apiFetch('/orders' + (exhibitionId ? '?exhibitionId=' + exhibitionId : ''));
   document.getElementById('rows').innerHTML = orders.map(o => `
     <tr>
       <td>${o.orderNo}</td>
-      <td>${EXO.esc(o.partyName)}<br><span class="muted">${EXO.esc(o.partyPhone)}</span></td>
-      ${isFiltered ? `<td>${EXO.esc(exhibitionById[o.exhibitionId]?.name) || '<span class="muted">—</span>'}</td>` : ''}
-      <td>${EXO.esc(o.staffName)}</td>
+      <td>${o.partyName}<br><span class="muted">${o.partyPhone}</span></td>
+      <td>${o.staffName}</td>
       <td>${o.items.length}</td>
       <td>
         ${user.role === 'admin' ? `
         <select class="status-select ${o.status}" onchange="changeStatus('${o.id}', this)">
-          ${tenantStatuses.map(s => `<option value="${s}" ${o.status===s?'selected':''}>${s}</option>`).join('')}
+          <option value="pending" ${o.status==='pending'?'selected':''}>pending</option>
+          <option value="confirmed" ${o.status==='confirmed'?'selected':''}>confirmed</option>
+          <option value="cancelled" ${o.status==='cancelled'?'selected':''}>cancelled</option>
         </select>` : `<span class="badge ${o.status}">${o.status}</span>`}
       </td>
       <td>
-        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="${o.shareUrl}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="toggleOrderLink('${o.id}',${o.linkActive === false ? 'true' : 'false'});return false;">${o.linkActive === false ? 'Reactivate link' : 'Deactivate link'}</a> · <a href="#" onclick="deleteOrder('${o.id}','${EXO.escAttr(o.orderNo)}');return false;" style="color:var(--danger)">Delete</a>` : ''}
+        ${o.status === 'pending' ? `<a href="/staff/order-edit.html?id=${o.id}">Edit</a> · ` : ''}<a href="/order/${o.shareToken}" target="_blank">View link ↗</a>${user.role === 'admin' ? ` · <a href="#" onclick="deleteOrder('${o.id}','${o.orderNo}');return false;" style="color:var(--danger)">Delete</a>` : ''}
       </td>
-    </tr>`).join('') || `<tr><td colspan="${isFiltered ? 7 : 6}" class="muted">No matching orders — go take one!</td></tr>`;
-}
-async function toggleOrderLink(id, activate){
-  try {
-    await EXO.apiFetch('/orders/'+id+'/toggle-link', { method: 'PUT', body: JSON.stringify({ linkActive: activate }) });
-    EXO.toast(activate ? 'Link reactivated' : 'Link deactivated — the buyer\'s link will no longer open');
-    load();
-  } catch (e) { EXO.toast(e.message, 'error'); }
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">No orders yet — go take one!</td></tr>';
 }
 async function deleteOrder(id, orderNo){
   if (!confirm(`Delete order ${orderNo}? This removes it from every list and report, and the buyer's link will stop working. This cannot be undone.`)) return;
@@ -102,10 +54,7 @@ async function changeStatus(id, select){
   catch(e) { EXO.toast(e.message, 'error'); load(); }
 }
 (async function(){
-  // A filtered deep-link deliberately spans every exhibition, so it
-  // doesn't need one "current" exhibition selected first — only the
-  // normal unscoped view does.
-  if (!isFiltered && !(await EXO.ensureExhibitionSelected())) return;
+  if (!(await EXO.ensureExhibitionSelected())) return;
   document.getElementById('nav').innerHTML = user.role === 'admin' ? EXO.adminNav('orders') : EXO.staffNav('orders'); // re-render now the switcher has something to show
   load();
 })();
