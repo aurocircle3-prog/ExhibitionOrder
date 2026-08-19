@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.101.3';
-const BUILD_TIME   = '2026-08-19T18:51:03Z';
+const APP_VERSION  = '1.101.6';
+const BUILD_TIME   = '2026-08-19T19:22:15Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1121,7 +1121,8 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   const slug = normalizeSlug(rawSlug);
   const slugErr = validateSlug(slug);
   if (slugErr) return res.status(400).json({ error: slugErr });
-  if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
+  const blocker = await TenantDB.findOne({ slug });
+  if (blocker) return res.status(400).json({ error: `That company link name is already used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}). Pick a different one, or delete that company first if it's no longer needed.` });
 
   // Optional starting point: copy another company's CONFIGURATION onto this
   // brand-new one — the tedious stuff to set up from scratch (Item Master
@@ -1211,7 +1212,11 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
         UserDB.remove({ tenantId: tenant.id }),
       ]).catch(cleanupErr => log.error({ err: cleanupErr, tenantId: tenant.id }, 'Failed to roll back a partially-created company — may need manual cleanup'));
     }
-    if (err.code === 11000) return res.status(400).json({ error: 'That company link name is already taken. If you just submitted this form, check the Companies list first — it may have already been created.' });
+    if (err.code === 11000) {
+      const blocker = await TenantDB.findOne({ slug: tenant.slug });
+      const detail = blocker ? ` It's currently used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}).` : ' (Could not find which company is using it — this may need manual database cleanup; contact support with the exact link name you tried.)';
+      return res.status(400).json({ error: `That company link name is already taken.${detail}` });
+    }
     throw err;
   }
 

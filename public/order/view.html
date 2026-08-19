@@ -524,6 +524,13 @@ function extraCardFields(group, order){
         let sum = 0, any = false;
         group.lines.forEach(line => { const n = getNumericColumnValue(col, line, order); if (n !== null) { sum += n; any = true; } });
         value = any ? (Number.isInteger(sum) ? String(sum) : sum.toFixed(2)) : null;
+      } else if (col.type === 'remark') {
+        // Same reasoning as formula — a clubbed row can merge several
+        // lines that each had their OWN remark typed in while taking the
+        // order; showing only the first line's would silently drop every
+        // other variant's remark from view, even though it was saved.
+        const remarks = [...new Set(group.lines.map(line => (line.comment || '').trim()).filter(Boolean))];
+        value = remarks.length ? esc(remarks.join(' · ')) : null;
       } else {
         value = getColumnValue(col, group.lines[0], order, null, 0);
       }
