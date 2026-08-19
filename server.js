@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.99.4';
-const BUILD_TIME   = '2026-08-19T12:49:27Z';
+const APP_VERSION  = '1.100.0';
+const BUILD_TIME   = '2026-08-19T13:56:47Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1732,7 +1732,7 @@ app.get('/api/platform/tenants/:id/items/template', platformAuth, async (req, re
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const headers = fieldDefs.map(fieldHeaderLabel);
-  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`) : [];
+  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated, e.g. ${c.values.slice(0,3).join(', ')}${c.values.length>3?', ...':''} — new values are added automatically) *`) : [];
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
   ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
@@ -2394,21 +2394,40 @@ function validateRequiredFields(fieldDefs, fields) {
 }
 
 // Validates a {categoryKey: [values]} map against the tenant's own
-// variantCategories definitions — unknown categories are dropped, and
-// values not in that category's own list are dropped too (silently, for
-// the UI tick-path where this can't happen anyway; Excel import does its
-// own stricter checking with warnings, see importItemsFromExcel).
-function resolveVariantSelections(tenant, rawSelections) {
-  if (!tenant.enableVariants || !rawSelections || typeof rawSelections !== 'object') return {};
-  const out = {};
-  (tenant.variantCategories || []).forEach(cat => {
+// Auto-expands a variant category's value list when a new value shows up
+// in the data, instead of silently dropping it — same idea whether it's a
+// manual item-add API call or a bulk Excel import: categories are meant
+// to grow FROM what's actually typed/imported, not require every value
+// pre-configured up front. Matching against existing values is
+// case/whitespace-insensitive (so "Red" and "red" merge into the same
+// tag), but a genuinely new value is simply accepted and added — a typo
+// becomes a new tag rather than a rejected one, by design (accepted
+// tradeoff for not having to pre-type every value in Settings first).
+// Operates on a plain array of categories, not the tenant object itself,
+// so the same function works for both a single request and a loop across
+// many Excel rows without repeatedly re-reading/re-writing the tenant.
+function resolveAndExpandVariantSelections(categories, rawSelections) {
+  const resolved = {};
+  let changed = false;
+  if (!rawSelections || typeof rawSelections !== 'object') return { resolved, changed, categories };
+  categories.forEach(cat => {
     const raw = rawSelections[cat.key];
     if (!Array.isArray(raw)) return;
-    const valueSet = new Set(cat.values);
-    const picked = raw.filter(v => valueSet.has(v));
-    if (picked.length) out[cat.key] = picked;
+    const canonicalByLower = {}; cat.values.forEach(v => { canonicalByLower[v.toLowerCase()] = v; });
+    const picked = [];
+    raw.forEach(v => {
+      const trimmed = String(v ?? '').trim();
+      if (!trimmed) return;
+      const existing = canonicalByLower[trimmed.toLowerCase()];
+      if (existing) { picked.push(existing); return; }
+      cat.values.push(trimmed);
+      canonicalByLower[trimmed.toLowerCase()] = trimmed;
+      picked.push(trimmed);
+      changed = true;
+    });
+    if (picked.length) resolved[cat.key] = [...new Set(picked)];
   });
-  return out;
+  return { resolved, changed, categories };
 }
 // Tags are required, same as the fixed Barcode/Item Name fields — every
 // category the company has defined needs at least one value ticked.
@@ -2440,9 +2459,11 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   // Variant selections only apply if this company has the feature turned
   // on — silently ignored otherwise, so a jewelry company's item payload
   // (which will never include these) behaves identically to before.
-  const variantSelections = resolveVariantSelections(req.tenant, req.body.variantSelections);
+  const workingCategories = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => ({ ...c, values: [...c.values] })) : [];
+  const { resolved: variantSelections, changed: categoriesChanged } = resolveAndExpandVariantSelections(workingCategories, req.body.variantSelections);
   const variantErr = validateVariantSelectionsComplete(req.tenant, variantSelections);
   if (variantErr) return res.status(400).json({ error: variantErr });
+  if (categoriesChanged) await TenantDB.update({ id: req.tenant.id }, { variantCategories: workingCategories });
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
     scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
@@ -2471,9 +2492,11 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
   }
   if (req.tenant.enableVariants && req.body.variantSelections) {
-    const resolved = resolveVariantSelections(req.tenant, req.body.variantSelections);
+    const workingCategories = (req.tenant.variantCategories || []).map(c => ({ ...c, values: [...c.values] }));
+    const { resolved, changed: categoriesChanged } = resolveAndExpandVariantSelections(workingCategories, req.body.variantSelections);
     const variantErr = validateVariantSelectionsComplete(req.tenant, resolved);
     if (variantErr) return res.status(400).json({ error: variantErr });
+    if (categoriesChanged) await TenantDB.update({ id: req.tenant.id }, { variantCategories: workingCategories });
     updates.variantSelections = resolved;
   }
   await ItemDB.update({ id: req.params.id }, updates);
@@ -2752,7 +2775,7 @@ app.get('/api/items/template/excel', resolveTenant, auth, async (req, res) => {
     // One column per variant category (Color, Size, whatever's defined) —
     // comma-separated, required just like the fixed fields are, so bulk
     // imports can't silently skip past them the way they were before.
-    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`) : [];
+    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated, e.g. ${c.values.slice(0,3).join(', ')}${c.values.length>3?', ...':''} — new values are added automatically) *`) : [];
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
     ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
@@ -2769,7 +2792,7 @@ app.get('/api/items/export/excel', resolveTenant, auth, requireRole('admin', 'st
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     const headers = fieldDefs.map(fieldHeaderLabel);
     const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
-    const categoryHeaders = categories.map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`);
+    const categoryHeaders = categories.map(c => `${c.label} (comma-separated, e.g. ${c.values.slice(0,3).join(', ')}${c.values.length>3?', ...':''} — new values are added automatically) *`);
     const q = { tenantId: req.tenant.id, active: true };
     if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
     const items = await ItemDB.find(q);
@@ -2809,9 +2832,14 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
       // Tag columns use the same "(...)" -stripping header match as regular
       // fields — the parenthetical just documents the valid values inline
       // in the sheet, it doesn't need special parsing.
-      const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
+      // Working copy, not a direct reference — new values discovered
+      // across the file get appended here as rows are processed, and the
+      // whole thing is saved back once at the end (not per-row) if
+      // anything actually changed.
+      const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => ({ ...c, values: [...c.values] })) : [];
       const labelToCategory = {};
       categories.forEach(c => { labelToCategory[c.label.trim().toLowerCase()] = c; });
+      let categoriesChanged = false;
 
       let created = 0, updated = 0, skipped = 0, rowErrors = [];
       let rowNum = 1; // header is row 1 in the spreadsheet, first data row is 2
@@ -2834,24 +2862,21 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         const missingErr = validateRequiredFields(fieldDefs, fields);
         if (missingErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: missingErr }); continue; }
 
-        // Match each tag column's comma-separated text against that
-        // category's own value list — case/whitespace-insensitive, same
-        // reasoning as everywhere else typed input meets a fixed list.
-        // Unrecognized values are dropped (not silently accepted as new
-        // values) and reported; a category left with nothing matched
-        // fails the same "required" check the chip UI enforces.
-        const variantSelections = {};
-        let rowHasUnmatched = false;
+        // Each tag column's comma-separated text becomes that category's
+        // selections for this row — a value not already in the category
+        // is accepted and added to it (case/whitespace-insensitive match
+        // against what's already there), same rule as everywhere else
+        // variant values get resolved. A typo becomes a new tag rather
+        // than a rejected row; that's an accepted tradeoff for not having
+        // to pre-type every value into Settings before importing.
+        const rawSelections = {};
         Object.keys(row).forEach(header => {
           const cat = labelToCategory[baseLabelFromHeader(header)];
           if (!cat || row[header] === '') return;
-          const typed = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
-          const canonicalByLower = {}; cat.values.forEach(v => { canonicalByLower[v.toLowerCase()] = v; });
-          const matched = [], unmatched = [];
-          typed.forEach(v => { const c = canonicalByLower[v.toLowerCase()]; if (c) matched.push(c); else unmatched.push(v); });
-          if (matched.length) variantSelections[cat.key] = [...new Set(matched)];
-          if (unmatched.length) { rowHasUnmatched = true; rowErrors.push({ row: rowNum, scannerCode, reason: `${cat.label} value(s) not recognized (kept the rest, dropped these) — ${unmatched.join(', ')}` }); }
+          rawSelections[cat.key] = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
         });
+        const { resolved: variantSelections, changed: rowChangedCategories } = resolveAndExpandVariantSelections(categories, rawSelections);
+        if (rowChangedCategories) categoriesChanged = true;
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
         // Validated against the MERGED result, not just this row's own tag
         // columns — a row updating only some other field, with the tag
@@ -2876,6 +2901,7 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           created++; itemCount++;
         }
       }
+      if (categoriesChanged) await TenantDB.update({ id: req.tenant.id }, { variantCategories: categories });
       res.json({ ok: true, created, updated, skipped, total: rows.length, rowErrors });
     } catch (err) { res.status(500).json({ error: 'Could not read that file — please use the template format. (' + err.message + ')' }); }
   });
