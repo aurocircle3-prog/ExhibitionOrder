@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.101.7';
-const BUILD_TIME   = '2026-08-19T19:36:37Z';
+const APP_VERSION  = '1.101.8';
+const BUILD_TIME   = '2026-08-19T19:41:03Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1053,12 +1053,29 @@ app.get('/api/platform/diagnose-slugs', platformAuth, async (req, res) => {
     probeResult = `FAILED inserting a guaranteed-fresh slug ("${probeSlug}") — error: ${err.message} (code: ${err.code}). This means the unique index itself is broken, not any specific company's data.`;
   }
 
+  // A reported conflict on "_id" specifically points at every collection
+  // in the actual creation sequence, not just Tenant — this tests each
+  // one individually (insert one throwaway doc, then delete it) to
+  // pinpoint exactly which collection's _id generation is actually broken.
+  const collectionProbes = {};
+  for (const [label, DB] of [['Tenant', TenantDB], ['FieldDef', FieldDefDB], ['User', UserDB], ['PasswordSetupToken', PasswordSetupTokenDB]]) {
+    const probeId = uuid();
+    try {
+      await DB.create({ id: probeId, tenantId: '__diagnostic__', createdAt: new Date().toISOString() });
+      await DB.remove({ id: probeId });
+      collectionProbes[label] = 'OK';
+    } catch (err) {
+      collectionProbes[label] = `FAILED — ${err.message} (code: ${err.code}, keyPattern: ${JSON.stringify(err.keyPattern || err.keyValue || {})})`;
+    }
+  }
+
   res.json({
     totalTenants: tenants.length,
     nullOrMissingSlugCount: nullOrMissingSlugs.length,
     nullOrMissingSlugs,
     duplicateSlugValues,
     probeResult,
+    collectionProbes,
     allSlugs: slugSummary,
   });
 });
