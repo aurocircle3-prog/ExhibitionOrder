@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.99.3';
-const BUILD_TIME   = '2026-08-19T12:41:34Z';
+const APP_VERSION  = '1.99.4';
+const BUILD_TIME   = '2026-08-19T12:49:27Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1472,11 +1472,21 @@ app.delete('/api/platform/tenants/:id', platformAuth, async (req, res) => {
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
 
   const tenantId = tenant.id;
+  // Associated-data cleanup is best-effort — logged if any of it fails,
+  // but never allowed to block the tenant record itself from being
+  // removed below. Previously this Promise.all had no error handling at
+  // all, and sat before the tenant removal — meaning any single failure
+  // here (one bad record, a transient DB hiccup, anything) aborted the
+  // whole request before ever reaching the actual deletion, leaving the
+  // company — and its slug — still fully present despite the "Company
+  // deleted" confirmation, exactly the "slug still blocked" symptom this
+  // is fixing.
   await Promise.all([
     UserDB.remove({ tenantId }), FieldDefDB.remove({ tenantId }), ItemDB.remove({ tenantId }),
     PartyDB.remove({ tenantId }), OrderDB.remove({ tenantId }), ExhibitionParticipantDB.remove({ tenantId }),
     AuditLogDB.remove({ tenantId }), ImageSetDB.remove({ tenantId }), PasswordSetupTokenDB.remove({ tenantId }),
-  ]);
+    ReportDefDB.remove({ tenantId }),
+  ]).catch(err => log.error({ err, tenantId }, 'Some associated data failed to clean up during company deletion — tenant record is still being removed regardless'));
   await deleteTenantFiles(tenantId);
   await TenantDB.remove({ id: tenantId });
 
