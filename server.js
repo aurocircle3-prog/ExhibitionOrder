@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.100.4';
-const BUILD_TIME   = '2026-08-19T18:23:32Z';
+const APP_VERSION  = '1.101.1';
+const BUILD_TIME   = '2026-08-19T18:41:45Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1412,8 +1412,7 @@ app.put('/api/platform/tenants/:id/variants-config', platformAuth, async (req, r
         let key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `category_${i}`;
         while (usedKeys.has(key)) key = key + '_2'; // two categories reducing to the same key (e.g. "Size" and "size!") — keep both, just disambiguate
         usedKeys.add(key);
-        const values = Array.isArray(c.values) ? [...new Set(c.values.map(v => String(v).trim()).filter(Boolean))] : [];
-        return { key, label, values };
+        return { key, label };
       });
     }
   } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
@@ -1732,7 +1731,7 @@ app.get('/api/platform/tenants/:id/items/template', platformAuth, async (req, re
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const headers = fieldDefs.map(fieldHeaderLabel);
-  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated, e.g. ${c.values.slice(0,3).join(', ')}${c.values.length>3?', ...':''} — new values are added automatically) *`) : [];
+  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated) *`) : [];
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
   ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
@@ -2406,28 +2405,34 @@ function validateRequiredFields(fieldDefs, fields) {
 // Operates on a plain array of categories, not the tenant object itself,
 // so the same function works for both a single request and a loop across
 // many Excel rows without repeatedly re-reading/re-writing the tenant.
-function resolveAndExpandVariantSelections(categories, rawSelections) {
+// Variant values are purely item-wise now — nothing displays or validates
+// against a company-wide value list (the order-taking picker already
+// builds its buttons from each specific item's own variantSelections, not
+// from a shared list), so this just cleans and stores whatever's
+// typed/imported for a category that's actually defined, no matching or
+// expansion needed. Dedup is case-insensitive within one item's own
+// values only (so "Red, red" on the same row collapses to one), not
+// against any other item — a genuinely new spelling on a different item
+// is just its own value, by design (typos are an accepted tradeoff for
+// not needing every value pre-approved anywhere).
+function resolveVariantSelections(categories, rawSelections) {
   const resolved = {};
-  let changed = false;
-  if (!rawSelections || typeof rawSelections !== 'object') return { resolved, changed, categories };
-  categories.forEach(cat => {
-    const raw = rawSelections[cat.key];
+  if (!rawSelections || typeof rawSelections !== 'object') return resolved;
+  const validKeys = new Set(categories.map(c => c.key));
+  Object.keys(rawSelections).forEach(key => {
+    if (!validKeys.has(key)) return;
+    const raw = rawSelections[key];
     if (!Array.isArray(raw)) return;
-    const canonicalByLower = {}; cat.values.forEach(v => { canonicalByLower[v.toLowerCase()] = v; });
-    const picked = [];
+    const seen = new Set(), cleaned = [];
     raw.forEach(v => {
       const trimmed = String(v ?? '').trim();
-      if (!trimmed) return;
-      const existing = canonicalByLower[trimmed.toLowerCase()];
-      if (existing) { picked.push(existing); return; }
-      cat.values.push(trimmed);
-      canonicalByLower[trimmed.toLowerCase()] = trimmed;
-      picked.push(trimmed);
-      changed = true;
+      if (!trimmed || seen.has(trimmed.toLowerCase())) return;
+      seen.add(trimmed.toLowerCase());
+      cleaned.push(trimmed);
     });
-    if (picked.length) resolved[cat.key] = [...new Set(picked)];
+    if (cleaned.length) resolved[key] = cleaned;
   });
-  return { resolved, changed, categories };
+  return resolved;
 }
 // Tags are required, same as the fixed Barcode/Item Name fields — every
 // category the company has defined needs at least one value ticked.
@@ -2459,11 +2464,9 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   // Variant selections only apply if this company has the feature turned
   // on — silently ignored otherwise, so a jewelry company's item payload
   // (which will never include these) behaves identically to before.
-  const workingCategories = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => ({ ...c, values: [...c.values] })) : [];
-  const { resolved: variantSelections, changed: categoriesChanged } = resolveAndExpandVariantSelections(workingCategories, req.body.variantSelections);
+  const variantSelections = req.tenant.enableVariants ? resolveVariantSelections(req.tenant.variantCategories || [], req.body.variantSelections) : {};
   const variantErr = validateVariantSelectionsComplete(req.tenant, variantSelections);
   if (variantErr) return res.status(400).json({ error: variantErr });
-  if (categoriesChanged) await TenantDB.update({ id: req.tenant.id }, { variantCategories: workingCategories });
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
     scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
@@ -2492,11 +2495,9 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
   }
   if (req.tenant.enableVariants && req.body.variantSelections) {
-    const workingCategories = (req.tenant.variantCategories || []).map(c => ({ ...c, values: [...c.values] }));
-    const { resolved, changed: categoriesChanged } = resolveAndExpandVariantSelections(workingCategories, req.body.variantSelections);
+    const resolved = resolveVariantSelections(req.tenant.variantCategories || [], req.body.variantSelections);
     const variantErr = validateVariantSelectionsComplete(req.tenant, resolved);
     if (variantErr) return res.status(400).json({ error: variantErr });
-    if (categoriesChanged) await TenantDB.update({ id: req.tenant.id }, { variantCategories: workingCategories });
     updates.variantSelections = resolved;
   }
   await ItemDB.update({ id: req.params.id }, updates);
@@ -2775,7 +2776,7 @@ app.get('/api/items/template/excel', resolveTenant, auth, async (req, res) => {
     // One column per variant category (Color, Size, whatever's defined) —
     // comma-separated, required just like the fixed fields are, so bulk
     // imports can't silently skip past them the way they were before.
-    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated, e.g. ${c.values.slice(0,3).join(', ')}${c.values.length>3?', ...':''} — new values are added automatically) *`) : [];
+    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated) *`) : [];
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
     ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
@@ -2792,7 +2793,7 @@ app.get('/api/items/export/excel', resolveTenant, auth, requireRole('admin', 'st
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     const headers = fieldDefs.map(fieldHeaderLabel);
     const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
-    const categoryHeaders = categories.map(c => `${c.label} (comma-separated, e.g. ${c.values.slice(0,3).join(', ')}${c.values.length>3?', ...':''} — new values are added automatically) *`);
+    const categoryHeaders = categories.map(c => `${c.label} (comma-separated) *`);
     const q = { tenantId: req.tenant.id, active: true };
     if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
     const items = await ItemDB.find(q);
@@ -2832,14 +2833,9 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
       // Tag columns use the same "(...)" -stripping header match as regular
       // fields — the parenthetical just documents the valid values inline
       // in the sheet, it doesn't need special parsing.
-      // Working copy, not a direct reference — new values discovered
-      // across the file get appended here as rows are processed, and the
-      // whole thing is saved back once at the end (not per-row) if
-      // anything actually changed.
-      const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => ({ ...c, values: [...c.values] })) : [];
+      const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
       const labelToCategory = {};
       categories.forEach(c => { labelToCategory[c.label.trim().toLowerCase()] = c; });
-      let categoriesChanged = false;
 
       let created = 0, updated = 0, skipped = 0, rowErrors = [];
       let rowNum = 1; // header is row 1 in the spreadsheet, first data row is 2
@@ -2863,20 +2859,15 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         if (missingErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: missingErr }); continue; }
 
         // Each tag column's comma-separated text becomes that category's
-        // selections for this row — a value not already in the category
-        // is accepted and added to it (case/whitespace-insensitive match
-        // against what's already there), same rule as everywhere else
-        // variant values get resolved. A typo becomes a new tag rather
-        // than a rejected row; that's an accepted tradeoff for not having
-        // to pre-type every value into Settings before importing.
+        // selections for this row, trimmed and deduped — no matching
+        // against a stored list, since values are purely item-wise now.
         const rawSelections = {};
         Object.keys(row).forEach(header => {
           const cat = labelToCategory[baseLabelFromHeader(header)];
           if (!cat || row[header] === '') return;
           rawSelections[cat.key] = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
         });
-        const { resolved: variantSelections, changed: rowChangedCategories } = resolveAndExpandVariantSelections(categories, rawSelections);
-        if (rowChangedCategories) categoriesChanged = true;
+        const variantSelections = resolveVariantSelections(categories, rawSelections);
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
         // Validated against the MERGED result, not just this row's own tag
         // columns — a row updating only some other field, with the tag
@@ -2901,7 +2892,6 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           created++; itemCount++;
         }
       }
-      if (categoriesChanged) await TenantDB.update({ id: req.tenant.id }, { variantCategories: categories });
       res.json({ ok: true, created, updated, skipped, total: rows.length, rowErrors });
     } catch (err) { res.status(500).json({ error: 'Could not read that file — please use the template format. (' + err.message + ')' }); }
   });
@@ -3914,19 +3904,24 @@ async function getReportsForTenant(tenantId, exhibitionId) {
     byStaff[o.staffId].orderCount += 1;
     const lines = grouped ? consolidateSetLines(o.items) : (o.items || []);
     for (const line of lines) {
-      // Keyed by item + variant (not just item) in both modes now — a
-      // color/size variant is a genuinely different product line for
-      // reporting purposes. Previously this only keyed by itemId, so all
-      // variants of one item got summed together under whichever
-      // variant's label happened to be recorded first — e.g. "Necklace
-      // 5K (Red)" showing a total that actually included Blue and Green
-      // too. Since line.label already includes the variant suffix
-      // per-line, keying this way just naturally gives each variant its
-      // own correct row — no separate label-tracking needed.
-      const key = (grouped ? line.label : line.itemId) + '::' + JSON.stringify(line.variantTags || {});
+      // With Row Grouping on, every color/size variant of an item merges
+      // into one Best Sellers row too — consistent with what Row Grouping
+      // already means for orders ("treat this as one clubbed unit"), so a
+      // company that's opted into that view isn't left seeing "Necklace
+      // 5K" fragmented into a separate row per color anyway. With it off
+      // (the default), a variant stays its own distinct row, same as
+      // before — a color/size is a genuinely different product line for
+      // reporting purposes unless the company has said otherwise.
+      const key = grouped ? line.label : (line.itemId + '::' + JSON.stringify(line.variantTags || {}));
       const lineItemIds = line.itemIds || [line.itemId];
-      const lineImages = [...new Set(lineItemIds.flatMap(id => itemImagesById[id] || []))];
-      byItem[key] ??= { itemId: line.itemId, itemIds: lineItemIds, variantTags: line.variantTags || {}, label: line.label, scannerCode: line.scannerCode, images: lineImages, qty: 0 };
+      byItem[key] ??= { itemId: line.itemId, itemIds: [], variantTags: grouped ? null : (line.variantTags || {}), label: line.label, scannerCode: line.scannerCode, images: [], qty: 0 };
+      // Accumulated across every line sharing this key, not just taken
+      // from the first one — with grouping on, different variants can be
+      // genuinely different Item Master records (different colors as
+      // separate items sharing a label), so later lines can carry item
+      // IDs and photos the first line never had.
+      lineItemIds.forEach(id => { if (!byItem[key].itemIds.includes(id)) byItem[key].itemIds.push(id); });
+      lineItemIds.forEach(id => { (itemImagesById[id] || []).forEach(url => { if (!byItem[key].images.includes(url)) byItem[key].images.push(url); }); });
       byItem[key].qty += line.qty;
     }
   }
@@ -3955,13 +3950,16 @@ app.post('/api/dashboard/best-sellers/orders', resolveTenant, auth, requireRole(
   if (!exhibitionId || !Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ error: 'exhibitionId and itemIds are required' });
   const orders = (await OrderDB.find({ tenantId: req.tenant.id, exhibitionId })).filter(o => !o.deleted);
   const idSet = new Set(itemIds);
+  // null specifically means "Row Grouping merged every variant into this
+  // one row" — match any variant of these items, not just untagged ones.
+  const matchAnyVariant = variantTags === null || variantTags === undefined;
   const targetTags = JSON.stringify(variantTags || {});
   const rows = [];
   for (const o of orders) {
     let qty = 0;
     for (const line of o.items || []) {
       if (!idSet.has(line.itemId)) continue;
-      if (JSON.stringify(line.variantTags || {}) !== targetTags) continue;
+      if (!matchAnyVariant && JSON.stringify(line.variantTags || {}) !== targetTags) continue;
       qty += line.qty;
     }
     if (qty > 0) rows.push({ orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, qty });

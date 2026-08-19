@@ -583,8 +583,11 @@ function openVariantPicker(item){
   pendingVariantItem = item;
   // Only categories this specific item actually comes in — an item
   // narrowed to just 2 colors shouldn't show the company's full 10.
+  // Values sorted naturally (numeric-aware) so codes like 1/2/10 and
+  // sizes like 28/30/38-S land in a sensible order regardless of
+  // whatever order they happened to be typed/imported in.
   pendingCats = variantCategories
-    .map(cat => ({ ...cat, values: item.variantSelections?.[cat.key] || [] }))
+    .map(cat => ({ ...cat, values: [...(item.variantSelections?.[cat.key] || [])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })) }))
     .filter(cat => cat.values.length);
   pendingExtraPicks = {}; pendingPicks = {};
   // Categories beyond the first two apply uniformly to everything added
