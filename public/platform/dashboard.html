@@ -1263,7 +1263,7 @@ function renderDetailFieldRows(){
       </tr>`;
     }
     return `<tr>
-      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}<br><span class="muted" style="font-size:11px">formula key: <code>${EXO.esc(f.key)}</code></span></td>
       <td>${fieldTypeLabel(f)}</td>
       <td></td>
       <td>
