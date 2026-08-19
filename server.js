@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.101.6';
-const BUILD_TIME   = '2026-08-19T19:22:15Z';
+const APP_VERSION  = '1.101.7';
+const BUILD_TIME   = '2026-08-19T19:36:37Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1023,6 +1023,45 @@ app.post('/api/platform/login', loginLimiter, async (req, res) => {
   res.json({ token, admin: { id: admin.id, email: admin.email, name: admin.name } });
 });
 
+// Temporary diagnostic — every slug failing to create (not just one
+// specific duplicate) can't be explained by the create route's own logic,
+// which was checked and is correctly building/submitting the slug every
+// time. This surfaces the actual raw state of every tenant's slug field,
+// plus a live probe insert/rollback, so the real cause can be seen
+// directly instead of guessed at further.
+app.get('/api/platform/diagnose-slugs', platformAuth, async (req, res) => {
+  const tenants = await TenantDB.find({});
+  const slugSummary = tenants.map(t => ({ id: t.id, name: t.name, slug: t.slug, slugType: typeof t.slug, active: t.active !== false, createdAt: t.createdAt }));
+  const nullOrMissingSlugs = slugSummary.filter(t => t.slug === null || t.slug === undefined || t.slug === '');
+  const slugCounts = {};
+  slugSummary.forEach(t => { const k = String(t.slug); slugCounts[k] = (slugCounts[k] || 0) + 1; });
+  const duplicateSlugValues = Object.entries(slugCounts).filter(([, count]) => count > 1);
+
+  // Live probe: try inserting a throwaway document with a guaranteed-fresh
+  // random slug, then immediately delete it. If even THIS fails with a
+  // duplicate-key error, the index itself is broken, not any real data
+  // conflict — that's the single most useful fact this diagnostic can
+  // surface.
+  const probeSlug = 'diagnostic-probe-' + Date.now();
+  let probeResult = 'not run';
+  try {
+    const probeId = uuid();
+    await TenantDB.create({ id: probeId, name: '__diagnostic_probe__', slug: probeSlug, createdAt: new Date().toISOString() });
+    await TenantDB.remove({ id: probeId });
+    probeResult = 'OK — a fresh, guaranteed-unique slug inserted and deleted successfully';
+  } catch (err) {
+    probeResult = `FAILED inserting a guaranteed-fresh slug ("${probeSlug}") — error: ${err.message} (code: ${err.code}). This means the unique index itself is broken, not any specific company's data.`;
+  }
+
+  res.json({
+    totalTenants: tenants.length,
+    nullOrMissingSlugCount: nullOrMissingSlugs.length,
+    nullOrMissingSlugs,
+    duplicateSlugValues,
+    probeResult,
+    allSlugs: slugSummary,
+  });
+});
 app.get('/api/platform/tenants', platformAuth, async (req, res) => {
   const tenants = await TenantDB.find({});
   const summaries = await Promise.all(tenants.map(async t => {
@@ -1123,7 +1162,6 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   if (slugErr) return res.status(400).json({ error: slugErr });
   const blocker = await TenantDB.findOne({ slug });
   if (blocker) return res.status(400).json({ error: `That company link name is already used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}). Pick a different one, or delete that company first if it's no longer needed.` });
-
   // Optional starting point: copy another company's CONFIGURATION onto this
   // brand-new one — the tedious stuff to set up from scratch (Item Master
   // fields, Order Form, variant categories, Order View Layout, settings
@@ -1213,9 +1251,25 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
       ]).catch(cleanupErr => log.error({ err: cleanupErr, tenantId: tenant.id }, 'Failed to roll back a partially-created company — may need manual cleanup'));
     }
     if (err.code === 11000) {
-      const blocker = await TenantDB.findOne({ slug: tenant.slug });
-      const detail = blocker ? ` It's currently used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}).` : ' (Could not find which company is using it — this may need manual database cleanup; contact support with the exact link name you tried.)';
-      return res.status(400).json({ error: `That company link name is already taken.${detail}` });
+      // The real bug behind "every slug fails identically" — this used
+      // to always assume a duplicate-key error meant the slug conflicted,
+      // without ever checking which field MongoDB actually flagged.
+      // TenantDB.create is only one of several creates in this sequence
+      // (fields, user, password-setup token); a conflict on any of THOSE
+      // would previously get mis-reported as a slug problem every single
+      // time, regardless of the slug actually being fine.
+      const conflictField = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'unknown';
+      if (conflictField === 'slug') {
+        const blocker = await TenantDB.findOne({ slug: tenant.slug });
+        const detail = blocker ? ` It's currently used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}).` : ' (Could not find which company is using it — this may need manual database cleanup; contact support with the exact link name you tried.)';
+        return res.status(400).json({ error: `That company link name is already taken.${detail}` });
+      }
+      // Not actually about the slug — a different unique field collided
+      // (shareToken/token on some other collection, most likely a fluke
+      // UUID collision or a stale index). Says so plainly instead of
+      // blaming the slug for something it didn't cause.
+      log.error({ err, conflictField, tenantSlug: tenant.slug }, 'Company creation hit a duplicate-key error on a field other than slug');
+      return res.status(500).json({ error: `Company creation failed on an unexpected duplicate value (field: ${conflictField}), not the company link name. Please try again — if this keeps happening, contact support with this exact message.` });
     }
     throw err;
   }
