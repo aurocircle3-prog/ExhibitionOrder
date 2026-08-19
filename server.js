@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.99.2';
-const BUILD_TIME   = '2026-08-19T12:34:11Z';
+const APP_VERSION  = '1.99.3';
+const BUILD_TIME   = '2026-08-19T12:41:34Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1158,45 +1158,55 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
       show: { note1: !!template.footer?.show?.note1, note2: !!template.footer?.show?.note2 },
     };
   }
+  let createdTenant = false;
+  let admin, setupToken, baseUrl;
   try {
     await TenantDB.create(tenant);
+    createdTenant = true;
+
+    for (let i = 0; i < FIXED_FIELDS.length; i++) {
+      await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
+    }
+    // Copy the source company's own custom Item Master fields (everything
+    // past the two always-present fixed fields), preserving their order.
+    if (template) {
+      const templateFields = (await FieldDefDB.find({ tenantId: template.id, active: true })).filter(f => !f.fixed).sort((a, b) => a.order - b.order);
+      for (let i = 0; i < templateFields.length; i++) {
+        const { id: _oldId, tenantId: _oldTenant, createdAt: _oldCreatedAt, ...rest } = templateFields[i];
+        await FieldDefDB.create({ ...rest, id: uuid(), tenantId: tenant.id, order: FIXED_FIELDS.length + i, createdAt: new Date().toISOString() });
+      }
+    }
+
+    admin = {
+      id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
+      password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
+      name: adminName, phone: phone || '', email, active: true, createdAt: new Date().toISOString(),
+    };
+    await UserDB.create(admin);
+
+    setupToken = uuid();
+    await PasswordSetupTokenDB.create({
+      id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
+    });
+    baseUrl = tenantBaseUrl(req, tenant);
   } catch (err) {
-    // A slug slipping past the upfront uniqueness check above (most
-    // likely two near-simultaneous submissions of the same form) hits
-    // MongoDB's own unique index instead — that's an uncaught database
-    // error, not a normal validation failure, and would otherwise surface
-    // as a generic "something went wrong" even though this is a clear,
-    // specific, recoverable situation.
+    // Anything failing partway through — after the tenant record exists
+    // but before the admin user and setup link are fully in place — used
+    // to leave a real company sitting in the list with literally no way
+    // to ever log into it, and no error clear enough to explain why. Undo
+    // everything this request created instead, so a failed attempt leaves
+    // no trace and can just be retried cleanly.
+    if (createdTenant) {
+      await Promise.all([
+        TenantDB.remove({ id: tenant.id }),
+        FieldDefDB.remove({ tenantId: tenant.id }),
+        UserDB.remove({ tenantId: tenant.id }),
+      ]).catch(cleanupErr => log.error({ err: cleanupErr, tenantId: tenant.id }, 'Failed to roll back a partially-created company — may need manual cleanup'));
+    }
     if (err.code === 11000) return res.status(400).json({ error: 'That company link name is already taken. If you just submitted this form, check the Companies list first — it may have already been created.' });
     throw err;
   }
-
-  for (let i = 0; i < FIXED_FIELDS.length; i++) {
-    await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
-  }
-  // Copy the source company's own custom Item Master fields (everything
-  // past the two always-present fixed fields), preserving their order.
-  if (template) {
-    const templateFields = (await FieldDefDB.find({ tenantId: template.id, active: true })).filter(f => !f.fixed).sort((a, b) => a.order - b.order);
-    for (let i = 0; i < templateFields.length; i++) {
-      const { id: _oldId, tenantId: _oldTenant, createdAt: _oldCreatedAt, ...rest } = templateFields[i];
-      await FieldDefDB.create({ ...rest, id: uuid(), tenantId: tenant.id, order: FIXED_FIELDS.length + i, createdAt: new Date().toISOString() });
-    }
-  }
-
-  const admin = {
-    id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
-    password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
-    name: adminName, phone: phone || '', email, active: true, createdAt: new Date().toISOString(),
-  };
-  await UserDB.create(admin);
-
-  const setupToken = uuid();
-  await PasswordSetupTokenDB.create({
-    id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
-  });
-  const baseUrl = tenantBaseUrl(req, tenant);
 
   log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email, clonedFrom: template?.slug || null }, 'Platform admin created a company');
   res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}`, clonedFrom: template ? { id: template.id, name: template.name } : null });
