@@ -1113,7 +1113,7 @@ function renderReportColumns(){
             : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
         </select>
       </div>` : `
-      <div style="flex:2;min-width:220px">${i===0?`<label>Formula <span class="muted">— e.g. <code>net_weight * melting</code>. Available: ${[...numericFields.map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(none yet)'}</span></label>`:''}
+      <div style="flex:2;min-width:220px"><label>Formula <span class="muted">— e.g. <code>net_weight * melting</code>. Available: ${[...numericFields.map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(none yet)'}</span></label>
         <input placeholder="net_weight * melting" value="${EXO.esc(c.formula||'')}" oninput="updateReportColumn('${c._id}','formula',this.value)">
       </div>`}
       <div style="flex:1;min-width:120px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}

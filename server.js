@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.100.1';
-const BUILD_TIME   = '2026-08-19T17:42:48Z';
+const APP_VERSION  = '1.100.2';
+const BUILD_TIME   = '2026-08-19T18:02:02Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -2043,7 +2043,7 @@ function validateFormula(expr, allowedNames) {
   const used = new Set();
   parsed.traverse(node => { if (node.isSymbolNode) used.add(node.name); });
   const unknown = [...used].filter(n => !allowedNames.has(n));
-  if (unknown.length) return { ok: false, error: `Formula uses unknown field(s): ${unknown.join(', ')}` };
+  if (unknown.length) return { ok: false, error: `Formula uses unknown field(s): ${unknown.map(n => JSON.stringify(n)).join(', ')}` };
   return { ok: true };
 }
 
