@@ -615,34 +615,40 @@ function renderList(){
 }
 
 let lastTenantId = null;
+let creatingCompany = false;
 async function createCompany(){
-  const err = document.getElementById('createErr'); err.style.display = 'none';
-  const body = {
-    companyName: document.getElementById('newCompanyName').value.trim(),
-    slug: document.getElementById('newSlug').value.trim(),
-    natureOfBusiness: document.getElementById('newNatureOfBusiness').value.trim(),
-    adminName: document.getElementById('newAdminName').value.trim(),
-    email: document.getElementById('newAdminEmail').value.trim(),
-    phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
-    maxStaff: document.getElementById('newMaxStaff').value,
-    cloneFromTenantId: document.getElementById('newCloneFrom').value || undefined,
-  };
-  if (!body.companyName || !body.slug || !body.adminName || !body.email) {
-    err.textContent = 'Company name, link, admin name, and email are all required';
-    err.style.display = 'block';
-    return;
-  }
+  if (creatingCompany) return; // already in flight — ignore a repeat call regardless of what triggered it
+  creatingCompany = true;
   try {
-    const res = await platformFetch('/tenants', { method: 'POST', body: JSON.stringify(body) });
-    document.getElementById('newAdminNameShow').textContent = res.admin.name;
-    document.getElementById('setupLinkBox').value = res.setupLink;
-    document.getElementById('setupLinkCard').style.display = 'block';
-    document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
-    ['newCompanyName','newSlug','newAdminName','newAdminEmail','newAdminPhone','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('newCloneFrom').value = '';
-    EXO.toast(res.clonedFrom ? `Company created — settings copied from ${res.clonedFrom.name}` : 'Company created');
-    load();
-  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+    const err = document.getElementById('createErr'); err.style.display = 'none';
+    const body = {
+      companyName: document.getElementById('newCompanyName').value.trim(),
+      slug: document.getElementById('newSlug').value.trim(),
+      natureOfBusiness: document.getElementById('newNatureOfBusiness').value.trim(),
+      adminName: document.getElementById('newAdminName').value.trim(),
+      email: document.getElementById('newAdminEmail').value.trim(),
+      phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
+      maxStaff: document.getElementById('newMaxStaff').value,
+      cloneFromTenantId: document.getElementById('newCloneFrom').value || undefined,
+    };
+    if (!body.companyName || !body.slug || !body.adminName || !body.email) {
+      err.textContent = 'Company name, link, admin name, and email are all required';
+      err.style.display = 'block';
+      return;
+    }
+    try {
+      const res = await platformFetch('/tenants', { method: 'POST', body: JSON.stringify(body) });
+      document.getElementById('newAdminNameShow').textContent = res.admin.name;
+      document.getElementById('setupLinkBox').value = res.setupLink;
+      document.getElementById('setupLinkCard').style.display = 'block';
+      document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
+      ['newCompanyName','newSlug','newNatureOfBusiness','newAdminName','newAdminEmail','newAdminPhone','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('newAdminPhoneCC').value = '+91';
+      document.getElementById('newCloneFrom').value = '';
+      EXO.toast(res.clonedFrom ? `Company created — settings copied from ${res.clonedFrom.name}` : 'Company created');
+      load();
+    } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+  } finally { creatingCompany = false; }
 }
 function copySetupLink(){ document.getElementById('setupLinkBox').select(); document.execCommand('copy'); }
 

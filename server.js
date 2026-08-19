@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.99.0';
-const BUILD_TIME   = '2026-08-17T10:13:37Z';
+const APP_VERSION  = '1.99.2';
+const BUILD_TIME   = '2026-08-19T12:34:11Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -428,6 +428,12 @@ const orderSchema = new mongoose.Schema({
   staffId: String, staffName: String,
   items: Array,                       // [{itemId, label, scannerCode, qty, extra}] — images deliberately NOT stored here; see attachLiveImages()
   remark: String,
+  // Set true only on orders created after this shipped — the order-view
+  // page used to automatically show a "Remark: ..." line whenever the
+  // order had a remark, with no way to turn it off. Existing orders
+  // simply won't have this field at all (undefined, same as false), so
+  // their display is untouched; only new orders suppress it.
+  suppressAutoOrderRemark: Boolean,
   // Snapshot of the tenant's Order Form config at the time this order was
   // placed, plus the computed per-field totals — kept on the order so it
   // still renders correctly even if the admin changes the config later.
@@ -1103,6 +1109,8 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
   const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness, cloneFromTenantId } = req.body;
   if (!companyName || !rawSlug || !adminName || !email)
     return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({ error: 'That doesn\'t look like a valid email address' });
   const slug = normalizeSlug(rawSlug);
   const slugErr = validateSlug(slug);
   if (slugErr) return res.status(400).json({ error: slugErr });
@@ -1150,7 +1158,18 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
       show: { note1: !!template.footer?.show?.note1, note2: !!template.footer?.show?.note2 },
     };
   }
-  await TenantDB.create(tenant);
+  try {
+    await TenantDB.create(tenant);
+  } catch (err) {
+    // A slug slipping past the upfront uniqueness check above (most
+    // likely two near-simultaneous submissions of the same form) hits
+    // MongoDB's own unique index instead — that's an uncaught database
+    // error, not a normal validation failure, and would otherwise surface
+    // as a generic "something went wrong" even though this is a clear,
+    // specific, recoverable situation.
+    if (err.code === 11000) return res.status(400).json({ error: 'That company link name is already taken. If you just submitted this form, check the Companies list first — it may have already been created.' });
+    throw err;
+  }
 
   for (let i = 0; i < FIXED_FIELDS.length; i++) {
     await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
@@ -3256,6 +3275,7 @@ app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 
     columnsSnapshot: req.tenant.orderViewColumns || [],
     customFields: normalizeCustomFields(req.tenant.orderCustomFields || [], customFields),
     showImages: req.tenant.orderShowImages !== false,
+    suppressAutoOrderRemark: true,
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };
   await OrderDB.create(order);

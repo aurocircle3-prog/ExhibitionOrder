@@ -346,7 +346,7 @@ async function load(){
         <div id="clubbedItems" style="display:none"></div>
         <div id="orderPagination" style="margin-top:10px"></div>
         ${fieldTotalRows ? `<div style="margin-top:14px;max-width:320px">${fieldTotalRows}</div>` : ''}
-        ${order.remark ? `<p class="muted" style="margin-top:10px">Remark: ${esc(order.remark)}</p>` : ''}
+        ${(order.remark && !order.suppressAutoOrderRemark) ? `<p class="muted" style="margin-top:10px">Remark: ${esc(order.remark)}</p>` : ''}
         ${resolvedFooterFields.length ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">${renderFieldList(resolvedFooterFields)}</div>` : ''}
       </div>
       ${renderFooter(company, order)}
