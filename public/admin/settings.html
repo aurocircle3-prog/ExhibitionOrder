@@ -456,8 +456,9 @@ function renderColumns(){
 async function saveColumns(){
   const err = document.getElementById('colErr'); err.style.display = 'none';
   for (const c of columns) {
-    if (c.type === 'formula' && validateFormulaClient(c.formula || '')) {
-      err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`;
+    const formulaErr = c.type === 'formula' ? validateFormulaClient(c.formula || '') : '';
+    if (formulaErr) {
+      err.textContent = `Column "${c.label || 'Formula'}": ${formulaErr}`;
       err.style.display = 'block';
       EXO.toast('Save failed — see error above', 'error');
       return;

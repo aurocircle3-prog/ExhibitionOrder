@@ -1579,7 +1579,8 @@ function renderDetailColumns(){
 async function saveDetailColumns(){
   const err = document.getElementById('fieldErr'); err.style.display = 'none';
   for (const c of detailColumns) {
-    if (c.type === 'formula' && validateDetailFormula(c.formula || '')) { err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`; err.style.display = 'block'; return; }
+    const formulaErr = c.type === 'formula' ? validateDetailFormula(c.formula || '') : '';
+    if (formulaErr) { err.textContent = `Column "${c.label || 'Formula'}": ${formulaErr}`; err.style.display = 'block'; return; }
     if ((c.type === 'field' || c.type === 'orderfield') && !c.fieldKey) { err.textContent = `Every ${c.type === 'field' ? 'Field' : 'Order detail'} column needs a field selected`; err.style.display = 'block'; return; }
   }
   const payload = detailColumns.map(c => ({ id: c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula, showTotal: c.showTotal }));
