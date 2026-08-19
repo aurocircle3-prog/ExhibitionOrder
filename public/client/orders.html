@@ -22,7 +22,7 @@ document.getElementById('nav').innerHTML = EXO.clientNav('orders');
     <tr>
       <td>${o.orderNo}</td><td>${o.items.length}</td>
       <td><span class="badge ${o.status}">${o.status}</span></td>
-      <td><a href="/order/${o.shareToken}" target="_blank">View ↗</a></td>
+      <td><a href="${o.shareUrl}" target="_blank">View ↗</a></td>
     </tr>`).join('') || '<tr><td colspan="4" class="muted">No orders yet</td></tr>';
 })();
 </script>

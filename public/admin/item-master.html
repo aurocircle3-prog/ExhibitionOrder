@@ -3,6 +3,7 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
+<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
   <p class="muted" style="margin-top:0">Catalog for <b id="exhibitionNameLabel"></b> <span class="muted">— use "Change exhibition" in the top bar to switch</span></p>
 
@@ -54,7 +55,7 @@
         </div>
         <div>
           <label>&nbsp;</label>
-          <button class="primary" style="width:100%" onclick="importExcel()">Import items</button>
+          <button class="primary" style="width:100%" onclick="EXO.busy(this, importExcel)">Import items</button>
         </div>
       </div>
       <p class="muted" style="margin-top:10px">Columns match your fields by name — the template header shows each field's type (and decimal places for numbers) in brackets. The Item Code column is required in every row; a matching scan code updates that item instead of duplicating it, and number values are rounded to the field's configured decimals.</p>
@@ -67,7 +68,7 @@
       <p class="muted" id="bulkImgMsg" style="display:none;color:var(--ok);background:#e1f2ea;padding:10px 14px;border-radius:8px"></p>
       <label>Select photo files — name each one after the item's Image Code (e.g. <code>1.jpg</code>, <code>1_1.jpg</code>, <code>1_2.jpg</code> for image code "1")</label>
       <input type="file" id="bulkImages" multiple accept="image/*">
-      <button class="primary" style="margin-top:12px" onclick="importBulkImages()">Upload &amp; match photos</button>
+      <button class="primary" style="margin-top:12px" onclick="EXO.busy(this, importBulkImages)">Upload &amp; match photos</button>
     </div>
   </div>
 
@@ -80,7 +81,9 @@
       <div class="btn-row" style="margin-bottom:10px">
         <button class="danger small" id="bulkDeleteBtn" style="display:none" onclick="bulkDeleteItems()">Delete selected (<span id="selectedCount">0</span>)</button>
         <button class="danger small" onclick="deleteAllItems()">Delete ALL items</button>
+        <button class="ghost small" onclick="cleanupOrphanedImages()">Fix stuck photo uploads</button>
       </div>
+      <p class="muted" id="cleanupMsg" style="display:none;margin-top:-4px"></p>
       <div class="table-scroll">
         <table>
           <thead id="itemsHead"></thead>
@@ -107,6 +110,7 @@
 <script>
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('items');
+document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('items');
 let fields = [], items = [], editingId = null, editingFieldId = null;
 let enableVariants = false, variantCategories = [];
 const tenantSlug = EXO.getTenantSlug();
@@ -152,9 +156,9 @@ function renderFieldRows(){
   document.getElementById('fieldRows').innerHTML = fields.map((f, i) => {
     if (f.id === editingFieldId) {
       return `<tr class="field-row-edit">
-        <td><input id="editLabel" value="${f.label}"></td>
+        <td><input id="editLabel" value="${EXO.esc(f.label)}"></td>
         <td>${typeLabel(f)}</td>
-        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
+        <td>${f.type==='number' ? `<input id="editDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editUnit" value="${EXO.esc(f.unit||'')}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editOptions" value="${EXO.esc((f.options||[]).join(', '))}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
           <button class="primary small" onclick="EXO.busy(this, () => saveEditField('${f.id}'))">Save</button>
           <button class="ghost small" onclick="cancelEditField()">Cancel</button>
@@ -162,7 +166,7 @@ function renderFieldRows(){
       </tr>`;
     }
     return `<tr>
-      <td>${f.label}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
       <td>${typeLabel(f)}</td>
       <td></td>
       <td>
@@ -216,9 +220,9 @@ async function deleteField(id){
 function renderItemForm(){
   document.getElementById('itemForm').innerHTML = fields.map(f => `
     <div>
-      <label>${f.label}${f.required?' <span style="color:#c0392b">*</span>':''}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
+      <label>${EXO.esc(f.label)}${f.required?' <span style="color:#c0392b">*</span>':''}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
       ${f.type==='dropdown'
-        ? `<select id="f_${f.key}"><option value="">—</option>${(f.options||[]).map(o=>`<option>${o}</option>`).join('')}</select>`
+        ? `<select id="f_${f.key}"><option value="">—</option>${(f.options||[]).map(o=>`<option>${EXO.esc(o)}</option>`).join('')}</select>`
         : `<input id="f_${f.key}" type="${f.type==='number'?'number':f.type==='date'?'date':'text'}" ${f.type==='number'?`step="${f.decimals?1/Math.pow(10,f.decimals):'any'}"`:''}>`}
     </div>`).join('');
   itemTagSelections = {};
@@ -238,10 +242,10 @@ function renderItemTagChips(){
     const selected = itemTagSelections[cat.key] || [];
     return `
       <div style="margin-top:12px">
-        <label>${cat.label} <span style="color:#c0392b">*</span></label>
+        <label>${EXO.esc(cat.label)} <span style="color:#c0392b">*</span></label>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
           ${cat.values.map(v => `
-            <button type="button" onclick="toggleItemTag('${cat.key}','${v.replace(/'/g,"\\'")}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${selected.includes(v)?'var(--brand)':'var(--line)'};background:${selected.includes(v)?'var(--brand)':'#fff'};color:${selected.includes(v)?'#fff':'inherit'}">${v}</button>`).join('')}
+            <button type="button" onclick="toggleItemTag('${cat.key}','${EXO.escAttr(v)}')" style="padding:5px 12px;font-size:13px;border-radius:14px;border:0.5px solid ${selected.includes(v)?'var(--brand)':'var(--line)'};background:${selected.includes(v)?'var(--brand)':'#fff'};color:${selected.includes(v)?'#fff':'inherit'}">${EXO.esc(v)}</button>`).join('')}
           ${!cat.values.length ? '<span class="muted">No values defined for this tag yet.</span>' : ''}
         </div>
       </div>`;
@@ -290,11 +294,21 @@ async function bulkDeleteItems(){
     EXO.toast('Bulk delete failed — see error above', 'error');
   }
 }
+async function cleanupOrphanedImages(){
+  const msg = document.getElementById('cleanupMsg');
+  msg.style.display = 'block'; msg.textContent = 'Checking for stuck/orphaned photo records…';
+  try {
+    const res = await EXO.apiFetch('/items/cleanup-orphaned-images', { method: 'POST' });
+    msg.textContent = res.cleaned
+      ? `Cleared ${res.cleaned} stuck photo record(s) (checked ${res.checked} total). New photo uploads for those Image Codes should work normally now.`
+      : `Checked ${res.checked} photo record(s) — nothing stuck, all good.`;
+  } catch (e) { msg.textContent = ''; msg.style.display = 'none'; EXO.toast(e.message, 'error'); }
+}
 async function deleteAllItems(){
   if (!items.length) { EXO.toast('No items to delete', 'error'); return; }
   const exName = EXO.currentExhibition()?.name || 'this exhibition';
   const typed = prompt(`This permanently deletes ALL ${items.length} items in "${exName}" — cannot be undone. Type DELETE ALL to confirm:`);
-  if (typed !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
+  if ((typed || '').trim().toUpperCase() !== 'DELETE ALL') { if (typed !== null) EXO.toast('Not confirmed — nothing deleted', 'error'); return; }
   try {
     const res = await EXO.apiFetch('/items/delete-all', { method: 'POST', body: JSON.stringify({ exhibitionId: currentExhibitionId }) });
     EXO.toast(`Deleted all ${res.deleted} items from "${exName}"`);
@@ -310,13 +324,13 @@ function renderItemsTable(list){
   const visibleIds = list.map(it => it.id);
   const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.has(id));
   const tagCols = enableVariants ? variantCategories : [];
-  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${f.label}</th>`).join('')}${tagCols.map(c=>`<th>${c.label}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${EXO.esc(f.label)}</th>`).join('')}${tagCols.map(c=>`<th>${EXO.esc(c.label)}</th>`).join('')}<th>Photos</th><th></th></tr>`;
   document.getElementById('itemsBody').innerHTML = list.map(it => `
     <tr>
       <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
-      <td class="thumb-cell"><img src="${it.images?.[0]||''}" onerror="this.style.visibility='hidden'"></td>
-      ${fields.map(f=>`<td>${it.fields[f.key] ?? ''}</td>`).join('')}
-      ${tagCols.map(c=>`<td>${(it.variantSelections?.[c.key]||[]).join(', ') || '—'}</td>`).join('')}
+      <td class="thumb-cell"><img src="${EXO.esc(it.images?.[0]||'')}" onerror="this.style.visibility='hidden'"></td>
+      ${fields.map(f=>`<td>${EXO.esc(it.fields[f.key] ?? '')}</td>`).join('')}
+      ${tagCols.map(c=>`<td>${EXO.esc((it.variantSelections?.[c.key]||[]).join(', ')) || '—'}</td>`).join('')}
       <td>${(it.images||[]).length}/3</td>
       <td>
         <button class="ghost small" onclick="editItem('${it.id}')">Edit</button>
@@ -355,7 +369,7 @@ function resetForm(){
 function renderExistingPhotos(){
   document.getElementById('existingPhotos').innerHTML = editingImages.map((url,i) => `
     <div style="position:relative">
-      <img src="${url}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #e6e6e6">
+      <img src="${EXO.esc(url)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #e6e6e6">
       <button class="danger small" style="position:absolute;top:-8px;right:-8px;padding:2px 6px" onclick="removeImage(event,${i})">✕</button>
     </div>`).join('');
   const remaining = 3 - editingImages.length;
@@ -399,40 +413,74 @@ function authedUrl(path){
 }
 function downloadTemplate(){ location.href = authedUrl('/api/items/template/excel'); }
 function downloadExport(){ location.href = authedUrl('/api/items/export/excel') + (currentExhibitionId ? '&exhibitionId=' + currentExhibitionId : ''); }
+// EXO.apiFetch always parses the response as JSON, so it can't be used
+// for a binary file download — this does a raw authenticated fetch,
+// turns the response into a blob, and triggers a download via a
+// temporary link, the standard way to save a POST response as a file.
+async function downloadErrorsExcel(rows){
+  const res = await fetch('/api/items/error-report/excel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('exo_token'), 'X-Tenant-Slug': EXO.getTenantSlug() },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) { EXO.toast('Could not generate the error report', 'error'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'import-errors.xlsx';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 async function importExcel(){
   const err = document.getElementById('bulkErr'); err.style.display='none';
   const msg = document.getElementById('bulkMsg'); msg.style.display='none';
   if (!currentExhibitionId) { err.textContent = 'Pick or create an exhibition above first'; err.style.display='block'; return; }
   const file = document.getElementById('importFile').files[0];
   if (!file) { err.textContent = 'Choose a file first'; err.style.display='block'; return; }
+  msg.style.whiteSpace = 'normal';
+  msg.textContent = 'Importing… this can take a little while for a large file — please don\'t close this page.';
+  msg.style.display = 'block';
   try {
     const fd = new FormData(); fd.append('file', file); fd.append('exhibitionId', currentExhibitionId);
     const res = await EXO.apiFetch('/items/import/excel', { method:'POST', body: fd });
     let text = `Imported ${res.created} new, updated ${res.updated}, skipped ${res.skipped} (of ${res.total} rows) into "${EXO.currentExhibition()?.name}".`;
-    if (res.tagWarnings && res.tagWarnings.length) {
-      text += '\n\nTag issues found:\n' + res.tagWarnings.map(w => '• ' + w).join('\n');
-    }
     msg.textContent = text;
-    msg.style.whiteSpace = 'pre-line';
     msg.style.display = 'block';
+    if (res.rowErrors && res.rowErrors.length) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost small'; btn.style.marginLeft = '8px'; btn.style.marginTop = '6px';
+      btn.textContent = `Download details for ${res.rowErrors.length} row(s) with issues (Excel)`;
+      btn.onclick = () => downloadErrorsExcel(res.rowErrors);
+      msg.appendChild(document.createElement('br'));
+      msg.appendChild(btn);
+    }
     document.getElementById('importFile').value = '';
     loadItems();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) { msg.style.display='none'; err.textContent = e.message; err.style.display='block'; }
 }
 async function importBulkImages(){
   const err = document.getElementById('bulkImgErr'); err.style.display='none';
   const msg = document.getElementById('bulkImgMsg'); msg.style.display='none';
   const files = document.getElementById('bulkImages').files;
   if (!files.length) { err.textContent = 'Choose photo files first'; err.style.display='block'; return; }
+  msg.textContent = `Uploading ${files.length} photo(s)… this can take a little while, especially on slow wifi — please don't close this page.`;
+  msg.style.display = 'block';
   try {
     const fd = new FormData();
     for (const f of files) fd.append('images', f);
     const res = await EXO.apiFetch('/items/bulk-images', { method:'POST', body: fd });
-    msg.textContent = `Matched ${res.matched} photo(s) to items. ${res.unmatchedCode ? res.unmatchedCode+' had no matching Image Code. ' : ''}${res.full ? res.full+' skipped — item already had 3 photos.' : ''}`;
+    msg.textContent = `${res.added} new photo(s) added, ${res.replaced} existing photo(s) replaced. ${res.unmatchedCode ? res.unmatchedCode+' had no matching Image Code.' : ''}`;
     msg.style.display = 'block';
+    if (res.fileErrors && res.fileErrors.length) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost small'; btn.style.marginLeft = '8px'; btn.style.marginTop = '6px';
+      btn.textContent = `Download details for ${res.fileErrors.length} file(s) with issues (Excel)`;
+      btn.onclick = () => downloadErrorsExcel(res.fileErrors);
+      msg.appendChild(document.createElement('br'));
+      msg.appendChild(btn);
+    }
     document.getElementById('bulkImages').value = '';
     loadItems();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+  } catch(e) { msg.style.display='none'; err.textContent = e.message; err.style.display='block'; }
 }
 
 (async function init(){

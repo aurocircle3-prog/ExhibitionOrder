@@ -33,10 +33,10 @@
         <input type="checkbox" id="showImages" style="width:auto"> <span>Show item photos on the order link</span>
       </label>
       <div class="table-scroll"><table>
-        <thead><tr><th>Field</th><th>Show on order</th></tr></thead>
+        <thead><tr><th>Field</th><th>Show on order</th><th>Show total</th></tr></thead>
         <tbody id="orderFieldRows"></tbody>
       </table></div>
-      <p class="muted" style="margin-top:8px">Want a total shown for a field (or a formula)? Turn on "Show total" on that column in Order View Layout instead — that works for formulas too, not just plain fields.</p>
+      <p class="muted" style="margin-top:8px">"Show total" here adds up a plain numeric field across the whole order — shown on the buyer's order link. Need a <i>formula</i> total (e.g. weight × rate) instead of a plain field? Use "Show total" on a Formula column in Order View Layout — that one supports formulas, this one doesn't.</p>
       <button class="primary" onclick="EXO.busy(this, saveOrderFields)">Save order form</button>
     </div>
   </div>
@@ -184,8 +184,9 @@ async function loadOrderFields(saved){
   saved.forEach(f => { savedByKey[f.key] = f; });
   document.getElementById('orderFieldRows').innerHTML = fields.map(f => `
     <tr>
-      <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
-      <td><input type="checkbox" data-key="${f.key}" data-label="${f.label}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
+      <td>${EXO.esc(f.label)}${f.type==='number' && f.unit ? ` <span class="muted">(${EXO.esc(f.unit)})</span>` : ''}</td>
+      <td><input type="checkbox" data-key="${f.key}" data-label="${EXO.esc(f.label)}" class="of-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
+      <td>${f.type === 'number' ? `<input type="checkbox" data-total-key="${f.key}" class="of-total" ${savedByKey[f.key]?.showTotal ? 'checked' : ''}>` : ''}</td>
     </tr>`).join('');
   // Field/Formula columns in Order View Layout can reference ANY active
   // Item Master field (fixed or custom) — not just ones on the Order Form.
@@ -197,9 +198,10 @@ async function loadOrderFields(saved){
 async function saveOrderFields(){
   const err = document.getElementById('err'); err.style.display='none';
   const keysToShow = new Set(Array.from(document.querySelectorAll('.of-show')).filter(el => el.checked).map(el => el.dataset.key));
+  const totalKeys = new Set(Array.from(document.querySelectorAll('.of-total')).filter(el => el.checked).map(el => el.dataset.totalKey));
   const orderFields = Array.from(keysToShow).map(key => {
     const showEl = document.querySelector(`.of-show[data-key="${key}"]`);
-    return { key, label: showEl.dataset.label };
+    return { key, label: showEl.dataset.label, showTotal: totalKeys.has(key) };
   });
   const showImages = document.getElementById('showImages').checked;
   try {
@@ -227,7 +229,7 @@ function moveCustomField(i, direction){
 function renderCustomFields(){
   document.getElementById('customFieldRows').innerHTML = customFields.map((f, i) => `
     <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
-      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateCustomFieldAt(${i},'label',this.value)"></div>
+      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${EXO.esc(f.label||'')}" placeholder="e.g. Delivery Date" oninput="updateCustomFieldAt(${i},'label',this.value)"></div>
       <div style="flex:1;min-width:100px">${i===0?'<label>Type</label>':''}
         <select onchange="updateCustomFieldAt(${i},'type',this.value)">
           <option value="text" ${f.type==='text'?'selected':''}>Text</option>
@@ -316,14 +318,14 @@ function renderFieldListEntries(which){
       <div style="flex:1;min-width:150px"><label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
         <select onchange="updateFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
-            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${EXO.esc(t.label)}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
             : f.type === 'fieldtotal'
-            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${n.label}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
-            : (orderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
+            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${EXO.esc(n.label)}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
+            : (orderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${EXO.esc(o.label)}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>
       <div style="flex:1;min-width:130px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
-        <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateFieldListEntry('${which}','${f._id}','label',this.value)">
+        <input placeholder="defaults to the field's own name" value="${EXO.esc(f.label||'')}" oninput="updateFieldListEntry('${which}','${f._id}','label',this.value)">
       </div>
       <div style="display:flex;gap:4px">
         <button class="ghost small" title="Move up" onclick="moveFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑</button>
@@ -393,7 +395,7 @@ function renderColumns(){
           <select onchange="updateColumn('${c._id}','type',this.value)">
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
             <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
-            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
+            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${EXO.esc(variantCategories.map(v=>v.label).join(', '))})</option>` : ''}
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
@@ -409,28 +411,32 @@ function renderColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateColumn('${c._id}','label',this.value)">
+        <input placeholder="${EXO.esc(c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(orderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(availableFields.find(f=>f.key===c.fieldKey)?.label||'Heading'))}" value="${EXO.esc(c.label||'')}" oninput="updateColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'varianttag' ? `
         <div style="margin-top:10px">
           <label>Which tag</label>
-          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('')}</select>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${EXO.esc(v.label)}</option>`).join('')}</select>
         </div>` : ''}
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
-          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${availableFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields to your Order Form first —</option>'}</select>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${availableFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add fields to your Order Form first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'orderfield' ? `
         <div style="margin-top:10px">
           <label>Which order details field <span class="muted">— one value per order; shown the same in every row</span></label>
-          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${orderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields in the Order Details Fields tab first —</option>'}</select>
+          <select onchange="updateColumn('${c._id}','fieldKey',this.value)">${orderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add fields in the Order Details Fields tab first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'formula' ? `
         <div style="margin-top:10px">
           <label>Formula <span class="muted">— use field names and qty with + − × / ^ and parentheses, e.g. <code>(price + 50) * qty</code>. Also supports round(), max(), min() — e.g. <code>round(price * 1.18)</code>. Available: ${[...availableFields.filter(f=>f.type==='number').map(f=>f.key), ...orderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(add a number field to your Order Form first)'}</span></label>
-          <input placeholder="price * qty" value="${c.formula||''}" oninput="updateColumn('${c._id}','formula',this.value)">
-          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
+          <input placeholder="price * qty" value="${EXO.esc(c.formula||'')}" oninput="updateColumn('${c._id}','formula',this.value)">
+          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${EXO.esc(formulaError)}</p>` : ''}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <div style="flex:1"><label>Unit <span class="muted">(optional)</span></label><input placeholder="Rs., Grms, ct…" value="${EXO.esc(c.unit||'')}" oninput="updateColumn('${c._id}','unit',this.value)"></div>
+            <div style="flex:1"><label>Decimals</label><input type="number" min="0" max="6" value="${c.decimals ?? 2}" oninput="updateColumn('${c._id}','decimals',this.value)"></div>
+          </div>
         </div>` : ''}
       ${(c.type === 'formula' || (c.type === 'field' && availableFields.find(f=>f.key===c.fieldKey)?.type === 'number')) ? `
         <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400">
@@ -450,8 +456,9 @@ function renderColumns(){
 async function saveColumns(){
   const err = document.getElementById('colErr'); err.style.display = 'none';
   for (const c of columns) {
-    if (c.type === 'formula' && validateFormulaClient(c.formula || '')) {
-      err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`;
+    const formulaErr = c.type === 'formula' ? validateFormulaClient(c.formula || '') : '';
+    if (formulaErr) {
+      err.textContent = `Column "${c.label || 'Formula'}": ${formulaErr}`;
       err.style.display = 'block';
       EXO.toast('Save failed — see error above', 'error');
       return;
@@ -487,6 +494,11 @@ const FOOTER_FIELD_DEFS = [
   { key: 'twitter', label: 'Twitter / X', type: 'text', placeholder: '@yourhandle or full URL' },
   { key: 'youtube', label: 'YouTube', type: 'text', placeholder: 'channel name or full URL' },
   { key: 'website', label: 'Website', type: 'text', placeholder: 'yourcompany.com' },
+  // Free text for anything not covered above — visibility on the public
+  // link is decided by AuroCircle (platform admin), not from here, so no
+  // show/hide checkbox is rendered for these two.
+  { key: 'note1', label: 'Note 1', type: 'textarea', noClientToggle: true },
+  { key: 'note2', label: 'Note 2', type: 'textarea', noClientToggle: true },
 ];
 function loadFooter(tenant){
   const f = tenant.footer || { show: {} };
@@ -500,25 +512,27 @@ function loadFooter(tenant){
     const val = f[def.key] || '';
     let inputHtml;
     if (def.type === 'textarea') {
-      inputHtml = `<textarea id="footer_${def.key}" rows="2">${val}</textarea>`;
+      inputHtml = `<textarea id="footer_${def.key}" rows="2">${EXO.esc(val)}</textarea>`;
     } else if (def.type === 'phone') {
       const digits = val.replace(/^\+/, '');
       const cc = digits.length > 10 ? '+' + digits.slice(0, digits.length - 10) : '+91';
       const num = digits.length > 10 ? digits.slice(-10) : digits;
       inputHtml = `<div style="display:flex;gap:6px">
-        <input id="footer_${def.key}_cc" value="${cc}" maxlength="4" style="width:60px;flex:0 0 auto">
-        <input id="footer_${def.key}" type="tel" inputmode="numeric" value="${num}" style="flex:1" placeholder="90290 06090">
+        <input id="footer_${def.key}_cc" value="${EXO.esc(cc)}" maxlength="4" style="width:60px;flex:0 0 auto">
+        <input id="footer_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="98765 43210">
       </div>`;
     } else {
-      inputHtml = `<input id="footer_${def.key}" value="${val}" placeholder="${def.placeholder || ''}">`;
+      inputHtml = `<input id="footer_${def.key}" value="${EXO.esc(val)}" placeholder="${EXO.esc(def.placeholder || '')}">`;
     }
     return `
       <div style="margin-top:12px">
         <label>${def.label}</label>
         ${inputHtml}
-        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:4px">
+        ${def.noClientToggle
+          ? `<p class="muted" style="margin:4px 0 0;font-size:12px">Whether this appears on the order link is set by AuroCircle, not from here.</p>`
+          : `<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:4px">
           <input type="checkbox" id="show_${def.key}" style="width:auto" ${f.show?.[def.key] ? 'checked' : ''}> <span class="muted" style="font-weight:400">Show on order link</span>
-        </label>
+        </label>`}
       </div>`;
   }).join('');
 }
@@ -545,7 +559,7 @@ async function saveFooter(){
     } else {
       body[def.key] = document.getElementById(`footer_${def.key}`).value.trim();
     }
-    body.show[def.key] = document.getElementById(`show_${def.key}`).checked;
+    if (!def.noClientToggle) body.show[def.key] = document.getElementById(`show_${def.key}`).checked;
   }
   try {
     await EXO.apiFetch('/companies/footer', { method: 'PUT', body: JSON.stringify(body) });
@@ -561,13 +575,13 @@ async function loadExhibitions(){
 }
 function renderExhibitionRows(){
   document.getElementById('exRows').innerHTML = exhibitionsList.map(e => `
-    <tr><td>${e.name}</td><td>${e.location||'—'}</td><td>${e.startDate||''} ${e.endDate?'– '+e.endDate:''}</td>
+    <tr><td>${EXO.esc(e.name)}</td><td>${EXO.esc(e.location)||'—'}</td><td>${e.startDate||''} ${e.endDate?'– '+e.endDate:''}</td>
     <td>${e.validTill || '—'}</td>
     <td>${editingOrderNumId === e.id ? renderOrderNumEditor(e) : renderOrderNumSummary(e)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Not added to any exhibition yet</td></tr>';
 }
 function renderOrderNumSummary(e){
   const sample = `${e.orderNumberPrefix}${e.orderNumberStart}${e.orderNumberSuffix}`;
-  return `<span class="muted">e.g. ${sample}</span> <button class="ghost small" onclick="editOrderNumConfig('${e.id}')">Edit</button>`;
+  return `<span class="muted">e.g. ${EXO.esc(sample)}</span> <button class="ghost small" onclick="editOrderNumConfig('${e.id}')">Edit</button>`;
 }
 function renderOrderNumEditor(e){
   return `

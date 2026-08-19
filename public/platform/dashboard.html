@@ -27,6 +27,14 @@
       </div>
       <p class="muted" id="platformLogoErr" style="display:none;color:var(--danger)"></p>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Order notification emails</h3>
+      <p class="muted" style="margin-top:-6px">This is the platform-wide switch (one Brevo account for the whole app, set from <code>BREVO_API_KEY</code> on Render). Even when this is active, each company also needs its own "Order notification emails" toggle turned on individually — open a company below → its detail page.</p>
+      <p id="emailStatusLine">Checking…</p>
+      <button class="ghost" id="emailTestBtn" onclick="EXO.busy(this, sendTestEmail)" disabled>Send test email to myself</button>
+      <p class="muted" id="emailTestResult" style="margin-top:8px"></p>
+    </div>
   </div>
 
   <div class="tab-panel" id="ttab-companies">
@@ -46,19 +54,24 @@
       <p class="muted" style="margin-top:-6px">Self-signup is disabled — this is the only way a company gets set up. The admin sets their own password via a one-time link (shown below after creating).</p>
       <div class="error" id="createErr"></div>
       <div class="grid cols-2">
-        <div><label>Company name</label><input id="newCompanyName" placeholder="Kaashvi Jewels"></div>
-        <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="kaashvi"></div>
+        <div><label>Company name</label><input id="newCompanyName" placeholder="Meridian Traders"></div>
+        <div><label>Company link <span class="muted">(slug)</span></label><input id="newSlug" placeholder="meridian"></div>
         <div><label>Nature of business <span class="muted">(optional)</span></label><input id="newNatureOfBusiness" placeholder="e.g. Jewelry Wholesaler"></div>
         <div><label>Admin name</label><input id="newAdminName" placeholder="Sanjay Jain"></div>
-        <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@kaashvi.com"></div>
+        <div><label>Admin email</label><input id="newAdminEmail" type="email" placeholder="admin@meridian.com"></div>
         <div>
           <label>Admin mobile <span class="muted">(optional)</span></label>
           <div style="display:flex;gap:6px">
             <input id="newAdminPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-            <input id="newAdminPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
+            <input id="newAdminPhone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
           </div>
         </div>
         <div><label>Staff limit <span class="muted">(blank = unlimited)</span></label><input id="newMaxStaff" type="number" min="0" placeholder="e.g. 5"></div>
+      </div>
+      <div style="margin-top:14px">
+        <label>Copy settings from an existing company <span class="muted">(optional)</span></label>
+        <select id="newCloneFrom"><option value="">— Start blank —</option></select>
+        <p class="muted" style="margin:4px 0 0">Copies Item Master fields, Order Form, variant categories, Order View Layout, settings permissions, and reusable footer text (WhatsApp message + Note 1/2) from that company. Never copies its name, logo, address, GST, phone, or social links — those stay blank for the new company.</p>
       </div>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, createCompany)">Create company</button>
     </div>
@@ -98,7 +111,7 @@
       </div>
       <h4>Companies in this exhibition</h4>
       <div class="table-scroll"><table>
-        <thead><tr><th>Company</th><th>Nature of Business</th><th>Valid till</th><th></th></tr></thead>
+        <thead><tr><th>Company</th><th>Nature of Business</th><th>Valid till</th><th>Item limit</th><th></th></tr></thead>
         <tbody id="participantRows"></tbody>
       </table></div>
 
@@ -123,11 +136,38 @@
       <button class="tab-btn" data-dtab="users" onclick="switchDetailTab('users')">Users</button>
       <button class="tab-btn" data-dtab="access" onclick="switchDetailTab('access')">Access &amp; Limits</button>
       <button class="tab-btn" data-dtab="config" onclick="switchDetailTab('config')">Configuration</button>
-      <button class="tab-btn" data-dtab="orders" onclick="switchDetailTab('orders')">Recent Orders</button>
       <button class="tab-btn" data-dtab="reports" onclick="switchDetailTab('reports')">Reports</button>
     </div>
 
     <div class="tab-panel" id="dtab-users">
+      <div class="card" id="platformResetLinkCard" style="display:none">
+        <h4 style="margin-top:0">Reset link ready ✅</h4>
+        <p class="muted">Share this with <b id="platformResetLinkName"></b> — valid 7 days, works once.</p>
+        <input id="platformResetLinkBox" readonly onclick="this.select()">
+        <button class="ghost small" style="margin-top:8px" onclick="copyPlatformResetLink()">Copy link</button>
+        <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('platformResetLinkCard').style.display='none'">Close</button>
+      </div>
+      <div class="card" id="editUserCard" style="display:none">
+        <h4 style="margin-top:0">Edit user</h4>
+        <div class="grid cols-2">
+          <div><label>Name</label><input id="editUserName"></div>
+          <div><label>Login ID</label><input id="editUserLoginId"></div>
+          <div><label>Email</label><input id="editUserEmail" type="email"></div>
+          <div><label>Phone</label><input id="editUserPhone"></div>
+        </div>
+        <p class="muted" id="editUserErr" style="display:none;color:var(--danger)"></p>
+        <button class="primary small" style="margin-top:8px" onclick="EXO.busy(this, saveEditedUser)">Save</button>
+        <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('editUserCard').style.display='none'">Cancel</button>
+      </div>
+      <div class="card" id="platformActivityCard" style="display:none">
+        <h4 style="margin-top:0">Login activity — <span id="platformActivityName"></span></h4>
+        <p class="muted" id="platformActivitySummary"></p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>When</th><th>IP address</th></tr></thead>
+          <tbody id="platformActivityRows"></tbody>
+        </table></div>
+        <button class="ghost small" style="margin-top:8px" onclick="document.getElementById('platformActivityCard').style.display='none'">Close</button>
+      </div>
       <div class="table-scroll"><table>
         <thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
         <tbody id="detailUsers"></tbody>
@@ -165,6 +205,55 @@
         <input type="checkbox" id="allowDuplicateItemsToggle" style="width:auto" onchange="saveAllowDuplicateItems(this.checked)"> <span>Allow scanning/searching the same item more than once per order</span>
       </label>
       <p class="muted" style="margin-top:-4px">On (default): scanning an item already in the cart just bumps its quantity. Off: staff get a message instead, and the item drops out of search once it's in the cart — for companies that want to catch accidental double-scans rather than have them silently inflate a quantity.</p>
+
+      <h4>Order notification emails</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="emailNotificationsToggle" style="width:auto" onchange="saveEmailNotifications(this.checked)"> <span>Send order emails to this company's admin and to buyers who have an email on file</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default for every company — email also needs Brevo configured platform-wide (check Platform Settings) for this to actually send anything even when turned on here.</p>
+
+      <h4>Order statuses</h4>
+      <p class="muted" style="margin-top:-6px">Comma-separated, in dropdown order. <b>pending</b> always stays first no matter what's typed here — new orders start there and the edit-lock logic depends on that exact name, so it can't be removed or renamed.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="orderStatusesInput" style="flex:1;min-width:220px" placeholder="pending, confirmed, dispatched, delivered, cancelled">
+        <button class="primary small" onclick="EXO.busy(this, saveOrderStatuses)">Save</button>
+      </div>
+
+      <h4>Login sessions</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="allowDualLoginToggle" style="width:auto" onchange="saveAllowDualLogin(this.checked)"> <span>Allow the same login on multiple devices at once</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default — logging in on a second device signs the first one out immediately, with a warning shown before it happens. Turn this on only if this company has a real reason to want a login shared across devices.</p>
+
+      <h4>Order PDF download</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="allowPdfDownloadToggle" style="width:auto" onchange="saveAllowPdfDownload(this.checked)"> <span>Show a "Download PDF" button on the buyer-facing order page</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default. Uses the browser's own print-to-PDF with a compact print layout — no extra setup needed once turned on.</p>
+
+      <h4>Take Order screen</h4>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="hideBuiltInRemarkToggle" style="width:auto" onchange="saveHideBuiltInRemark(this.checked)"> <span>Hide the built-in "Remark (optional)" field</span>
+      </label>
+      <p class="muted" style="margin-top:-4px">Off by default (field stays visible, same as always). Turn this on for a company that's already added its own remark-style field under Order Details, so staff don't see two overlapping remark boxes.</p>
+
+      <h4>Dashboard cards</h4>
+      <p class="muted" style="margin-top:-6px">What this company sees on their Dashboard — build any combination of cards: pick a time scope (today, ongoing exhibitions, a specific exhibition, or a custom date range) and one or more numbers to show on it (order count, items sold, a "Show total" field, or a formula like <code>weight * rate</code>).</p>
+      <div id="dashboardCardList"></div>
+      <div style="margin-top:8px">
+        <button class="ghost small" onclick="addDashboardCard()">+ Add card</button>
+        <button class="primary small" onclick="EXO.busy(this, saveAllDashboardCards)">Save all</button>
+      </div>
+      <p class="muted" id="dashboardCardsErr" style="display:none;color:var(--danger)"></p>
+
+      <h4>Live cart total (Take Order screen)</h4>
+      <p class="muted" style="margin-top:-6px">A running total shown as items are scanned, before the order's even placed — separate from the printed-order total. Only uses fields already selected to show on this company's Order Form.</p>
+      <div id="cartTotalList"></div>
+      <div style="margin-top:8px">
+        <button class="ghost small" onclick="addCartTotalEntry()">+ Add total</button>
+        <button class="primary small" onclick="EXO.busy(this, saveCartTotalConfig)">Save all</button>
+      </div>
+      <p class="muted" id="cartTotalErr" style="display:none;color:var(--danger)"></p>
 
       <h4>What this company's admin can configure themselves</h4>
       <p class="muted" style="margin-top:-6px">Off by default for everything — this company is set up by ExpoOrders based on what they ask for. Turn something on only if you want them to be able to change it themselves.</p>
@@ -269,6 +358,7 @@
 
       <div class="tab-panel" id="ctab-variants">
         <p class="muted" style="margin-top:0">Off by default — turn this on only for companies where a style comes in multiple variations (garments: Color, Size, Material — name and define however many categories this company actually needs). Every other company is completely unaffected.</p>
+        <p class="muted" style="margin-top:-8px">Just name each category here — the actual values (e.g. which colors, which sizes) come from the items themselves, from Excel import or when adding an item. No need to pre-type a value list.</p>
         <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:14px">
           <input type="checkbox" id="variantsEnabled" style="width:auto"> <span>Enable variant tags for this company</span>
         </label>
@@ -279,13 +369,6 @@
         <div class="error" id="variantsErr"></div>
         <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, saveVariantsConfig)">Save variant tags</button>
       </div>
-    </div>
-
-    <div class="tab-panel" id="dtab-orders">
-      <div class="table-scroll"><table>
-        <thead><tr><th>Order #</th><th>Buyer</th><th>Staff</th><th>Status</th><th>Date</th></tr></thead>
-        <tbody id="detailOrders"></tbody>
-      </table></div>
     </div>
 
     <div class="tab-panel" id="dtab-reports">
@@ -312,13 +395,6 @@
           <button class="ghost" onclick="cancelReportEdit()">Cancel</button>
         </div>
       </div>
-
-      <h4>Party-wise orders</h4>
-      <div class="table-scroll"><table><thead><tr><th>Buyer</th><th>Phone</th><th>Orders</th></tr></thead><tbody id="reportPartyRows"></tbody></table></div>
-      <h4>Item-wise orders</h4>
-      <div class="table-scroll"><table><thead><tr><th>Item</th><th>Scan code</th><th>Qty ordered</th></tr></thead><tbody id="reportItemRows"></tbody></table></div>
-      <h4>Staff-wise orders</h4>
-      <div class="table-scroll"><table><thead><tr><th>Staff</th><th>Orders</th></tr></thead><tbody id="reportStaffRows"></tbody></table></div>
     </div>
   </div>
   <p class="muted" id="versionTag" style="text-align:center;margin-top:10px;font-size:11px"></p>
@@ -334,6 +410,8 @@ const FOOTER_FIELD_DEFS = [
   { key: 'twitter', label: 'Twitter / X', type: 'text', placeholder: '@yourhandle or full URL' },
   { key: 'youtube', label: 'YouTube', type: 'text', placeholder: 'channel name or full URL' },
   { key: 'website', label: 'Website', type: 'text', placeholder: 'yourcompany.com' },
+  { key: 'note1', label: 'Note 1', type: 'textarea' },
+  { key: 'note2', label: 'Note 2', type: 'textarea' },
 ];
 if (!token) location.href = '/platform/login.html';
 const admin = JSON.parse(localStorage.getItem('exo_platform_admin') || '{}');
@@ -353,9 +431,17 @@ function logout(){ localStorage.removeItem('exo_platform_token'); localStorage.r
 
 let tenants = [];
 async function load(){
-  try { tenants = await platformFetch('/tenants'); renderList(); }
+  try { tenants = await platformFetch('/tenants'); renderList(); renderCloneOptions(); }
   catch (e) { EXO.toast(e.message, 'error'); }
   loadPlatformSettings();
+}
+function renderCloneOptions(){
+  const sel = document.getElementById('newCloneFrom');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— Start blank —</option>' +
+    tenants.slice().sort((a, b) => a.name.localeCompare(b.name)).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  sel.value = current;
 }
 async function loadPlatformSettings(){
   try {
@@ -365,6 +451,30 @@ async function loadPlatformSettings(){
       img.src = res.logoUrl; img.style.display = 'inline-block';
     }
   } catch (e) { /* non-critical — logo section just stays empty */ }
+  try {
+    const res = await platformFetch('/email-status');
+    const line = document.getElementById('emailStatusLine');
+    const btn = document.getElementById('emailTestBtn');
+    if (res.enabled) {
+      line.innerHTML = `🟢 Active — sending as <b>${res.senderName}</b> &lt;${res.senderEmail}&gt;`;
+      btn.disabled = false;
+    } else {
+      line.innerHTML = `⚪ Not configured — set <code>BREVO_API_KEY</code> on Render to turn this on.`;
+      btn.disabled = true;
+    }
+  } catch (e) { document.getElementById('emailStatusLine').textContent = 'Could not check status.'; }
+}
+async function sendTestEmail(){
+  const result = document.getElementById('emailTestResult');
+  result.textContent = 'Sending…'; result.style.color = '';
+  try {
+    const res = await platformFetch('/email-test', { method: 'POST' });
+    result.textContent = `✅ Sent to ${res.sentTo} — check your inbox (and spam folder).`;
+    result.style.color = 'var(--ok)';
+  } catch (e) {
+    result.textContent = `❌ ${e.message}`;
+    result.style.color = 'var(--danger)';
+  }
 }
 async function uploadPlatformLogo(){
   const err = document.getElementById('platformLogoErr'); err.style.display = 'none';
@@ -387,13 +497,13 @@ async function loadPlatformExhibitions(){
     platformExhibitions = await platformFetch('/exhibitions');
     document.getElementById('platExhibitionRows').innerHTML = platformExhibitions.map(e => `
       <tr>
-        <td><b>${e.name}</b></td>
-        <td>${e.location||'—'}</td>
+        <td><b>${EXO.esc(e.name)}</b></td>
+        <td>${EXO.esc(e.location)||'—'}</td>
         <td>${e.startDate||''}${e.endDate?' – '+e.endDate:''}</td>
         <td>${e.participantCount} compan${e.participantCount===1?'y':'ies'}</td>
         <td class="btn-row">
           <button class="primary small" onclick="openExhibitionDetail('${e.id}')">${e.participantCount ? 'Manage companies' : '+ Add companies'}</button>
-          <button class="danger small" onclick="deletePlatformExhibition('${e.id}','${e.name.replace(/'/g,"\\'")}')">Delete</button>
+          <button class="danger small" onclick="deletePlatformExhibition('${e.id}','${EXO.escAttr(e.name)}')">Delete</button>
         </td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">No exhibitions yet — create one below.</td></tr>';
   } catch (e) { EXO.toast(e.message, 'error'); }
@@ -440,21 +550,32 @@ async function loadParticipants(){
   const participants = await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants`);
   document.getElementById('participantRows').innerHTML = participants.map(p => `
     <tr>
-      <td>${p.tenantName}</td>
+      <td>${EXO.esc(p.tenantName)}</td>
       <td>${p.natureOfBusiness || '—'}</td>
       <td><input type="date" value="${p.validTill||''}" onchange="updateParticipantValidTill('${p.tenantId}', this.value)" style="width:150px"></td>
-      <td><button class="danger small" onclick="removeParticipant('${p.tenantId}','${p.tenantName.replace(/'/g,"\\'")}')">Remove</button></td>
-    </tr>`).join('') || '<tr><td colspan="4" class="muted">No companies added yet</td></tr>';
+      <td>
+        <input type="number" min="0" placeholder="No limit" value="${p.maxItems ?? ''}" onchange="updateParticipantMaxItems('${p.tenantId}', this.value)" style="width:90px">
+        <span class="muted" style="font-size:12px">${p.itemCount} used${p.maxItems != null ? ' / ' + p.maxItems : ''}</span>
+      </td>
+      <td><button class="danger small" onclick="removeParticipant('${p.tenantId}','${EXO.escAttr(p.tenantName)}')">Remove</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">No companies added yet</td></tr>';
   const alreadyIn = new Set(participants.map(p => p.tenantId));
   const available = tenants.filter(t => !alreadyIn.has(t.id));
   document.getElementById('companyCheckboxList').innerHTML = available.map(t => `
-    <label style="display:block;padding:4px 0"><input type="checkbox" class="company-checkbox" value="${t.id}" style="width:auto;margin-right:8px">${t.name} <span class="muted">${t.natureOfBusiness ? '— ' + t.natureOfBusiness : ''}</span></label>
+    <label style="display:block;padding:4px 0"><input type="checkbox" class="company-checkbox" value="${t.id}" style="width:auto;margin-right:8px">${EXO.esc(t.name)} <span class="muted">${t.natureOfBusiness ? '— ' + EXO.esc(t.natureOfBusiness) : ''}</span></label>
   `).join('') || '<p class="muted" style="margin:0">Every company is already in this exhibition.</p>';
 }
 async function updateParticipantValidTill(tenantId, validTill){
   try {
     await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants/${tenantId}`, { method: 'PUT', body: JSON.stringify({ validTill }) });
     EXO.toast('Updated');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function updateParticipantMaxItems(tenantId, value){
+  try {
+    await platformFetch(`/exhibitions/${currentExhibitionDetailId}/participants/${tenantId}`, { method: 'PUT', body: JSON.stringify({ maxItems: value }) });
+    EXO.toast('Updated');
+    loadParticipants(); // refresh the usage count display too
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 async function removeParticipant(tenantId, name){
@@ -488,9 +609,9 @@ function renderList(){
   document.getElementById('tenantCount').textContent = `— ${filtered.length} of ${tenants.length}`;
   document.getElementById('rows').innerHTML = filtered.map(t => `
     <tr style="cursor:pointer" onclick="openDetail('${t.id}')">
-      <td><b>${t.name}</b> ${t.active === false ? '<span class="badge cancelled">inactive</span>' : ''}</td>
-      <td>${t.slug}</td>
-      <td>${t.natureOfBusiness || '—'}</td>
+      <td><b>${EXO.esc(t.name)}</b> ${t.active === false ? '<span class="badge cancelled">inactive</span>' : ''}</td>
+      <td>${EXO.esc(t.slug)}</td>
+      <td>${EXO.esc(t.natureOfBusiness) || '—'}</td>
       <td>${t.plan}</td>
       <td>${t.userCount}</td>
       <td>${t.itemCount}</td>
@@ -501,31 +622,40 @@ function renderList(){
 }
 
 let lastTenantId = null;
+let creatingCompany = false;
 async function createCompany(){
-  const err = document.getElementById('createErr'); err.style.display = 'none';
-  const body = {
-    companyName: document.getElementById('newCompanyName').value.trim(),
-    slug: document.getElementById('newSlug').value.trim(),
-    natureOfBusiness: document.getElementById('newNatureOfBusiness').value.trim(),
-    adminName: document.getElementById('newAdminName').value.trim(),
-    email: document.getElementById('newAdminEmail').value.trim(),
-    phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
-    maxStaff: document.getElementById('newMaxStaff').value,
-  };
-  if (!body.companyName || !body.slug || !body.adminName || !body.email) {
-    err.textContent = 'Company name, link, admin name, and email are all required';
-    err.style.display = 'block';
-    return;
-  }
+  if (creatingCompany) return; // already in flight — ignore a repeat call regardless of what triggered it
+  creatingCompany = true;
   try {
-    const res = await platformFetch('/tenants', { method: 'POST', body: JSON.stringify(body) });
-    document.getElementById('newAdminNameShow').textContent = res.admin.name;
-    document.getElementById('setupLinkBox').value = res.setupLink;
-    document.getElementById('setupLinkCard').style.display = 'block';
-    document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
-    ['newCompanyName','newSlug','newAdminName','newAdminEmail','newAdminPhone','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
-    load();
-  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+    const err = document.getElementById('createErr'); err.style.display = 'none';
+    const body = {
+      companyName: document.getElementById('newCompanyName').value.trim(),
+      slug: document.getElementById('newSlug').value.trim(),
+      natureOfBusiness: document.getElementById('newNatureOfBusiness').value.trim(),
+      adminName: document.getElementById('newAdminName').value.trim(),
+      email: document.getElementById('newAdminEmail').value.trim(),
+      phone: document.getElementById('newAdminPhone').value.trim() ? document.getElementById('newAdminPhoneCC').value.trim() + document.getElementById('newAdminPhone').value.trim() : '',
+      maxStaff: document.getElementById('newMaxStaff').value,
+      cloneFromTenantId: document.getElementById('newCloneFrom').value || undefined,
+    };
+    if (!body.companyName || !body.slug || !body.adminName || !body.email) {
+      err.textContent = 'Company name, link, admin name, and email are all required';
+      err.style.display = 'block';
+      return;
+    }
+    try {
+      const res = await platformFetch('/tenants', { method: 'POST', body: JSON.stringify(body) });
+      document.getElementById('newAdminNameShow').textContent = res.admin.name;
+      document.getElementById('setupLinkBox').value = res.setupLink;
+      document.getElementById('setupLinkCard').style.display = 'block';
+      document.getElementById('setupLinkCard').scrollIntoView({ behavior: 'smooth' });
+      ['newCompanyName','newSlug','newNatureOfBusiness','newAdminName','newAdminEmail','newAdminPhone','newMaxStaff'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('newAdminPhoneCC').value = '+91';
+      document.getElementById('newCloneFrom').value = '';
+      EXO.toast(res.clonedFrom ? `Company created — settings copied from ${res.clonedFrom.name}` : 'Company created');
+      load();
+    } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+  } finally { creatingCompany = false; }
 }
 function copySetupLink(){ document.getElementById('setupLinkBox').select(); document.execCommand('copy'); }
 
@@ -567,6 +697,206 @@ async function saveAllowDuplicateItems(checked){
   } catch (e) {
     document.getElementById('allowDuplicateItemsToggle').checked = !checked; // revert the checkbox if the save actually failed
     EXO.toast(e.message, 'error');
+  }
+}
+async function saveEmailNotifications(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/email-notifications`, { method: 'PUT', body: JSON.stringify({ emailNotificationsEnabled: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('emailNotificationsToggle').checked = !checked; // revert the checkbox if the save actually failed
+    EXO.toast(e.message, 'error');
+  }
+}
+async function saveOrderStatuses(){
+  const orderStatuses = document.getElementById('orderStatusesInput').value.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    const res = await platformFetch(`/tenants/${lastTenantId}/order-statuses`, { method: 'PUT', body: JSON.stringify({ orderStatuses }) });
+    document.getElementById('orderStatusesInput').value = res.orderStatuses.join(', ');
+    EXO.toast('Order statuses saved.');
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+async function saveAllowDualLogin(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/allow-dual-login`, { method: 'PUT', body: JSON.stringify({ allowDualLogin: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('allowDualLoginToggle').checked = !checked;
+    EXO.toast(e.message, 'error');
+  }
+}
+async function saveAllowPdfDownload(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/allow-pdf-download`, { method: 'PUT', body: JSON.stringify({ allowPdfDownload: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('allowPdfDownloadToggle').checked = !checked;
+    EXO.toast(e.message, 'error');
+  }
+}
+async function saveHideBuiltInRemark(checked){
+  try {
+    await platformFetch(`/tenants/${lastTenantId}/hide-builtin-remark`, { method: 'PUT', body: JSON.stringify({ hideBuiltInRemark: checked }) });
+    EXO.toast('Saved.');
+  } catch (e) {
+    document.getElementById('hideBuiltInRemarkToggle').checked = !checked;
+    EXO.toast(e.message, 'error');
+  }
+}
+let dashboardCards = [], dashboardCardExhibitions = [], dashboardTotalableColumns = [];
+const DASHBOARD_METRIC_LABELS = { orderCount: 'Order count', qty: 'Items sold (qty)', pending: 'Pending count', orderViewColumn: 'A column from Order View Layout' };
+
+function addDashboardCard(){
+  dashboardCards.push({ id: 'new-' + Date.now(), label: '', scope: { type: 'today' }, metrics: [{ type: 'orderCount', label: '' }] });
+  renderDashboardCardList();
+}
+function removeDashboardCard(cardId){
+  dashboardCards = dashboardCards.filter(c => c.id !== cardId);
+  renderDashboardCardList();
+}
+function updateDashboardCard(cardId, field, value){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  if (field === 'label') card.label = value;
+  else if (field === 'scopeType') card.scope = { type: value };
+  else if (field === 'scopeExhibitionId') card.scope.exhibitionId = value;
+  else if (field === 'scopeStartDate') card.scope.startDate = value;
+  else if (field === 'scopeEndDate') card.scope.endDate = value;
+  if (field === 'scopeType') renderDashboardCardList();
+}
+function addMetric(cardId){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  card.metrics.push({ type: 'orderCount', label: '' });
+  renderDashboardCardList();
+}
+function removeMetric(cardId, idx){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  card.metrics.splice(idx, 1);
+  renderDashboardCardList();
+}
+function updateMetric(cardId, idx, field, value){
+  const card = dashboardCards.find(c => c.id === cardId);
+  if (!card) return;
+  card.metrics[idx][field] = value;
+  if (field === 'type') renderDashboardCardList();
+}
+
+function renderScopeExtra(card){
+  if (card.scope.type === 'exhibition') {
+    return `<select onchange="updateDashboardCard('${card.id}','scopeExhibitionId',this.value)" style="max-width:220px">
+      <option value="">— pick exhibition —</option>
+      ${dashboardCardExhibitions.map(e => `<option value="${e.id}" ${card.scope.exhibitionId===e.id?'selected':''}>${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('')}
+    </select>`;
+  }
+  if (card.scope.type === 'daterange') {
+    return `<input type="date" value="${card.scope.startDate||''}" onchange="updateDashboardCard('${card.id}','scopeStartDate',this.value)" style="max-width:150px">
+      <span class="muted">to</span>
+      <input type="date" value="${card.scope.endDate||''}" onchange="updateDashboardCard('${card.id}','scopeEndDate',this.value)" style="max-width:150px">`;
+  }
+  return '';
+}
+function renderMetricRow(card, m, idx){
+  let extra = '';
+  if (m.type === 'orderViewColumn') {
+    extra = `<select onchange="updateMetric('${card.id}',${idx},'columnId',this.value)" style="max-width:220px">
+      <option value="">— pick column —</option>
+      ${dashboardTotalableColumns.map(c => `<option value="${c.id}" ${m.columnId===c.id?'selected':''}>${EXO.esc(c.label)}${c.type==='formula'?' (formula)':''}${c.unit?' — '+EXO.esc(c.unit):''}</option>`).join('')}
+    </select>`;
+    if (!dashboardTotalableColumns.length) extra += `<span class="muted" style="font-size:12px">— no columns have "Show total" on yet, see Order View Layout —</span>`;
+  }
+  return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding-left:16px">
+      <select onchange="updateMetric('${card.id}',${idx},'type',this.value)" style="max-width:170px">
+        ${Object.entries(DASHBOARD_METRIC_LABELS).map(([k,l]) => `<option value="${k}" ${m.type===k?'selected':''}>${l}</option>`).join('')}
+      </select>
+      ${extra}
+      <input placeholder="label override (optional)" value="${EXO.esc(m.label||'')}" oninput="updateMetric('${card.id}',${idx},'label',this.value)" style="max-width:160px">
+      <button class="danger small" onclick="removeMetric('${card.id}',${idx})">✕</button>
+    </div>`;
+}
+function renderDashboardCardList(){
+  document.getElementById('dashboardCardList').innerHTML = dashboardCards.map(card => `
+    <div class="card" style="margin-top:10px;padding:14px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input placeholder="Card label, e.g. Today's Business" value="${EXO.esc(card.label)}" oninput="updateDashboardCard('${card.id}','label',this.value)" style="flex:1;min-width:180px;font-weight:600">
+        <select onchange="updateDashboardCard('${card.id}','scopeType',this.value)" style="max-width:170px">
+          <option value="today" ${card.scope.type==='today'?'selected':''}>Today</option>
+          <option value="ongoing" ${card.scope.type==='ongoing'?'selected':''}>Ongoing exhibitions</option>
+          <option value="exhibition" ${card.scope.type==='exhibition'?'selected':''}>Specific exhibition</option>
+          <option value="daterange" ${card.scope.type==='daterange'?'selected':''}>Custom date range</option>
+        </select>
+        ${renderScopeExtra(card)}
+        <button class="danger small" onclick="removeDashboardCard('${card.id}')">Delete card</button>
+      </div>
+      ${card.metrics.map((m, i) => renderMetricRow(card, m, i)).join('')}
+      <button class="ghost small" style="margin-top:8px;margin-left:16px" onclick="addMetric('${card.id}')">+ Add metric to this card</button>
+    </div>`).join('') || '<p class="muted">No cards yet — click "+ Add card" below.</p>';
+}
+async function saveAllDashboardCards(){
+  const err = document.getElementById('dashboardCardsErr');
+  try {
+    const res = await platformFetch(`/tenants/${lastTenantId}/dashboard-cards`, { method: 'PUT', body: JSON.stringify({ dashboardCards }) });
+    dashboardCards = res.dashboardCards;
+    renderDashboardCardList();
+    if (err) err.style.display = 'none';
+    EXO.toast('Dashboard cards saved.');
+  } catch (e) {
+    if (err) { err.textContent = e.message; err.style.display = 'block'; }
+    else EXO.toast(e.message, 'error');
+  }
+}
+let cartTotalConfig = [], cartNumericOrderFields = [];
+function addCartTotalEntry(){
+  cartTotalConfig.push({ id: 'new-' + Date.now(), type: 'field', label: '' });
+  renderCartTotalList();
+}
+function removeCartTotalEntry(id){
+  cartTotalConfig = cartTotalConfig.filter(e => e.id !== id);
+  renderCartTotalList();
+}
+function updateCartTotalEntry(id, field, value){
+  const entry = cartTotalConfig.find(e => e.id === id);
+  if (entry) entry[field] = value;
+  if (field === 'type') renderCartTotalList();
+}
+function renderCartTotalList(){
+  document.getElementById('cartTotalList').innerHTML = cartTotalConfig.map(e => {
+    let extra = '';
+    if (e.type === 'field') {
+      extra = `<select onchange="updateCartTotalEntry('${e.id}','fieldKey',this.value)" style="max-width:200px">
+        <option value="">— pick field —</option>
+        ${cartNumericOrderFields.map(f => `<option value="${f.key}" ${e.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('')}
+      </select>`;
+      if (!cartNumericOrderFields.length) extra += `<span class="muted" style="font-size:12px">— no numeric fields on the Order Form yet —</span>`;
+    } else {
+      extra = `<input placeholder="e.g. weight * rate" value="${EXO.esc(e.formula||'')}" oninput="updateCartTotalEntry('${e.id}','formula',this.value)" style="max-width:180px">
+        <input placeholder="unit" value="${EXO.esc(e.unit||'')}" oninput="updateCartTotalEntry('${e.id}','unit',this.value)" style="max-width:70px">`;
+    }
+    return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <select onchange="updateCartTotalEntry('${e.id}','type',this.value)" style="max-width:120px">
+        <option value="field" ${e.type==='field'?'selected':''}>Field total</option>
+        <option value="formula" ${e.type==='formula'?'selected':''}>Formula</option>
+      </select>
+      ${extra}
+      <input placeholder="label (optional)" value="${EXO.esc(e.label||'')}" oninput="updateCartTotalEntry('${e.id}','label',this.value)" style="max-width:140px">
+      <button class="danger small" onclick="removeCartTotalEntry('${e.id}')">✕</button>
+    </div>`;
+  }).join('') || '<p class="muted">No live totals yet — click "+ Add total" below.</p>';
+}
+async function saveCartTotalConfig(){
+  const err = document.getElementById('cartTotalErr');
+  try {
+    const res = await platformFetch(`/tenants/${lastTenantId}/cart-total-config`, { method: 'PUT', body: JSON.stringify({ cartTotalConfig }) });
+    cartTotalConfig = res.cartTotalConfig;
+    renderCartTotalList();
+    if (err) err.style.display = 'none';
+    EXO.toast('Live cart total saved.');
+  } catch (e) {
+    if (err) { err.textContent = e.message; err.style.display = 'block'; }
+    else EXO.toast(e.message, 'error');
   }
 }
 async function toggleActive(checkbox){
@@ -621,7 +951,7 @@ async function openDetail(id){
   catch (e) { EXO.toast(e.message, 'error'); return; }
   document.getElementById('topTabs').style.display = 'none';
   document.querySelectorAll('.wrap > .tab-panel').forEach(p => p.classList.remove('active'));
-  const { tenant, users, fieldDefs, counts, recentOrders } = detail;
+  const { tenant, users, fieldDefs, counts } = detail;
 
   document.getElementById('detailTitle').textContent = tenant.name;
   document.getElementById('detailSlug').textContent = `/${tenant.slug} — plan: ${tenant.plan} — created ${new Date(tenant.createdAt).toLocaleString()} — ${counts.itemCount} items, ${counts.orderCount} orders, ${counts.partyCount} buyers, ${counts.exhibitionCount} exhibitions`;
@@ -630,12 +960,26 @@ async function openDetail(id){
   document.getElementById('activeToggle').checked = tenant.active !== false;
   document.getElementById('rowGroupingSelect').value = tenant.orderRowGrouping || 'none';
   document.getElementById('allowDuplicateItemsToggle').checked = tenant.allowDuplicateItems !== false;
+  document.getElementById('emailNotificationsToggle').checked = !!tenant.emailNotificationsEnabled;
+  document.getElementById('orderStatusesInput').value = (tenant.orderStatuses && tenant.orderStatuses.length ? tenant.orderStatuses : ['pending', 'confirmed', 'cancelled']).join(', ');
+  document.getElementById('allowDualLoginToggle').checked = !!tenant.allowDualLogin;
+  document.getElementById('allowPdfDownloadToggle').checked = !!tenant.allowPdfDownload;
+  document.getElementById('hideBuiltInRemarkToggle').checked = !!tenant.hideBuiltInRemark;
+  platformFetch(`/tenants/${id}/exhibitions`).then(exs => { dashboardCardExhibitions = exs; renderDashboardCardList(); }).catch(() => {});
+  dashboardCards = Array.isArray(tenant.dashboardCards) ? JSON.parse(JSON.stringify(tenant.dashboardCards)) : [];
+  dashboardTotalableColumns = (tenant.orderViewColumns || []).filter(c => c.showTotal);
+  renderDashboardCardList();
+  cartTotalConfig = Array.isArray(tenant.cartTotalConfig) ? JSON.parse(JSON.stringify(tenant.cartTotalConfig)) : [];
+  cartNumericOrderFields = (tenant.orderFields || [])
+    .map(f => ({ ...f, def: fieldDefs.find(d => d.key === f.key) }))
+    .filter(f => f.def && f.def.type === 'number');
+  renderCartTotalList();
 
   document.getElementById('detailUsers').innerHTML = users.map(u => `
     <tr>
-      <td>${u.name}</td><td>${u.role}</td><td>${u.loginId}</td><td>${u.phone || '—'}</td>
+      <td>${EXO.esc(u.name)}</td><td>${EXO.esc(u.role)}</td><td>${EXO.esc(u.loginId)}</td><td>${EXO.esc(u.phone) || '—'}</td>
       <td>${u.active === false ? '<span class="badge cancelled">inactive</span>' : '<span class="badge confirmed">active</span>'}</td>
-      <td><button class="ghost small" onclick="resetUserPassword('${tenant.id}','${u.id}','${(u.name||'').replace(/'/g,"\\'")}')">Reset password</button></td>
+      <td><button class="ghost small" onclick='editUser(${EXO.esc(JSON.stringify(u))})'>Edit</button> <button class="ghost small" onclick="sendUserResetLink('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Send reset link</button> <button class="ghost small" onclick="showPlatformActivity('${tenant.id}','${u.id}','${EXO.escAttr(u.name||'')}')">Login activity</button></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
 
   const staffCount = users.filter(u => u.role === 'staff' && u.active !== false).length;
@@ -667,18 +1011,6 @@ async function openDetail(id){
   loadDetailFooter(tenant);
   loadVariantsConfig(tenant);
 
-  document.getElementById('detailOrders').innerHTML = recentOrders.map(o => `
-    <tr>
-      <td>${o.orderNo}</td><td>${o.partyName}</td><td>${o.staffName}</td>
-      <td><span class="badge ${o.status}">${o.status}</span></td>
-      <td>${new Date(o.createdAt).toLocaleDateString()}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="muted">No orders yet</td></tr>';
-
-  platformFetch('/tenants/' + id + '/reports').then(({ byParty, byItem, byStaff }) => {
-    document.getElementById('reportPartyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
-    document.getElementById('reportItemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
-    document.getElementById('reportStaffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
-  }).catch(() => {});
   loadCustomReports(id);
 
   document.getElementById('detailCard').style.display = 'block';
@@ -692,12 +1024,12 @@ const REPORT_META_COLUMNS = {
     { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
     { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
     { key: 'staff_name', label: 'Staff' }, { key: 'item_code', label: 'Item Code' },
-    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark' },
+    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark (item, falls back to order)' }, { key: 'order_remark', label: 'Order Remark' },
   ],
   order: [
     { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
     { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
-    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' }, { key: 'order_remark', label: 'Order Remark' },
   ],
 };
 let customReports = [], reportColumns = [], editingReportId = null;
@@ -712,10 +1044,10 @@ async function loadCustomReports(tenantId){
 function renderCustomReportList(){
   document.getElementById('customReportList').innerHTML = customReports.map(r => `
     <div class="btn-row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)">
-      <span><b>${r.name}</b> <span class="muted">— ${r.rowType === 'order' ? 'one row per order' : 'one row per item'}</span></span>
+      <span><b>${EXO.esc(r.name)}</b> <span class="muted">— ${r.rowType === 'order' ? 'one row per order' : 'one row per item'}</span></span>
       <span class="btn-row">
         <button class="ghost small" onclick="editCustomReport('${r.id}')">Edit</button>
-        <button class="danger small" onclick="deleteCustomReport('${r.id}','${r.name.replace(/'/g,"\\'")}')">Delete</button>
+        <button class="danger small" onclick="deleteCustomReport('${r.id}','${EXO.escAttr(r.name)}')">Delete</button>
       </span>
     </div>`).join('') || '<p class="muted">No custom reports yet for this company.</p>';
 }
@@ -781,7 +1113,7 @@ function renderReportColumns(){
         <select onchange="updateReportColumn('${c._id}','type',this.value)">
           <option value="meta" ${c.type==='meta'?'selected':''}>Built-in field</option>
           <option value="itemfield" ${c.type==='itemfield'?'selected':''}>Item Master field</option>
-          ${rowType === 'item' && variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
+          ${rowType === 'item' && variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${EXO.esc(variantCategories.map(v=>v.label).join(', '))})</option>` : ''}
           <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order Detail field</option>
           <option value="formula" ${c.type==='formula'?'selected':''}>Formula</option>
         </select>
@@ -792,20 +1124,34 @@ function renderReportColumns(){
           ${c.type === 'meta'
             ? metaOptions.map(m => `<option value="${m.key}" ${c.fieldKey===m.key?'selected':''}>${m.label}</option>`).join('')
             : c.type === 'itemfield'
-            ? (itemFieldOptions.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— none available —</option>')
+            ? (itemFieldOptions.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— none available —</option>')
             : c.type === 'varianttag'
-            ? (variantCategories.map(v => `<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('') || '<option value="">— none available —</option>')
-            : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
+            ? (variantCategories.map(v => `<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${EXO.esc(v.label)}</option>`).join('') || '<option value="">— none available —</option>')
+            : (detailOrderFieldDefs.map(f => `<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add Order Details fields first —</option>')}
         </select>
       </div>` : `
-      <div style="flex:2;min-width:220px">${i===0?`<label>Formula <span class="muted">— e.g. <code>net_weight * melting</code>. Available: ${[...numericFields.map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(none yet)'}</span></label>`:''}
-        <input placeholder="net_weight * melting" value="${c.formula||''}" oninput="updateReportColumn('${c._id}','formula',this.value)">
+      <div style="flex:2;min-width:220px"><label>Formula <span class="muted">— e.g. <code>net_weight * melting</code>. Available: ${[...numericFields.map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(none yet)'}</span></label>
+        <input placeholder="net_weight * melting" value="${EXO.esc(c.formula||'')}" oninput="updateReportColumn('${c._id}','formula',this.value)">
       </div>`}
       <div style="flex:1;min-width:120px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
-        <input placeholder="defaults to field name" value="${c.label||''}" oninput="updateReportColumn('${c._id}','label',this.value)">
+        <input placeholder="defaults to field name" value="${EXO.esc(c.label||'')}" oninput="updateReportColumn('${c._id}','label',this.value)">
       </div>
+      ${reportColumnIsNumeric(c, rowType, itemFieldOptions) ? `
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-bottom:8px">
+        <input type="checkbox" style="width:auto" ${c.showTotal?'checked':''} onchange="updateReportColumn('${c._id}','showTotal',this.checked)"> <span class="muted" style="font-weight:400">Show total</span>
+      </label>` : ''}
       <button class="danger small" title="Remove" onclick="removeReportColumn('${c._id}')">✕</button>
     </div>`).join('') || '<p class="muted">No columns yet — add at least one.</p>';
+}
+// A column can have a "show total" checkbox only if summing it actually
+// means something — numeric Item Master / Order Details fields, and
+// formulas (always numeric). Text fields and built-in fields (party name,
+// order number, status) can't be totaled.
+function reportColumnIsNumeric(c, rowType, itemFieldOptions){
+  if (c.type === 'formula') return true;
+  if (c.type === 'itemfield') return rowType === 'order' || itemFieldOptions.some(f => f.key === c.fieldKey && f.type === 'number');
+  if (c.type === 'orderfield') return detailOrderFieldDefs.find(f => f.key === c.fieldKey)?.type === 'number';
+  return false;
 }
 async function saveCustomReport(){
   const err = document.getElementById('reportBuilderErr'); err.style.display = 'none';
@@ -814,7 +1160,7 @@ async function saveCustomReport(){
   if (!reportColumns.length) { err.textContent = 'Add at least one column'; err.style.display = 'block'; return; }
   renderReportColumns(); // self-heals any column whose dropdown was never explicitly touched
   const rowType = document.getElementById('reportRowType').value;
-  const payload = { name, rowType, columns: reportColumns.map(c => ({ id: c.id, type: c.type, fieldKey: c.fieldKey, formula: c.formula, label: c.label })) };
+  const payload = { name, rowType, columns: reportColumns.map(c => ({ id: c.id, type: c.type, fieldKey: c.fieldKey, formula: c.formula, label: c.label, showTotal: c.showTotal })) };
   try {
     if (editingReportId) await platformFetch(`/tenants/${lastTenantId}/custom-reports/${editingReportId}`, { method: 'PUT', body: JSON.stringify(payload) });
     else await platformFetch(`/tenants/${lastTenantId}/custom-reports`, { method: 'POST', body: JSON.stringify(payload) });
@@ -838,14 +1184,14 @@ function variantCid(){ return 'v' + Math.random().toString(36).slice(2, 10); }
 function loadVariantsConfig(tenant){
   document.getElementById('variantsEnabled').checked = !!tenant.enableVariants;
   document.getElementById('variantsFields').style.display = tenant.enableVariants ? 'block' : 'none';
-  variantCategories = (tenant.variantCategories || []).map(c => ({ ...c, _id: variantCid(), values: [...(c.values || [])] }));
+  variantCategories = (tenant.variantCategories || []).map(c => ({ key: c.key, label: c.label, _id: variantCid() }));
   renderVariantCategories();
 }
 document.addEventListener('change', e => {
   if (e.target && e.target.id === 'variantsEnabled') document.getElementById('variantsFields').style.display = e.target.checked ? 'block' : 'none';
 });
 function addVariantCategory(){
-  variantCategories.push({ _id: variantCid(), label: '', values: [] });
+  variantCategories.push({ _id: variantCid(), label: '' });
   renderVariantCategories();
 }
 function removeVariantCategory(id){ variantCategories = variantCategories.filter(c => c._id !== id); renderVariantCategories(); }
@@ -856,39 +1202,21 @@ function moveVariantCategory(id, dir){
   renderVariantCategories();
 }
 function updateVariantCategoryLabel(id, label){ const c = variantCategories.find(x => x._id === id); if (c) c.label = label; }
-function addVariantValue(catId){ const c = variantCategories.find(x => x._id === catId); if (c) { c.values.push(''); renderVariantCategories(); } }
-function updateVariantValue(catId, i, value){ const c = variantCategories.find(x => x._id === catId); if (c) c.values[i] = value; }
-function removeVariantValue(catId, i){ const c = variantCategories.find(x => x._id === catId); if (c) { c.values.splice(i, 1); renderVariantCategories(); } }
-function moveVariantValue(catId, i, dir){
-  const c = variantCategories.find(x => x._id === catId); if (!c) return;
-  const j = i + dir;
-  if (j < 0 || j >= c.values.length) return;
-  [c.values[i], c.values[j]] = [c.values[j], c.values[i]];
-  renderVariantCategories();
-}
 function renderVariantCategories(){
   document.getElementById('variantCategoryList').innerHTML = variantCategories.map((cat, ci) => `
     <div style="border:0.5px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-        <input placeholder="Category name, e.g. Color" value="${cat.label}" oninput="updateVariantCategoryLabel('${cat._id}',this.value)" style="flex:1;font-weight:500">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input placeholder="Category name, e.g. Color" value="${EXO.esc(cat.label)}" oninput="updateVariantCategoryLabel('${cat._id}',this.value)" style="flex:1;font-weight:500">
         <button class="ghost small" title="Move up" onclick="moveVariantCategory('${cat._id}',-1)" ${ci===0?'disabled':''}>↑</button>
         <button class="ghost small" title="Move down" onclick="moveVariantCategory('${cat._id}',1)" ${ci===variantCategories.length-1?'disabled':''}>↓</button>
         <button class="danger small" onclick="removeVariantCategory('${cat._id}')">Remove category</button>
       </div>
-      ${cat.values.map((v, i) => `
-        <div style="display:flex;align-items:center;gap:6px;padding:3px 0">
-          <input value="${v}" placeholder="value" oninput="updateVariantValue('${cat._id}',${i},this.value)" style="flex:1">
-          <button class="ghost small" title="Move up" onclick="moveVariantValue('${cat._id}',${i},-1)" ${i===0?'disabled':''}>↑</button>
-          <button class="ghost small" title="Move down" onclick="moveVariantValue('${cat._id}',${i},1)" ${i===cat.values.length-1?'disabled':''}>↓</button>
-          <button class="danger small" title="Remove" onclick="removeVariantValue('${cat._id}',${i})">✕</button>
-        </div>`).join('') || '<p class="muted" style="margin:4px 0">No values yet.</p>'}
-      <button class="ghost small" style="margin-top:6px" onclick="addVariantValue('${cat._id}')">+ Add value</button>
     </div>`).join('') || '<p class="muted">No categories yet — add one, e.g. "Color".</p>';
 }
 async function saveVariantsConfig(){
   const err = document.getElementById('variantsErr'); err.style.display = 'none';
   const enableVariants = document.getElementById('variantsEnabled').checked;
-  const categories = variantCategories.map(c => ({ label: c.label.trim(), values: c.values.map(v => v.trim()).filter(Boolean) })).filter(c => c.label);
+  const categories = variantCategories.map(c => ({ label: c.label.trim() })).filter(c => c.label);
   try {
     const res = await platformFetch(`/tenants/${lastTenantId}/variants-config`, { method: 'PUT', body: JSON.stringify({ enableVariants, categories }) });
     EXO.toast('Variant tags saved');
@@ -924,9 +1252,9 @@ function renderDetailFieldRows(){
   document.getElementById('detailFieldRows').innerHTML = detailFields.map((f, i) => {
     if (f.id === detailFieldEditingId) {
       return `<tr class="field-row-edit">
-        <td><input id="editDetailLabel" value="${f.label}"></td>
+        <td><input id="editDetailLabel" value="${EXO.esc(f.label)}"></td>
         <td>${fieldTypeLabel(f)}</td>
-        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${f.unit||''}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editDetailOptions" value="${(f.options||[]).join(', ')}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
+        <td>${f.type==='number' ? `<input id="editDetailDecimals" type="number" min="0" max="6" value="${f.decimals ?? 2}" style="width:70px" placeholder="dp"><input id="editDetailUnit" value="${EXO.esc(f.unit||'')}" style="width:90px;margin-top:4px" placeholder="unit">` : ''}${f.type==='dropdown' ? `<input id="editDetailOptions" value="${EXO.esc((f.options||[]).join(', '))}" style="width:220px" placeholder="Red, Blue, Green">` : ''}</td>
         <td>
           <button class="primary small" onclick="EXO.busy(this, () => saveEditDetailField('${f.id}'))">Save</button>
           <button class="ghost small" onclick="cancelEditDetailField()">Cancel</button>
@@ -934,7 +1262,7 @@ function renderDetailFieldRows(){
       </tr>`;
     }
     return `<tr>
-      <td>${f.label}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}<br><span class="muted" style="font-size:11px">formula key: <code>${EXO.esc(f.key)}</code></span></td>
       <td>${fieldTypeLabel(f)}</td>
       <td></td>
       <td>
@@ -1003,7 +1331,7 @@ function renderDetailOrderFieldRows(){
   const savedByKey = {}; detailOrderFieldsSaved.forEach(f => { savedByKey[f.key] = f; });
   document.getElementById('detailOrderFieldRows').innerHTML = detailFields.map(f => `
     <tr>
-      <td>${f.label}${f.type==='number' && f.unit ? ` <span class="muted">(${f.unit})</span>` : ''}</td>
+      <td>${EXO.esc(f.label)}${f.type==='number' && f.unit ? ` <span class="muted">(${EXO.esc(f.unit)})</span>` : ''}</td>
       <td><input type="checkbox" data-key="${f.key}" class="dof-show" ${savedByKey[f.key] ? 'checked' : ''}></td>
     </tr>`).join('') || '<tr><td colspan="2" class="muted">Add Item Master fields first</td></tr>';
 }
@@ -1033,7 +1361,7 @@ function moveDetailCustomField(i, direction){
 function renderDetailCustomFields(){
   document.getElementById('detailCustomFieldRows').innerHTML = detailCustomFields.map((f, i) => `
     <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding:8px 0;${i>0?'border-top:1px solid var(--line)':''}">
-      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${f.label||''}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
+      <div style="flex:2;min-width:140px">${i===0?'<label>Field name</label>':''}<input value="${EXO.esc(f.label||'')}" placeholder="e.g. Delivery Date" oninput="updateDetailCustomFieldAt(${i},'label',this.value)"></div>
       <div style="flex:1;min-width:100px">${i===0?'<label>Type</label>':''}
         <select onchange="updateDetailCustomFieldAt(${i},'type',this.value)">
           <option value="text" ${f.type==='text'?'selected':''}>Text</option>
@@ -1115,14 +1443,14 @@ function renderDetailFieldListEntries(which){
       <div style="flex:1;min-width:150px"><label>${f.type === 'total' ? 'Which total' : f.type === 'fieldtotal' ? 'Which field' : 'Which order detail field'}</label>
         <select onchange="updateDetailFieldListEntry('${which}','${f._id}','fieldKey',this.value)">
           ${f.type === 'total'
-            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${t.label}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
+            ? (totalableFields.map(t => `<option value="${t.key}" ${f.fieldKey===t.key?'selected':''}>${EXO.esc(t.label)}</option>`).join('') || '<option value="">— turn on "Show total" on a column in Order View Layout first —</option>')
             : f.type === 'fieldtotal'
-            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${n.label}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
-            : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${o.label}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
+            ? (numericFields.map(n => `<option value="${n.key}" ${f.fieldKey===n.key?'selected':''}>${EXO.esc(n.label)}</option>`).join('') || '<option value="">— add a number field to Item Master first —</option>')
+            : (detailOrderFieldDefs.map(o => `<option value="${o.key}" ${f.fieldKey===o.key?'selected':''}>${EXO.esc(o.label)}</option>`).join('') || '<option value="">— add fields in Order Details Fields first —</option>')}
         </select>
       </div>
       <div style="flex:1;min-width:130px">${i===0?'<label>Label <span class="muted">(optional)</span></label>':''}
-        <input placeholder="defaults to the field's own name" value="${f.label||''}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
+        <input placeholder="defaults to the field's own name" value="${EXO.esc(f.label||'')}" oninput="updateDetailFieldListEntry('${which}','${f._id}','label',this.value)">
       </div>
       <div style="display:flex;gap:4px">
         <button class="ghost small" title="Move up" onclick="moveDetailFieldListEntry('${which}','${f._id}',-1)" ${i===0?'disabled':''}>↑</button>
@@ -1192,7 +1520,7 @@ function renderDetailColumns(){
           <select onchange="updateDetailColumn('${c._id}','type',this.value)">
             <option value="field" ${c.type==='field'?'selected':''}>Field</option>
             <option value="itemcode" ${c.type==='itemcode'?'selected':''}>Item Code</option>
-            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${variantCategories.map(v=>v.label).join(', ')})</option>` : ''}
+            ${variantCategories.length ? `<option value="varianttag" ${c.type==='varianttag'?'selected':''}>Variant tag (${EXO.esc(variantCategories.map(v=>v.label).join(', '))})</option>` : ''}
             <option value="images" ${c.type==='images'?'selected':''}>Images</option>
             <option value="remark" ${c.type==='remark'?'selected':''}>Item remark</option>
             <option value="orderfield" ${c.type==='orderfield'?'selected':''}>Order detail</option>
@@ -1208,28 +1536,32 @@ function renderDetailColumns(){
       </div>
       <div style="margin-top:10px">
         <label>Heading</label>
-        <input placeholder="${c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading')}" value="${c.label||''}" oninput="updateDetailColumn('${c._id}','label',this.value)">
+        <input placeholder="${EXO.esc(c.type==='images'?'Photo':c.type==='remark'?'Remark':c.type==='itemcode'?'Item Code':c.type==='qty'?'Qty':c.type==='serial'?'Sr. No.':c.type==='formula'?'Amount':c.type==='orderfield'?(detailOrderFieldDefs.find(f=>f.key===c.fieldKey)?.label||'Heading'):c.type==='varianttag'?(variantCategories.find(v=>v.key===c.fieldKey)?.label||'Heading'):(detailFields.find(f=>f.key===c.fieldKey)?.label||'Heading'))}" value="${EXO.esc(c.label||'')}" oninput="updateDetailColumn('${c._id}','label',this.value)">
       </div>
       ${c.type === 'varianttag' ? `
         <div style="margin-top:10px">
           <label>Which tag</label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${v.label}</option>`).join('')}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${variantCategories.map(v=>`<option value="${v.key}" ${c.fieldKey===v.key?'selected':''}>${EXO.esc(v.label)}</option>`).join('')}</select>
         </div>` : ''}
       ${c.type === 'field' ? `
         <div style="margin-top:10px">
           <label>Which field</label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add fields to the Order Form first —</option>'}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailFields.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add fields to the Order Form first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'orderfield' ? `
         <div style="margin-top:10px">
           <label>Which order details field <span class="muted">— one value per order; shown the same in every row</span></label>
-          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailOrderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${f.label}</option>`).join('') || '<option value="">— add Order Details fields first —</option>'}</select>
+          <select onchange="updateDetailColumn('${c._id}','fieldKey',this.value)">${detailOrderFieldDefs.map(f=>`<option value="${f.key}" ${c.fieldKey===f.key?'selected':''}>${EXO.esc(f.label)}</option>`).join('') || '<option value="">— add Order Details fields first —</option>'}</select>
         </div>` : ''}
       ${c.type === 'formula' ? `
         <div style="margin-top:10px">
           <label>Formula <span class="muted">— field names and qty with + − × / ^ and parentheses, e.g. <code>(price + 50) * qty</code>. Also round(), max(), min(). Available: ${[...detailFields.filter(f=>f.type==='number').map(f=>f.key), ...detailOrderFieldDefs.filter(f=>f.type==='number').map(f=>f.key), 'qty'].join(', ') || '(add Item Master fields first)'}</span></label>
-          <input placeholder="price * qty" value="${c.formula||''}" oninput="updateDetailColumn('${c._id}','formula',this.value)">
-          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${formulaError}</p>` : ''}
+          <input placeholder="price * qty" value="${EXO.esc(c.formula||'')}" oninput="updateDetailColumn('${c._id}','formula',this.value)">
+          ${formulaError ? `<p class="muted" style="color:#c0392b;margin-top:4px">${EXO.esc(formulaError)}</p>` : ''}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <div style="flex:1"><label>Unit <span class="muted">(optional)</span></label><input placeholder="Rs., Grms, ct…" value="${EXO.esc(c.unit||'')}" oninput="updateDetailColumn('${c._id}','unit',this.value)"></div>
+            <div style="flex:1"><label>Decimals</label><input type="number" min="0" max="6" value="${c.decimals ?? 2}" oninput="updateDetailColumn('${c._id}','decimals',this.value)"></div>
+          </div>
         </div>` : ''}
       ${(c.type === 'formula' || (c.type === 'field' && detailFields.find(f=>f.key===c.fieldKey)?.type === 'number')) ? `
         <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400">
@@ -1246,7 +1578,8 @@ function renderDetailColumns(){
 async function saveDetailColumns(){
   const err = document.getElementById('fieldErr'); err.style.display = 'none';
   for (const c of detailColumns) {
-    if (c.type === 'formula' && validateDetailFormula(c.formula || '')) { err.textContent = `Fix the formula in column "${c.label || 'Formula'}" before saving`; err.style.display = 'block'; return; }
+    const formulaErr = c.type === 'formula' ? validateDetailFormula(c.formula || '') : '';
+    if (formulaErr) { err.textContent = `Column "${c.label || 'Formula'}": ${formulaErr}`; err.style.display = 'block'; return; }
     if ((c.type === 'field' || c.type === 'orderfield') && !c.fieldKey) { err.textContent = `Every ${c.type === 'field' ? 'Field' : 'Order detail'} column needs a field selected`; err.style.display = 'block'; return; }
   }
   const payload = detailColumns.map(c => ({ id: c._id, type: c.type, label: c.label, width: Number(c.width) || 12, fieldKey: c.fieldKey, formula: c.formula, showTotal: c.showTotal }));
@@ -1277,17 +1610,17 @@ function loadDetailFooter(tenant){
     const val = f[def.key] || '';
     let inputHtml;
     if (def.type === 'textarea') {
-      inputHtml = `<textarea id="dfooter_${def.key}" rows="2">${val}</textarea>`;
+      inputHtml = `<textarea id="dfooter_${def.key}" rows="2">${EXO.esc(val)}</textarea>`;
     } else if (def.type === 'phone') {
       const digits = val.replace(/^\+/, '');
       const cc = digits.length > 10 ? '+' + digits.slice(0, digits.length - 10) : '+91';
       const num = digits.length > 10 ? digits.slice(-10) : digits;
       inputHtml = `<div style="display:flex;gap:6px">
-        <input id="dfooter_${def.key}_cc" value="${cc}" maxlength="4" style="width:60px;flex:0 0 auto">
-        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${num}" style="flex:1" placeholder="90290 06090">
+        <input id="dfooter_${def.key}_cc" value="${EXO.esc(cc)}" maxlength="4" style="width:60px;flex:0 0 auto">
+        <input id="dfooter_${def.key}" type="tel" inputmode="numeric" value="${EXO.esc(num)}" style="flex:1" placeholder="98765 43210">
       </div>`;
     } else {
-      inputHtml = `<input id="dfooter_${def.key}" value="${val}" placeholder="${def.placeholder || ''}">`;
+      inputHtml = `<input id="dfooter_${def.key}" value="${EXO.esc(val)}" placeholder="${EXO.esc(def.placeholder || '')}">`;
     }
     return `
       <div style="margin-top:12px">
@@ -1329,13 +1662,51 @@ async function saveDetailFooter(){
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 
-async function resetUserPassword(tenantId, userId, name){
-  const pw = prompt(`New password for ${name} (min 6 characters):`);
-  if (pw === null) return;
-  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
+async function sendUserResetLink(tenantId, userId, name){
   try {
-    await platformFetch(`/tenants/${tenantId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword: pw }) });
-    EXO.toast(`Password updated for ${name}.`);
+    const res = await platformFetch(`/tenants/${tenantId}/users/${userId}/reset-link`, { method: 'POST' });
+    document.getElementById('platformResetLinkName').textContent = name;
+    document.getElementById('platformResetLinkBox').value = res.resetLink;
+    document.getElementById('platformResetLinkCard').style.display = 'block';
+    document.getElementById('platformResetLinkCard').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) { EXO.toast(e.message, 'error'); }
+}
+function copyPlatformResetLink(){ document.getElementById('platformResetLinkBox').select(); document.execCommand('copy'); }
+let editingUserId = null, editingUserTenantId = null;
+function editUser(u){
+  editingUserId = u.id; editingUserTenantId = u.tenantId;
+  document.getElementById('editUserName').value = u.name || '';
+  document.getElementById('editUserLoginId').value = u.loginId || '';
+  document.getElementById('editUserEmail').value = u.email || '';
+  document.getElementById('editUserPhone').value = u.phone || '';
+  document.getElementById('editUserErr').style.display = 'none';
+  document.getElementById('editUserCard').style.display = 'block';
+  document.getElementById('editUserCard').scrollIntoView({ behavior: 'smooth' });
+}
+async function saveEditedUser(){
+  const err = document.getElementById('editUserErr'); err.style.display = 'none';
+  const body = {
+    name: document.getElementById('editUserName').value.trim(),
+    loginId: document.getElementById('editUserLoginId').value.trim(),
+    email: document.getElementById('editUserEmail').value.trim(),
+    phone: document.getElementById('editUserPhone').value.trim(),
+  };
+  try {
+    await platformFetch(`/tenants/${editingUserTenantId}/users/${editingUserId}`, { method: 'PUT', body: JSON.stringify(body) });
+    document.getElementById('editUserCard').style.display = 'none';
+    EXO.toast('User updated.');
+    openDetail(editingUserTenantId);
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+}
+async function showPlatformActivity(tenantId, userId, name){
+  try {
+    const data = await platformFetch(`/tenants/${tenantId}/users/${userId}/login-activity`);
+    document.getElementById('platformActivityName').textContent = name;
+    const flag = data.distinctIps24h > 1 ? `⚠️ ${data.distinctIps24h} different IPs in the last 24h` : (data.distinctIps7d > 1 ? `${data.distinctIps7d} different IPs in the last 7 days` : 'Nothing unusual — one IP recently');
+    document.getElementById('platformActivitySummary').textContent = flag;
+    document.getElementById('platformActivityRows').innerHTML = data.recent.map(r => `<tr><td>${new Date(r.at).toLocaleString()}</td><td>${r.ip || '—'}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No logins recorded yet</td></tr>';
+    document.getElementById('platformActivityCard').style.display = 'block';
+    document.getElementById('platformActivityCard').scrollIntoView({ behavior: 'smooth' });
   } catch (e) { EXO.toast(e.message, 'error'); }
 }
 

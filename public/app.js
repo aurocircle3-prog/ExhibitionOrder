@@ -48,7 +48,21 @@
     if (token) headers['Authorization'] = 'Bearer ' + token;
     const res = await fetch('/api' + path, Object.assign({}, opts, { headers }));
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      // authFailed covers every 401 the auth() middleware itself produces
+      // (expired token, malformed token, deactivated account, wrong
+      // tenant) — sessionInvalidated is the one specific sub-case that
+      // gets its own clearer wording. Neither is ever set by /auth/login's
+      // own wrong-password response, so this can't misfire into a
+      // redirect loop on the login page itself.
+      if (data.sessionInvalidated || data.authFailed) {
+        localStorage.removeItem('exo_token');
+        localStorage.removeItem('exo_user');
+        alert(data.sessionInvalidated ? data.error : 'Your session has expired. Please sign in again.');
+        location.href = '/login.html';
+      }
+      throw new Error(data.error || 'Request failed');
+    }
     return data;
   }
 
@@ -62,7 +76,11 @@
     }
   }
   function getUser() { try { return JSON.parse(localStorage.getItem('exo_user') || 'null'); } catch { return null; } }
-  function logout() { localStorage.removeItem('exo_token'); localStorage.removeItem('exo_user'); location.href = '/login.html'; }
+  function logout() {
+    const token = localStorage.getItem('exo_token');
+    if (token) fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+    localStorage.removeItem('exo_token'); localStorage.removeItem('exo_user'); location.href = '/login.html';
+  }
   function requireRole(...roles) {
     const user = getUser();
     if (!localStorage.getItem('exo_token') || !user || !roles.includes(user.role)) { location.href = '/login.html'; return null; }
@@ -104,11 +122,14 @@
   }
   function adminNav(active) {
     const ex = currentExhibition();
-    const links = ex ? [
-      { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
-      { key: 'order', href: '/staff/order.html', label: 'Take Order' },
-      { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
-    ] : [
+    // Item Master / Take Order / Orders used to conditionally appear here
+    // whenever an exhibition was selected — which meant the nav's own
+    // contents changed depending on state, the actual source of confusion.
+    // They're exhibition-scoped by nature, so they now live only in the
+    // exhibition hub (dashboard -> Enter) and the sub-nav shown on those
+    // pages themselves (see exhibitionSubNav below) — this top nav stays
+    // the same regardless of exhibition context.
+    const links = [
       { key: 'dashboard', href: '/admin/dashboard.html', label: 'Dashboard' },
       { key: 'buyers', href: '/admin/buyers.html', label: 'Buyers' },
       { key: 'staff', href: '/admin/staff.html', label: 'Staff' },
@@ -116,6 +137,25 @@
       { key: 'settings', href: '/admin/settings.html', label: 'Settings' },
     ];
     return navBar(links, active, ex);
+  }
+  // The exhibition-scoped counterpart to adminNav — shown as a secondary
+  // strip on Take Order / Item Master / Orders / exhibition Reports /
+  // exhibition Best Sellers, so switching between those doesn't mean going
+  // back to the hub every time, even though they're no longer in the main
+  // nav. Admin-only — staff's flow stays exactly as it was (straight to
+  // Take Order, no hub, no sub-nav; that's still the right amount of
+  // navigation for a role with one job).
+  function exhibitionSubNav(active) {
+    const ex = currentExhibition();
+    const links = [
+      { key: 'hub', href: '/admin/exhibition-hub.html', label: '☰' },
+      { key: 'order', href: '/staff/order.html', label: 'Take Order' },
+      { key: 'items', href: '/admin/item-master.html', label: 'Item Master' },
+      { key: 'orders', href: '/staff/orders.html', label: 'Orders' },
+      { key: 'reports', href: '/admin/reports.html' + (ex ? '?exhibitionId=' + ex.id : ''), label: 'Reports' },
+      { key: 'bestsellers', href: '/admin/exhibition-bestsellers.html', label: 'Best Sellers' },
+    ];
+    return `<div class="tabs subtabs">${links.map(l => `<a href="${l.href}" class="tab-btn${l.key===active?' active':''}" style="text-decoration:none">${l.label}</a>`).join('')}</div>`;
   }
   // Item Master, Take Order, and Orders are all exhibition-scoped now —
   // this makes sure whoever lands on one of those has a current exhibition
@@ -208,7 +248,26 @@
     finally { btn.disabled = false; btn.textContent = original; }
   }
 
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme };
+  // Text-node escaping — for values going straight into innerHTML as
+  // display text, e.g. `<td>${EXO.esc(name)}</td>`.
+  function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])); }
+  // A different, two-stage escape for the very common
+  // onclick="doThing('${name}')" pattern used all over this app's list
+  // rendering: the value sits inside a single-quoted JS string literal,
+  // which itself sits inside a double-quoted HTML attribute. Escaping
+  // only for one context (as plain esc() above does, or as the old
+  // per-page `.replace(/'/g,"\\'")` one-liners did) leaves the other
+  // exploitable — esc() alone lets an unescaped apostrophe break out of
+  // the JS string; the old one-liners left a literal `"` free to break
+  // out of the HTML attribute entirely. This handles both: JS-escape
+  // first (backslash quotes/backslashes so the string literal can't be
+  // broken out of), then HTML-attribute-escape the result (so the
+  // attribute itself can't be broken out of either).
+  function escAttr(s) {
+    const jsEscaped = String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    return jsEscaped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, exhibitionSubNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

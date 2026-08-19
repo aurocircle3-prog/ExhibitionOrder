@@ -20,13 +20,21 @@ const PORT       = process.env.PORT       || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'exhibition-saas-dev-secret';
 const MONGO_URI  = process.env.MONGO_URI  || '';
 const APP_URL    = process.env.APP_URL    || 'http://localhost:3000';
-// Builds a link on the COMPANY's own subdomain (kaashvi.expoorders.com),
+// Builds a link on the COMPANY's own subdomain (meridian.expoorders.com),
 // not the bare platform domain — the whole point of subdomains being that
 // a buyer's order link or an admin's setup link should look like it's
 // coming from that specific company, not a generic shared host. Falls
 // back to whatever host the request actually came in on if APP_URL isn't
 // configured for production yet (e.g. local dev, or before the domain's
 // wired up) — same reasoning as the existing fallback these replaced.
+// Every "today" comparison in this app (orders today, exhibition validTill
+// expiry) means the calendar day in India, not UTC's — UTC's day boundary
+// runs 5.5 hours behind IST, so anything from midnight to 5:30am IST was
+// getting counted as "yesterday" before this. No DST in India, so a fixed
+// +5:30 offset is exact, not an approximation.
+function istDateString(d = new Date()) {
+  return new Date(d.getTime() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 function tenantBaseUrl(req, tenant) {
   if (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000') {
     const u = new URL(APP_URL);
@@ -34,11 +42,28 @@ function tenantBaseUrl(req, tenant) {
   }
   return `${req.protocol}://${req.get('host')}`;
 }
+// Generates a one-time password-reset link for an existing user — the same
+// token mechanism the initial admin-setup link uses (PasswordSetupTokenDB,
+// purpose: 'reset' so set-password.html shows reset-appropriate wording).
+// Deliberately admin-triggered only, not self-serve and not emailed
+// automatically — the admin who generates it is expected to share it
+// however they already communicate with that person (WhatsApp, etc.).
+// 7-day expiry matches the initial setup link's generosity, since unlike a
+// "forgot password" request this is a known, deliberate admin action.
+async function createPasswordResetLink(user, tenant, req) {
+  const resetToken = uuid();
+  await PasswordSetupTokenDB.create({
+    id: uuid(), token: resetToken, userId: user.id, tenantId: tenant.id, used: false, purpose: 'reset',
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
+  });
+  const baseUrl = tenantBaseUrl(req, tenant);
+  return `${baseUrl}/set-password.html?token=${resetToken}`;
+}
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.54.1';
-const BUILD_TIME   = '2026-07-23T08:00:00Z';
+const APP_VERSION  = '1.101.9';
+const BUILD_TIME   = '2026-08-19T19:48:49Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -46,6 +71,21 @@ if (!process.env.JWT_SECRET) {
     process.exit(1);
   }
   log.warn('JWT_SECRET env var not set — using insecure default. Set JWT_SECRET in production!');
+}
+
+// Without MONGO_URI, the app silently falls back to a local JSON file (see
+// connectDB below) — fine for local dev, but on Render that file lives on
+// an ephemeral disk that gets wiped on every redeploy. Missing this in
+// production doesn't crash anything; it just quietly starts throwing away
+// every order and every buyer the moment the next deploy happens, with no
+// error anyone would see. That's a worse outcome than a guessable JWT
+// secret, so it gets the same hard stop.
+if (!process.env.MONGO_URI) {
+  if (process.env.NODE_ENV === 'production') {
+    log.error('MONGO_URI env var is not set. Refusing to start in production — without it, data silently falls back to a local file that gets wiped on every redeploy. Set MONGO_URI on Render and redeploy.');
+    process.exit(1);
+  }
+  log.warn('MONGO_URI env var not set — using local JSON file for storage (fine for local dev only).');
 }
 
 // ── CLOUDFLARE R2 SETUP (same pattern as ecatlog — zero egress, R2 with local fallback) ──
@@ -79,11 +119,102 @@ function initR2() {
   }
 }
 
+// ── EMAIL (Brevo HTTP API — plain https POST, no SMTP ports needed on Render) ──
+const BREVO_API_KEY     = process.env.BREVO_API_KEY || '';
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'orders@expoorders.com';
+const BREVO_SENDER_NAME  = process.env.BREVO_SENDER_NAME || 'Expo Orders';
+const useEmail = !!BREVO_API_KEY;
+if (!useEmail) log.warn('BREVO_API_KEY not set — order notification emails are disabled');
+
+// Fires one email via Brevo's transactional send endpoint. Always resolves
+// (never throws) — a failed send should never take down whatever request
+// triggered it; the caller just logs and moves on.
+function sendEmail({ to, toName, subject, html }) {
+  if (!useEmail || !to) return Promise.resolve({ skipped: true });
+  const payload = JSON.stringify({
+    sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+    to: [{ email: to, name: toName || undefined }],
+    subject, htmlContent: html,
+  });
+  return new Promise(resolve => {
+    const req = https.request({
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'api-key': BREVO_API_KEY, 'content-length': Buffer.byteLength(payload) },
+    }, resp => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => {
+        if (resp.statusCode >= 300) log.error({ to, status: resp.statusCode, body: data }, 'Brevo email send failed');
+        resolve({ ok: resp.statusCode < 300 });
+      });
+    });
+    req.on('error', err => { log.error({ err, to }, 'Brevo email request failed'); resolve({ ok: false }); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+// Minimal HTML escape for values dropped into email bodies — party/company
+// names and remarks are free text, and this goes out as real HTML mail.
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+// Fire-and-forget both order-notification emails — never awaited by the
+// route that calls this, so a slow or failing email provider can't delay
+// or break the actual order-creation response. Company gets one if its
+// admin has an email on file (always true — required at signup); the
+// buyer gets one only if they have an email on file (optional field).
+// Fires automatically on order creation — only the company-admin
+// notification. The buyer's own email is deliberately NOT sent
+// automatically here anymore; see sendPartyOrderEmail below, which staff
+// trigger on demand with a button, same pattern as "Send on WhatsApp".
+// Reasoning: WhatsApp is the primary channel (that's what buyers expect
+// and what the pre-filled message targets), so email defaults to
+// available-but-not-automatic rather than every order silently emailing
+// the buyer whether or not that's actually wanted for that order.
+async function sendAdminOrderEmail(tenant, order, party, baseUrl) {
+  if (!useEmail || !tenant.emailNotificationsEnabled) return;
+  const shareUrl = `${baseUrl}/order/${order.shareToken}`;
+  const itemCount = order.items.length;
+  const admin = await UserDB.findOne({ tenantId: tenant.id, role: 'admin' });
+  if (admin?.email) {
+    sendEmail({
+      to: admin.email, toName: admin.name,
+      subject: `New order ${order.orderNo} — ${party.firmName}`,
+      html: `<p>New order <b>${escHtml(order.orderNo)}</b> from <b>${escHtml(party.firmName)}</b> (${escHtml(party.phone || '')}).</p>
+        <p>${itemCount} item${itemCount === 1 ? '' : 's'}${order.remark ? ` — Note: ${escHtml(order.remark)}` : ''}</p>
+        <p><a href="${shareUrl}">View order</a></p>`,
+    }).catch(err => log.error({ err }, 'Order admin-notification email failed'));
+  }
+}
+// Triggered on demand (a "Send Email" button next to "Send on WhatsApp"),
+// not automatically. Returns a reason on failure so the UI can show staff
+// something more useful than a generic error — same gates as the
+// automatic admin email (platform Brevo config + per-company opt-in),
+// plus obviously needing an email on file for this specific buyer.
+async function sendPartyOrderEmail(tenant, order, party, baseUrl) {
+  if (!useEmail || !tenant.emailNotificationsEnabled) return { ok: false, reason: 'Email isn\u2019t enabled for this company yet.' };
+  if (!party.email) return { ok: false, reason: 'This buyer doesn\u2019t have an email on file.' };
+  const shareUrl = `${baseUrl}/order/${order.shareToken}`;
+  const itemCount = order.items.length;
+  const result = await sendEmail({
+    to: party.email, toName: party.firmName,
+    subject: `Your order ${order.orderNo} from ${tenant.name}`,
+    html: `<p>Hi ${escHtml(party.contactPerson || party.firmName)},</p>
+      <p>Your order <b>${escHtml(order.orderNo)}</b> with <b>${escHtml(tenant.name)}</b> has been received (${itemCount} item${itemCount === 1 ? '' : 's'}).</p>
+      <p><a href="${shareUrl}">View your order</a></p>`,
+  });
+  return result.ok ? { ok: true } : { ok: false, reason: 'Email couldn\u2019t be sent — try again in a moment.' };
+}
+
 // ── MONGOOSE SCHEMAS ──────────────────────────────────────────────────────────
 const tenantSchema = new mongoose.Schema({
   id: String,
-  name: String,                       // "Kaashvi Jewels"
-  slug: { type: String, unique: true, sparse: true }, // "kaashvi" -> kaashvi.orders.is
+  name: String,                       // "Meridian Traders"
+  slug: { type: String, unique: true, sparse: true }, // "meridian" -> meridian.orders.is
   natureOfBusiness: { type: String, default: '' }, // e.g. "Jewelry Wholesaler" — helps platform admin pick relevant companies when assigning exhibition participants
   plan: { type: String, default: 'free' },
   logoUrl: String,
@@ -115,6 +246,57 @@ const tenantSchema = new mongoose.Schema({
   // platform admin explicitly turns it off for a company that wants
   // stricter control (no accidental double-scan silently inflating qty).
   allowDuplicateItems: { type: Boolean, default: true },
+  // Which order statuses this company can actually use — platform-admin
+  // defined, not client-configurable (same "AuroCircle decides the
+  // workflow" pattern as orderRowGrouping above). 'pending' is always
+  // present regardless of what's saved here — order creation and the
+  // edit-lock logic are both hardcoded to that exact status name, so it
+  // can't be removed even by mistake. Everything else in the list (e.g.
+  // adding 'dispatched', 'delivered') is fully up to the platform admin
+  // per company. Defaults to the original fixed 3 so every existing
+  // tenant keeps working identically until a platform admin deliberately
+  // customizes this.
+  orderStatuses: { type: [String], default: ['pending', 'confirmed', 'cancelled'] },
+  // Off by default — logging in from a second device kicks the first one
+  // out (see auth() below). Some companies may have a legitimate reason
+  // to want the same login usable on multiple devices at once; this is
+  // the platform-admin override for that, not something a company can
+  // turn on for themselves.
+  allowDualLogin: { type: Boolean, default: false },
+  // Shows a "Download PDF" button on the buyer-facing order page —
+  // platform-admin controlled, off by default. The PDF itself isn't
+  // generated server-side; it's the browser's own print-to-PDF, driven by
+  // a dedicated @media print stylesheet on that page (see order/view.html)
+  // so it doesn't need a heavy server-side rendering dependency.
+  allowPdfDownload: { type: Boolean, default: false },
+  // Hides the built-in "Remark (optional)" textarea on the Take Order
+  // screen — that field is always present regardless of configuration,
+  // which is redundant for a company that's already added their own
+  // remark-style field under Order Details. Off by default (field stays
+  // visible, unchanged for every existing company) until a platform admin
+  // turns it on for one that doesn't need it.
+  hideBuiltInRemark: { type: Boolean, default: false },
+  // Free-form dashboard stat cards (scope + one or more metrics each) —
+  // platform-admin controlled. Missing/empty (every company before this
+  // shipped) falls back to the original 3 fixed cards — see
+  // DEFAULT_DASHBOARD_CARDS wherever this is read.
+  dashboardCards: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Live running total shown on the Take Order screen as items are
+  // scanned — deliberately separate from orderViewColumns' showTotal
+  // (which drives the printed order footer) and from dashboardCards.
+  // Scoped to whichever fields are already selected to show on the Order
+  // Form (tenant.orderFields) — each entry is either a direct total of
+  // one of those numeric fields, or a formula combining them. Empty by
+  // default: nothing shows on Take Order until this is set up.
+  cartTotalConfig: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  // Order-notification emails are opt-in PER COMPANY, on top of the
+  // platform-wide BREVO_API_KEY switch — both have to be true for a given
+  // company's orders to actually send email. Default false: turning this
+  // product feature on for a company is a deliberate platform-admin
+  // decision (e.g. only once the sender domain / company details are
+  // ready), not an automatic side effect of the platform having Brevo
+  // configured at all.
+  emailNotificationsEnabled: { type: Boolean, default: false },
   // Atomically incremented to generate order numbers (EX1001, EX1002...).
   // Replaces the old "count existing orders, then create" approach, which
   // had a race window: two staff submitting at the same instant could both
@@ -170,12 +352,17 @@ const tenantSchema = new mongoose.Schema({
     type: {
       address: String, gstNumber: String, whatsappNumber: String,
       instagram: String, facebook: String, twitter: String, youtube: String, website: String,
+      // Free-text lines the company admin can fill in (terms, a delivery
+      // note, anything not covered by the structured fields above). Show
+      // toggle is platform-admin only — see PLATFORM_ONLY_SHOW_KEYS.
+      note1: String, note2: String,
       show: {
         type: {
           logo: { type: Boolean, default: false }, address: { type: Boolean, default: false },
           gstNumber: { type: Boolean, default: false }, whatsappNumber: { type: Boolean, default: false },
           instagram: { type: Boolean, default: false }, facebook: { type: Boolean, default: false },
           twitter: { type: Boolean, default: false }, youtube: { type: Boolean, default: false }, website: { type: Boolean, default: false },
+          note1: { type: Boolean, default: false }, note2: { type: Boolean, default: false },
         },
         default: () => ({}),
       },
@@ -192,6 +379,14 @@ const userSchema = new mongoose.Schema({
   password: String,
   name: String, phone: String, email: String,
   active: { type: Boolean, default: true },
+  // Rewritten on every successful login. The JWT issued at that moment
+  // embeds this same value — auth() below checks the two match on every
+  // request, so logging in from a second device immediately invalidates
+  // the first device's session rather than letting both stay active for
+  // 7 days (the token's normal expiry). This is what actually makes a
+  // staff-count limit mean anything — without it, one login shared across
+  // 3 phones was indistinguishable from 3 separate accounts.
+  currentSessionId: String,
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
@@ -238,8 +433,14 @@ const orderSchema = new mongoose.Schema({
   id: String, orderNo: String, tenantId: String, exhibitionId: String,
   partyId: String, partyName: String, partyPhone: String, partyContactPerson: String, partyEmail: String,
   staffId: String, staffName: String,
-  items: Array,                       // [{itemId, label, scannerCode, images, qty, extra}]
+  items: Array,                       // [{itemId, label, scannerCode, qty, extra}] — images deliberately NOT stored here; see attachLiveImages()
   remark: String,
+  // Set true only on orders created after this shipped — the order-view
+  // page used to automatically show a "Remark: ..." line whenever the
+  // order had a remark, with no way to turn it off. Existing orders
+  // simply won't have this field at all (undefined, same as false), so
+  // their display is untouched; only new orders suppress it.
+  suppressAutoOrderRemark: Boolean,
   // Snapshot of the tenant's Order Form config at the time this order was
   // placed, plus the computed per-field totals — kept on the order so it
   // still renders correctly even if the admin changes the config later.
@@ -257,6 +458,12 @@ const orderSchema = new mongoose.Schema({
   showImages: { type: Boolean, default: true },
   status: { type: String, default: 'pending' }, // pending | confirmed | cancelled
   deleted: { type: Boolean, default: false }, // soft delete — kept for audit/history, hidden from normal views
+  deletedAt: String, deletedByName: String,
+  // Independent of both 'deleted' and 'status' — lets the buyer's share
+  // link be turned off without touching the order itself (still fully
+  // visible/editable internally, still not cancelled). A link staying
+  // active isn't implied by an order being active; this is its own switch.
+  linkActive: { type: Boolean, default: true },
   shareToken: { type: String, unique: true, sparse: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -284,6 +491,12 @@ const auditLogSchema = new mongoose.Schema({
 const passwordSetupTokenSchema = new mongoose.Schema({
   id: String, token: { type: String, unique: true, sparse: true },
   userId: String, tenantId: String,
+  // 'setup' = brand-new admin's first-password link (created by platform
+  // admin, 7-day expiry). 'reset' = password-reset link generated by an
+  // admin (platform owner for company admins, company admin for their own
+  // staff/clients) via createPasswordResetLink() — same 7-day expiry,
+  // shared manually (WhatsApp, etc.), never emailed automatically.
+  purpose: { type: String, default: 'setup' },
   used: { type: Boolean, default: false },
   expiresAt: String, createdAt: { type: String, default: () => new Date().toISOString() },
 });
@@ -329,6 +542,13 @@ const exhibitionSchema = new mongoose.Schema({
 const exhibitionParticipantSchema = new mongoose.Schema({
   id: String, exhibitionId: String, tenantId: String,
   validTill: String, // date, platform-admin-controlled — expired means no new items/orders in this exhibition, but past data stays visible
+  // Item count cap for THIS company's participation in THIS exhibition —
+  // platform-admin controlled, matching the pricing model (e.g. "up to
+  // 1000 SKU per exhibition"), not a flat per-company limit, since a
+  // company doing multiple shows might have a different cap per show.
+  // null/0 means unlimited (default — existing participations before this
+  // shipped are unaffected until a platform admin sets a real number).
+  maxItems: { type: Number, default: null },
   closed: { type: Boolean, default: false }, // company admin's own manual close/reopen — independent of validTill, private to this company only
   // Order numbering for this company's orders within this exhibition —
   // client-admin configured, not platform admin, since each company wants
@@ -473,6 +693,38 @@ async function applyImagesForCode(tenantId, imageCode, images) {
   for (const it of items) await ItemDB.update({ id: it.id }, { images });
   return images;
 }
+// Actually deletes one stored image file — R2 or local disk, whichever's
+// active. Best-effort: an orphaned file left behind is a much smaller
+// problem than a failed delete blocking the actual request, so this logs
+// and moves on rather than throwing.
+async function deleteStoredImage(url) {
+  if (!url) return;
+  try {
+    if (useR2 && s3Client && R2_PUBLIC_URL && url.startsWith(R2_PUBLIC_URL + '/')) {
+      const key = url.slice(R2_PUBLIC_URL.length + 1);
+      await s3Client.send(new S3DeleteObjectsCommand({ Bucket: R2_BUCKET, Delete: { Objects: [{ Key: key }] } }));
+    } else if (!useR2 && url.startsWith('/uploads/')) {
+      fs.unlink(path.join(__dirname, url), () => {});
+    }
+  } catch (err) {
+    log.error({ err, url }, 'Failed to delete a stored image file (DB record was still updated)');
+  }
+}
+// Called after item(s) are deleted. Photos are shared across every item
+// using the same Image Code (that's the whole point of Image Codes — one
+// set of photos, many items), so deleting the files here would silently
+// break OTHER items still using that code. Only safe to actually remove
+// the files — and the ImageSet record itself — once no active item
+// references that code anymore.
+async function cleanupImageCodeIfOrphaned(tenantId, imageCode) {
+  if (!imageCode) return;
+  const stillUsed = await findItemsByImageCode(tenantId, imageCode);
+  if (stillUsed.length) return; // other items still use these photos — leave them alone
+  const set = await findImageSetCI(tenantId, imageCode);
+  if (!set) return;
+  await Promise.all((set.images || []).map(deleteStoredImage));
+  await ImageSetDB.remove({ id: set.id });
+}
 
 // Fire-and-forget audit write — never let a logging failure break the
 // request that triggered it. Call this AFTER the mutation succeeds, with
@@ -485,6 +737,28 @@ function logAudit(req, action, entityType, entityId, changes = null) {
     changes, ip: req.ip, createdAt: new Date().toISOString(),
   };
   AuditLogDB.create(entry).catch(err => log.error({ err, action }, 'Failed to write audit log'));
+}
+
+// Visibility (not enforcement) into whether one login is being used from
+// several places at once — e.g. one staff account shared across 3 phones.
+// Nothing new is tracked for this: every login already writes an
+// 'auth.login' audit entry with IP, this just summarizes what's already
+// there. distinctIps24h/7d are the actionable numbers — more than 1 means
+// this exact login was used from more than one network in that window,
+// which for a single person on one device during a shift should be rare.
+// Not proof of sharing (mobile networks/VPNs can rotate IPs for one real
+// person), just a signal worth a human glance.
+async function getLoginActivity(tenantId, userId) {
+  const entries = (await AuditLogDB.find({ tenantId, actorId: userId, action: 'auth.login' }))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const now = Date.now();
+  const within = (hours) => entries.filter(e => now - new Date(e.createdAt).getTime() < hours * 60 * 60 * 1000);
+  const distinctIps = (list) => new Set(list.map(e => e.ip).filter(Boolean)).size;
+  return {
+    recent: entries.slice(0, 10).map(e => ({ ip: e.ip, at: e.createdAt })),
+    distinctIps24h: distinctIps(within(24)),
+    distinctIps7d: distinctIps(within(24 * 7)),
+  };
 }
 
 // Every new company starts with just these two built-in fields — admin adds
@@ -512,7 +786,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 // Scoped rather than wide open — every company has its own subdomain
-// (kaashvi.expoorders.com), so this can't be a static list of origins.
+// (meridian.expoorders.com), so this can't be a static list of origins.
 // Risk here is already low (bearer tokens in an Authorization header, not
 // cookies, so there's no session to ride via CSRF) but scoping this is
 // still better than reflecting any origin back unconditionally.
@@ -565,7 +839,7 @@ app.get('/api/version', (req, res) => res.json({ version: APP_VERSION, builtAt: 
 
 // Resolves the company (tenant) for every /api/* call from, in priority order:
 // explicit header/query (used by the frontend + during local dev without subdomains),
-// then the request's subdomain (kaashvi.orders.is -> slug "kaashvi") in production.
+// then the request's subdomain (meridian.orders.is -> slug "meridian") in production.
 // Shared hosting platforms hand out <service>.onrender.com-style URLs that are
 // structurally identical to a real per-company subdomain — skip those known
 // platform hosts so a Render/Vercel/etc. deployment isn't mistaken for a tenant.
@@ -592,16 +866,29 @@ async function resolveTenant(req, res, next) {
   next();
 }
 
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1] || req.query.token;
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  if (!token) return res.status(401).json({ error: 'Unauthorized', authFailed: true });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     if (req.tenant && payload.tenantId !== req.tenant.id)
-      return res.status(401).json({ error: 'Token does not belong to this company' });
+      return res.status(401).json({ error: 'Token does not belong to this company', authFailed: true });
+    // Single-session enforcement: logging in from a second device rewrites
+    // currentSessionId, which immediately invalidates every other token
+    // for this user rather than letting both stay valid for the token's
+    // full 7-day life. Tokens issued before this feature shipped have no
+    // sessionId in their payload — treated as always-valid here so
+    // deploying this doesn't force-logout everyone already signed in;
+    // they naturally start being checked the next time they log in fresh.
+    if (payload.sessionId) {
+      const user = await UserDB.findOne({ id: payload.id });
+      if (!user || user.active === false) return res.status(401).json({ error: 'Account no longer active.', authFailed: true });
+      if (!req.tenant?.allowDualLogin && user.currentSessionId && user.currentSessionId !== payload.sessionId)
+        return res.status(401).json({ error: 'You were signed out because this account was signed in from another device.', sessionInvalidated: true });
+    }
     req.user = payload;
     next();
-  } catch { res.status(401).json({ error: 'Invalid or expired token' }); }
+  } catch { res.status(401).json({ error: 'Invalid or expired token', authFailed: true }); }
 }
 
 function requireRole(...roles) {
@@ -736,15 +1023,72 @@ app.post('/api/platform/login', loginLimiter, async (req, res) => {
   res.json({ token, admin: { id: admin.id, email: admin.email, name: admin.name } });
 });
 
+// Temporary diagnostic — every slug failing to create (not just one
+// specific duplicate) can't be explained by the create route's own logic,
+// which was checked and is correctly building/submitting the slug every
+// time. This surfaces the actual raw state of every tenant's slug field,
+// plus a live probe insert/rollback, so the real cause can be seen
+// directly instead of guessed at further.
+app.get('/api/platform/diagnose-slugs', platformAuth, async (req, res) => {
+  const tenants = await TenantDB.find({});
+  const slugSummary = tenants.map(t => ({ id: t.id, name: t.name, slug: t.slug, slugType: typeof t.slug, active: t.active !== false, createdAt: t.createdAt }));
+  const nullOrMissingSlugs = slugSummary.filter(t => t.slug === null || t.slug === undefined || t.slug === '');
+  const slugCounts = {};
+  slugSummary.forEach(t => { const k = String(t.slug); slugCounts[k] = (slugCounts[k] || 0) + 1; });
+  const duplicateSlugValues = Object.entries(slugCounts).filter(([, count]) => count > 1);
+
+  // Live probe: try inserting a throwaway document with a guaranteed-fresh
+  // random slug, then immediately delete it. If even THIS fails with a
+  // duplicate-key error, the index itself is broken, not any real data
+  // conflict — that's the single most useful fact this diagnostic can
+  // surface.
+  const probeSlug = 'diagnostic-probe-' + Date.now();
+  let probeResult = 'not run';
+  try {
+    const probeId = uuid();
+    await TenantDB.create({ id: probeId, name: '__diagnostic_probe__', slug: probeSlug, createdAt: new Date().toISOString() });
+    await TenantDB.remove({ id: probeId });
+    probeResult = 'OK — a fresh, guaranteed-unique slug inserted and deleted successfully';
+  } catch (err) {
+    probeResult = `FAILED inserting a guaranteed-fresh slug ("${probeSlug}") — error: ${err.message} (code: ${err.code}). This means the unique index itself is broken, not any specific company's data.`;
+  }
+
+  // A reported conflict on "_id" specifically points at every collection
+  // in the actual creation sequence, not just Tenant — this tests each
+  // one individually (insert one throwaway doc, then delete it) to
+  // pinpoint exactly which collection's _id generation is actually broken.
+  const collectionProbes = {};
+  for (const [label, DB] of [['Tenant', TenantDB], ['FieldDef', FieldDefDB], ['User', UserDB], ['PasswordSetupToken', PasswordSetupTokenDB]]) {
+    const probeId = uuid();
+    try {
+      await DB.create({ id: probeId, tenantId: '__diagnostic__', createdAt: new Date().toISOString() });
+      await DB.remove({ id: probeId });
+      collectionProbes[label] = 'OK';
+    } catch (err) {
+      collectionProbes[label] = `FAILED — ${err.message} (code: ${err.code}, keyPattern: ${JSON.stringify(err.keyPattern || err.keyValue || {})})`;
+    }
+  }
+
+  res.json({
+    totalTenants: tenants.length,
+    nullOrMissingSlugCount: nullOrMissingSlugs.length,
+    nullOrMissingSlugs,
+    duplicateSlugValues,
+    probeResult,
+    collectionProbes,
+    allSlugs: slugSummary,
+  });
+});
 app.get('/api/platform/tenants', platformAuth, async (req, res) => {
   const tenants = await TenantDB.find({});
   const summaries = await Promise.all(tenants.map(async t => {
-    const [userCount, itemCount, orderCount, partyCount] = await Promise.all([
+    const [userCount, itemCount, orders, partyCount] = await Promise.all([
       UserDB.count({ tenantId: t.id }),
       ItemDB.count({ tenantId: t.id, active: true }),
-      OrderDB.count({ tenantId: t.id }),
+      OrderDB.find({ tenantId: t.id }),
       PartyDB.count({ tenantId: t.id }),
     ]);
+    const orderCount = orders.filter(o => !o.deleted).length;
     return { id: t.id, name: t.name, slug: t.slug, natureOfBusiness: t.natureOfBusiness || '', plan: t.plan, active: t.active !== false, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
   }));
   summaries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -756,18 +1100,17 @@ app.get('/api/platform/tenants/:id', platformAuth, async (req, res) => {
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const users = await UserDB.find({ tenantId: tenant.id });
   const safeUsers = users.map(({ password, ...u }) => u);
-  const [itemCount, orderCount, partyCount, exhibitionCount, fieldDefs, orders] = await Promise.all([
+  const [itemCount, orders, partyCount, exhibitionCount, fieldDefs] = await Promise.all([
     ItemDB.count({ tenantId: tenant.id, active: true }),
-    OrderDB.count({ tenantId: tenant.id }),
+    OrderDB.find({ tenantId: tenant.id }),
     PartyDB.count({ tenantId: tenant.id }),
     ExhibitionParticipantDB.count({ tenantId: tenant.id }),
     FieldDefDB.find({ tenantId: tenant.id, active: true }),
-    OrderDB.find({ tenantId: tenant.id }),
   ]);
+  const orderCount = orders.filter(o => !o.deleted).length;
   res.json({
     tenant, users: safeUsers, fieldDefs,
     counts: { itemCount, orderCount, partyCount, exhibitionCount },
-    recentOrders: orders.slice(0, 10),
   });
 });
 
@@ -775,22 +1118,47 @@ app.get('/api/platform/tenants/:id', platformAuth, async (req, res) => {
 // when a company admin is locked out and has no other way back in. Logged
 // to that tenant's own audit trail (actor recorded as the platform admin,
 // not a tenant user) so this is never a silent, invisible action.
-app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platformAuth, async (req, res) => {
-  const { newPassword } = req.body;
-  if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+app.post('/api/platform/tenants/:tenantId/users/:userId/reset-link', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.tenantId });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const user = await UserDB.findOne({ id: req.params.userId, tenantId: tenant.id });
   if (!user) return res.status(404).json({ error: 'User not found' });
-  await UserDB.update({ id: user.id }, { password: bcrypt.hashSync(newPassword, 10) });
+  const resetLink = await createPasswordResetLink(user, tenant, req);
   const entry = {
     id: uuid(), tenantId: tenant.id,
     actorId: req.platformAdmin.id, actorName: `${req.platformAdmin.name} (platform admin)`, actorRole: 'platform_admin',
-    action: 'user.password_reset_by_platform', entityType: 'user', entityId: user.id,
+    action: 'user.password_reset_link_generated', entityType: 'user', entityId: user.id,
     changes: { targetUser: user.email || user.loginId }, ip: req.ip, createdAt: new Date().toISOString(),
   };
   AuditLogDB.create(entry).catch(err => log.error({ err }, 'Failed to write audit log'));
-  log.info({ tenant: tenant.slug, targetUser: user.email, platformAdmin: req.platformAdmin.email }, 'Platform admin reset a user password');
+  log.info({ tenant: tenant.slug, targetUser: user.email, platformAdmin: req.platformAdmin.email }, 'Platform admin generated a password reset link');
+  res.json({ ok: true, resetLink });
+});
+app.get('/api/platform/tenants/:tenantId/users/:userId/login-activity', platformAuth, async (req, res) => {
+  const user = await UserDB.findOne({ id: req.params.userId, tenantId: req.params.tenantId });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json(await getLoginActivity(req.params.tenantId, user.id));
+});
+app.put('/api/platform/tenants/:tenantId/users/:userId', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.tenantId });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const user = await UserDB.findOne({ id: req.params.userId, tenantId: tenant.id });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const name = String(req.body.name || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const phone = String(req.body.phone || '').trim();
+  const loginId = String(req.body.loginId || '').trim().toLowerCase();
+  if (!name || !loginId) return res.status(400).json({ error: 'Name and login ID are required' });
+  const clash = await UserDB.findOne({ tenantId: tenant.id, loginId });
+  if (clash && clash.id !== user.id) return res.status(400).json({ error: 'That login ID is already used by someone else at this company' });
+  await UserDB.update({ id: user.id }, { name, email, phone, loginId });
+  const auditEntry = {
+    id: uuid(), tenantId: tenant.id,
+    actorId: req.platformAdmin.id, actorName: `${req.platformAdmin.name} (platform admin)`, actorRole: 'platform_admin',
+    action: 'user.edited_by_platform', entityType: 'user', entityId: user.id,
+    changes: { name, email, loginId }, ip: req.ip, createdAt: new Date().toISOString(),
+  };
+  AuditLogDB.create(auditEntry).catch(err => log.error({ err }, 'Failed to write audit log'));
   res.json({ ok: true });
 });
 
@@ -801,41 +1169,130 @@ app.put('/api/platform/tenants/:tenantId/users/:userId/reset-password', platform
 // directly to the platform admin to share manually; hook up real sending
 // later by replacing that one response field with an actual email call.)
 app.post('/api/platform/tenants', platformAuth, async (req, res) => {
-  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness } = req.body;
+  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness, cloneFromTenantId } = req.body;
   if (!companyName || !rawSlug || !adminName || !email)
     return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({ error: 'That doesn\'t look like a valid email address' });
   const slug = normalizeSlug(rawSlug);
   const slugErr = validateSlug(slug);
   if (slugErr) return res.status(400).json({ error: slugErr });
-  if (await TenantDB.findOne({ slug })) return res.status(400).json({ error: 'That company link name is already taken' });
+  const blocker = await TenantDB.findOne({ slug });
+  if (blocker) return res.status(400).json({ error: `That company link name is already used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}). Pick a different one, or delete that company first if it's no longer needed.` });
+  // Optional starting point: copy another company's CONFIGURATION onto this
+  // brand-new one — the tedious stuff to set up from scratch (Item Master
+  // fields, Order Form, variant categories, Order View Layout, settings
+  // permissions) — so two companies in the same industry (e.g. two jewelry
+  // exhibitors) don't each need identical setup done by hand. Deliberately
+  // narrow: never copies anything that identifies or contacts the SOURCE
+  // company itself (name, slug, logo, address, GST, phone, socials, staff
+  // cap) — those stay blank/default on the new company either way.
+  let template = null;
+  if (cloneFromTenantId) {
+    template = await TenantDB.findOne({ id: cloneFromTenantId });
+    if (!template) return res.status(400).json({ error: 'Company to copy settings from was not found' });
+  }
 
   const tenant = {
     id: uuid(), name: companyName, slug, natureOfBusiness: natureOfBusiness || '', plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
-    settingsPermissions: { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
+    settingsPermissions: template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
   };
-  await TenantDB.create(tenant);
+  if (template) {
+    tenant.enableVariants = template.enableVariants || false;
+    tenant.variantCategories = template.variantCategories || [];
+    tenant.orderFields = template.orderFields || [];
+    tenant.orderShowImages = template.orderShowImages !== false;
+    tenant.orderRowGrouping = template.orderRowGrouping || 'none';
+    tenant.allowDuplicateItems = template.allowDuplicateItems !== false;
+    tenant.orderStatuses = (template.orderStatuses && template.orderStatuses.length) ? template.orderStatuses : ['pending', 'confirmed', 'cancelled'];
+    tenant.dashboardCards = Array.isArray(template.dashboardCards) ? template.dashboardCards : [];
+    tenant.cartTotalConfig = Array.isArray(template.cartTotalConfig) ? template.cartTotalConfig : [];
+    tenant.orderCustomFields = template.orderCustomFields || [];
+    tenant.orderViewColumns = template.orderViewColumns || [];
+    tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
+    tenant.orderViewFooterFields = template.orderViewFooterFields || [];
+    // Only the reusable boilerplate text/policy pieces of the footer — never
+    // the source company's own address/GST/phone/socials/logo, which are
+    // that company's identity, not a "setting".
+    tenant.footer = {
+      whatsappMessage: template.footer?.whatsappMessage || '',
+      note1: template.footer?.note1 || '', note2: template.footer?.note2 || '',
+      show: { note1: !!template.footer?.show?.note1, note2: !!template.footer?.show?.note2 },
+    };
+  }
+  let createdTenant = false;
+  let admin, setupToken, baseUrl;
+  try {
+    await TenantDB.create(tenant);
+    createdTenant = true;
 
-  for (let i = 0; i < FIXED_FIELDS.length; i++) {
-    await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
+    for (let i = 0; i < FIXED_FIELDS.length; i++) {
+      await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
+    }
+    // Copy the source company's own custom Item Master fields (everything
+    // past the two always-present fixed fields), preserving their order.
+    if (template) {
+      const templateFields = (await FieldDefDB.find({ tenantId: template.id, active: true })).filter(f => !f.fixed).sort((a, b) => a.order - b.order);
+      for (let i = 0; i < templateFields.length; i++) {
+        const { id: _oldId, _id: _oldMongoId, tenantId: _oldTenant, createdAt: _oldCreatedAt, ...rest } = templateFields[i];
+        await FieldDefDB.create({ ...rest, id: uuid(), tenantId: tenant.id, order: FIXED_FIELDS.length + i, createdAt: new Date().toISOString() });
+      }
+    }
+
+    admin = {
+      id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
+      password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
+      name: adminName, phone: phone || '', email, active: true, createdAt: new Date().toISOString(),
+    };
+    await UserDB.create(admin);
+
+    setupToken = uuid();
+    await PasswordSetupTokenDB.create({
+      id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
+    });
+    baseUrl = tenantBaseUrl(req, tenant);
+  } catch (err) {
+    // Anything failing partway through — after the tenant record exists
+    // but before the admin user and setup link are fully in place — used
+    // to leave a real company sitting in the list with literally no way
+    // to ever log into it, and no error clear enough to explain why. Undo
+    // everything this request created instead, so a failed attempt leaves
+    // no trace and can just be retried cleanly.
+    if (createdTenant) {
+      await Promise.all([
+        TenantDB.remove({ id: tenant.id }),
+        FieldDefDB.remove({ tenantId: tenant.id }),
+        UserDB.remove({ tenantId: tenant.id }),
+      ]).catch(cleanupErr => log.error({ err: cleanupErr, tenantId: tenant.id }, 'Failed to roll back a partially-created company — may need manual cleanup'));
+    }
+    if (err.code === 11000) {
+      // The real bug behind "every slug fails identically" — this used
+      // to always assume a duplicate-key error meant the slug conflicted,
+      // without ever checking which field MongoDB actually flagged.
+      // TenantDB.create is only one of several creates in this sequence
+      // (fields, user, password-setup token); a conflict on any of THOSE
+      // would previously get mis-reported as a slug problem every single
+      // time, regardless of the slug actually being fine.
+      const conflictField = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'unknown';
+      if (conflictField === 'slug') {
+        const blocker = await TenantDB.findOne({ slug: tenant.slug });
+        const detail = blocker ? ` It's currently used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}).` : ' (Could not find which company is using it — this may need manual database cleanup; contact support with the exact link name you tried.)';
+        return res.status(400).json({ error: `That company link name is already taken.${detail}` });
+      }
+      // Not actually about the slug — a different unique field collided
+      // (shareToken/token on some other collection, most likely a fluke
+      // UUID collision or a stale index). Says so plainly instead of
+      // blaming the slug for something it didn't cause.
+      log.error({ err, conflictField, tenantSlug: tenant.slug }, 'Company creation hit a duplicate-key error on a field other than slug');
+      return res.status(500).json({ error: `Company creation failed on an unexpected duplicate value (field: ${conflictField}), not the company link name. Please try again — if this keeps happening, contact support with this exact message.` });
+    }
+    throw err;
   }
 
-  const admin = {
-    id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
-    password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
-    name: adminName, phone: phone || '', email, active: true, createdAt: new Date().toISOString(),
-  };
-  await UserDB.create(admin);
-
-  const setupToken = uuid();
-  await PasswordSetupTokenDB.create({
-    id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
-  });
-  const baseUrl = tenantBaseUrl(req, tenant);
-
-  log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email }, 'Platform admin created a company');
-  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}` });
+  log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email, clonedFrom: template?.slug || null }, 'Platform admin created a company');
+  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}`, clonedFrom: template ? { id: template.id, name: template.name } : null });
 });
 
 app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) => {
@@ -860,6 +1317,136 @@ app.put('/api/platform/tenants/:id/allow-duplicate-items', platformAuth, async (
   const value = !!req.body.allowDuplicateItems;
   await TenantDB.update({ id: tenant.id }, { allowDuplicateItems: value });
   res.json({ ok: true, allowDuplicateItems: value });
+});
+app.put('/api/platform/tenants/:id/email-notifications', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.emailNotificationsEnabled;
+  await TenantDB.update({ id: tenant.id }, { emailNotificationsEnabled: value });
+  res.json({ ok: true, emailNotificationsEnabled: value });
+});
+app.put('/api/platform/tenants/:id/order-statuses', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const raw = Array.isArray(req.body.orderStatuses) ? req.body.orderStatuses : [];
+  const cleaned = raw.map(s => String(s || '').trim().toLowerCase()).filter(Boolean);
+  // 'pending' can't be removed — order creation and the edit-lock logic
+  // are both hardcoded to that exact status name. Always first in the
+  // list regardless of where (or whether) it was submitted.
+  const statuses = ['pending', ...cleaned.filter(s => s !== 'pending')];
+  const deduped = [...new Set(statuses)].slice(0, 20); // sane upper bound, not a real limit anyone should hit
+  await TenantDB.update({ id: tenant.id }, { orderStatuses: deduped });
+  res.json({ ok: true, orderStatuses: deduped });
+});
+app.put('/api/platform/tenants/:id/allow-dual-login', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.allowDualLogin;
+  await TenantDB.update({ id: tenant.id }, { allowDualLogin: value });
+  res.json({ ok: true, allowDualLogin: value });
+});
+app.put('/api/platform/tenants/:id/allow-pdf-download', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.allowPdfDownload;
+  await TenantDB.update({ id: tenant.id }, { allowPdfDownload: value });
+  res.json({ ok: true, allowPdfDownload: value });
+});
+app.put('/api/platform/tenants/:id/hide-builtin-remark', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.hideBuiltInRemark;
+  await TenantDB.update({ id: tenant.id }, { hideBuiltInRemark: value });
+  res.json({ ok: true, hideBuiltInRemark: value });
+});
+// Lean list for the dashboard card builder's "specific exhibition" scope
+// picker — just enough to populate a dropdown, not the full item/order
+// counts GET /api/exhibitions (tenant-side) computes for its own UI.
+app.get('/api/platform/tenants/:id/exhibitions', platformAuth, async (req, res) => {
+  const participants = await ExhibitionParticipantDB.find({ tenantId: req.params.id });
+  const exhibitions = await ExhibitionDB.find({});
+  const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
+  const today = istDateString();
+  const result = participants.map(p => {
+    const ex = byId[p.exhibitionId];
+    if (!ex) return null;
+    const expired = !!(p.validTill && p.validTill < today);
+    return { id: ex.id, name: ex.name, status: (p.closed || expired) ? 'completed' : 'current' };
+  }).filter(Boolean);
+  res.json(result);
+});
+app.put('/api/platform/tenants/:id/dashboard-cards', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  try {
+    const rawCards = Array.isArray(req.body.dashboardCards) ? req.body.dashboardCards : [];
+    const totalableColumns = (tenant.orderViewColumns || []).filter(c => c.showTotal);
+    const fail = (msg) => { throw Object.assign(new Error(msg), { status: 400 }); };
+
+    const dashboardCards = rawCards.slice(0, 20).map((raw, i) => {
+      const label = String(raw?.label || '').trim().slice(0, 60);
+      if (!label) fail(`Card ${i + 1} needs a label`);
+      const scopeType = DASHBOARD_SCOPE_TYPES.includes(raw?.scope?.type) ? raw.scope.type : 'today';
+      const scope = { type: scopeType };
+      if (scopeType === 'exhibition') scope.exhibitionId = String(raw.scope.exhibitionId || '');
+      if (scopeType === 'daterange') { scope.startDate = String(raw.scope.startDate || ''); scope.endDate = String(raw.scope.endDate || ''); }
+      const metrics = (Array.isArray(raw?.metrics) ? raw.metrics : []).slice(0, 6).map((m, mi) => {
+        if (!DASHBOARD_METRIC_TYPES.includes(m?.type)) fail(`Card "${label}", metric ${mi + 1}: invalid type`);
+        const metric = { type: m.type, label: String(m.label || '').trim().slice(0, 40) };
+        if (m.type === 'orderViewColumn') {
+          const col = totalableColumns.find(c => c._id === m.columnId || c.id === m.columnId);
+          if (!col) fail(`Card "${label}": pick a column that has "Show total" on in Order View Layout`);
+          metric.columnId = m.columnId;
+        }
+        return metric;
+      });
+      if (!metrics.length) fail(`Card "${label}" needs at least one metric`);
+      return { id: raw.id || uuid(), label, scope, metrics };
+    });
+
+    await TenantDB.update({ id: tenant.id }, { dashboardCards });
+    res.json({ ok: true, dashboardCards });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.put('/api/platform/tenants/:id/cart-total-config', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  try {
+    const fail = (msg) => { throw Object.assign(new Error(msg), { status: 400 }); };
+    // Deliberately scoped to fields already on the Order Form, not every
+    // Item Master field — matches "use the fields already selected to
+    // show on the order" rather than opening up the whole catalog.
+    const orderFields = tenant.orderFields || [];
+    const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
+    const numericOrderFields = orderFields
+      .map(f => ({ ...f, def: fieldDefs.find(d => d.key === f.key) }))
+      .filter(f => f.def && f.def.type === 'number');
+    const numericKeys = new Set(numericOrderFields.map(f => f.key));
+    const allowedFormulaNames = new Set([...numericKeys, 'qty']);
+
+    const raw = Array.isArray(req.body.cartTotalConfig) ? req.body.cartTotalConfig : [];
+    const cartTotalConfig = raw.slice(0, 10).map((m, i) => {
+      if (!['field', 'formula'].includes(m?.type)) fail(`Entry ${i + 1}: invalid type`);
+      const entry = { id: m.id || uuid(), type: m.type, label: String(m.label || '').trim().slice(0, 40) };
+      if (m.type === 'field') {
+        if (!numericKeys.has(m.fieldKey)) fail(`"${m.fieldKey}" isn't a numeric field currently shown on the Order Form`);
+        const f = numericOrderFields.find(f => f.key === m.fieldKey);
+        entry.fieldKey = m.fieldKey; entry.unit = f.def.unit || ''; entry.decimals = f.def.decimals ?? 2;
+        if (!entry.label) entry.label = f.label || f.def.label || m.fieldKey;
+      } else {
+        const formula = String(m.formula || '').trim();
+        const check = validateFormula(formula, allowedFormulaNames);
+        if (!check.ok) fail(check.error);
+        entry.formula = formula; entry.unit = String(m.unit || '').trim().slice(0, 10);
+        entry.decimals = Math.min(Math.max(Number(m.decimals) || 2, 0), 6);
+        if (!entry.label) entry.label = 'Amount';
+      }
+      return entry;
+    });
+
+    await TenantDB.update({ id: tenant.id }, { cartTotalConfig });
+    res.json({ ok: true, cartTotalConfig });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.put('/api/platform/tenants/:id/permissions', platformAuth, async (req, res) => {
@@ -915,8 +1502,7 @@ app.put('/api/platform/tenants/:id/variants-config', platformAuth, async (req, r
         let key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `category_${i}`;
         while (usedKeys.has(key)) key = key + '_2'; // two categories reducing to the same key (e.g. "Size" and "size!") — keep both, just disambiguate
         usedKeys.add(key);
-        const values = Array.isArray(c.values) ? [...new Set(c.values.map(v => String(v).trim()).filter(Boolean))] : [];
-        return { key, label, values };
+        return { key, label };
       });
     }
   } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
@@ -975,11 +1561,21 @@ app.delete('/api/platform/tenants/:id', platformAuth, async (req, res) => {
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
 
   const tenantId = tenant.id;
+  // Associated-data cleanup is best-effort — logged if any of it fails,
+  // but never allowed to block the tenant record itself from being
+  // removed below. Previously this Promise.all had no error handling at
+  // all, and sat before the tenant removal — meaning any single failure
+  // here (one bad record, a transient DB hiccup, anything) aborted the
+  // whole request before ever reaching the actual deletion, leaving the
+  // company — and its slug — still fully present despite the "Company
+  // deleted" confirmation, exactly the "slug still blocked" symptom this
+  // is fixing.
   await Promise.all([
     UserDB.remove({ tenantId }), FieldDefDB.remove({ tenantId }), ItemDB.remove({ tenantId }),
     PartyDB.remove({ tenantId }), OrderDB.remove({ tenantId }), ExhibitionParticipantDB.remove({ tenantId }),
     AuditLogDB.remove({ tenantId }), ImageSetDB.remove({ tenantId }), PasswordSetupTokenDB.remove({ tenantId }),
-  ]);
+    ReportDefDB.remove({ tenantId }),
+  ]).catch(err => log.error({ err, tenantId }, 'Some associated data failed to clean up during company deletion — tenant record is still being removed regardless'));
   await deleteTenantFiles(tenantId);
   await TenantDB.remove({ id: tenantId });
 
@@ -1072,9 +1668,15 @@ app.get('/api/platform/exhibitions/:id/participants', platformAuth, async (req, 
   const participants = await ExhibitionParticipantDB.find({ exhibitionId: req.params.id });
   const tenants = await TenantDB.find({});
   const tenantById = {}; tenants.forEach(t => { tenantById[t.id] = t; });
+  // One query for every participant's item count, not one query per
+  // participant — grouped in JS since exhibitionId + active is the only
+  // filter that's actually shared across all of them.
+  const allItemsInExhibition = await ItemDB.find({ exhibitionId: req.params.id, active: true });
+  const itemCountByTenant = {};
+  allItemsInExhibition.forEach(it => { itemCountByTenant[it.tenantId] = (itemCountByTenant[it.tenantId] || 0) + 1; });
   const result = participants.map(p => {
     const t = tenantById[p.tenantId];
-    return { participantId: p.id, tenantId: p.tenantId, tenantName: t?.name || '(deleted company)', natureOfBusiness: t?.natureOfBusiness || '', validTill: p.validTill, addedAt: p.addedAt };
+    return { participantId: p.id, tenantId: p.tenantId, tenantName: t?.name || '(deleted company)', natureOfBusiness: t?.natureOfBusiness || '', validTill: p.validTill, maxItems: p.maxItems ?? null, itemCount: itemCountByTenant[p.tenantId] || 0, addedAt: p.addedAt };
   });
   result.sort((a, b) => a.tenantName.localeCompare(b.tenantName));
   res.json(result);
@@ -1099,7 +1701,14 @@ app.post('/api/platform/exhibitions/:id/participants', platformAuth, async (req,
   res.json({ ok: true, added, skipped: tenantIds.length - added });
 });
 app.put('/api/platform/exhibitions/:id/participants/:tenantId', platformAuth, async (req, res) => {
-  await ExhibitionParticipantDB.update({ exhibitionId: req.params.id, tenantId: req.params.tenantId }, { validTill: req.body.validTill || '' });
+  const update = {};
+  if ('validTill' in req.body) update.validTill = req.body.validTill || '';
+  if ('maxItems' in req.body) {
+    const maxItems = req.body.maxItems === '' || req.body.maxItems === null ? null : Number(req.body.maxItems);
+    if (maxItems !== null && (!Number.isFinite(maxItems) || maxItems < 0)) return res.status(400).json({ error: 'Invalid item limit' });
+    update.maxItems = maxItems;
+  }
+  await ExhibitionParticipantDB.update({ exhibitionId: req.params.id, tenantId: req.params.tenantId }, update);
   res.json({ ok: true });
 });
 app.delete('/api/platform/exhibitions/:id/participants/:tenantId', platformAuth, async (req, res) => {
@@ -1136,11 +1745,6 @@ app.put('/api/platform/tenants/:id/order-fields', platformAuth, async (req, res)
   const result = await saveOrderFieldsForTenant(tenant.id, req.body.orderFields, req.body.showImages);
   res.json({ ok: true, ...result });
 });
-app.get('/api/platform/tenants/:id/reports', platformAuth, async (req, res) => {
-  const tenant = await TenantDB.findOne({ id: req.params.id });
-  if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  res.json(await getReportsForTenant(tenant.id));
-});
 app.put('/api/platform/tenants/:id/order-custom-fields', platformAuth, async (req, res) => {
   try { res.json({ ok: true, fields: await saveOrderCustomFieldsForTenant(req.params.id, req.body.fields) }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
@@ -1154,7 +1758,7 @@ app.put('/api/platform/tenants/:id/order-view-columns', platformAuth, async (req
 app.put('/api/platform/tenants/:id/footer', platformAuth, async (req, res) => {
   const tenant = await TenantDB.findOne({ id: req.params.id });
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
-  res.json({ ok: true, footer: await saveFooterForTenant(tenant.id, req.body) });
+  res.json({ ok: true, footer: await saveFooterForTenant(tenant.id, req.body, { isPlatform: true }) });
 });
 app.post('/api/platform/tenants/:id/logo', platformAuth, (req, res) => {
   const uploader = makeUploader(`exo/${req.params.id}/logo`, path.join('logos', req.params.id));
@@ -1186,6 +1790,28 @@ app.get('/api/platform-info', async (req, res) => {
   const settings = await PlatformSettingsDB.findOne({ id: 'singleton' });
   res.json({ logoUrl: settings?.logoUrl || '' });
 });
+// Platform-admin-only visibility into whether order-notification emails
+// are actually wired up. This is a platform-wide switch (one BREVO_API_KEY
+// for the whole app), not per-company — so this deliberately isn't exposed
+// anywhere in a company admin's own Settings.
+app.get('/api/platform/email-status', platformAuth, (req, res) => {
+  res.json({ enabled: useEmail, senderEmail: useEmail ? BREVO_SENDER_EMAIL : null, senderName: useEmail ? BREVO_SENDER_NAME : null });
+});
+// Sends a real test email to the platform admin's own address, so "is this
+// actually working" can be answered by checking an inbox instead of
+// digging through Render logs or Brevo's dashboard.
+app.post('/api/platform/email-test', platformAuth, async (req, res) => {
+  if (!useEmail) return res.status(400).json({ error: 'BREVO_API_KEY is not set — nothing to test yet.' });
+  const result = await sendEmail({
+    to: req.platformAdmin.email, toName: req.platformAdmin.name,
+    subject: 'Expo Orders — test email',
+    html: `<p>This is a test email from Expo Orders' platform admin dashboard.</p>
+      <p>Sent from <b>${escHtml(BREVO_SENDER_NAME)}</b> &lt;${escHtml(BREVO_SENDER_EMAIL)}&gt; at ${new Date().toLocaleString()}.</p>
+      <p>If you're reading this, order-notification emails are configured correctly.</p>`,
+  });
+  if (!result.ok) return res.status(502).json({ error: 'Brevo rejected the send — check Render logs for the exact error, or Brevo\u2019s own Statistics > Email > Logs.' });
+  res.json({ ok: true, sentTo: req.platformAdmin.email });
+});
 // Lets the platform admin preview exactly what a company's current Item
 // Master field structure produces as a downloadable template — useful right
 // after setting up fields, to confirm it looks right before handing
@@ -1195,7 +1821,7 @@ app.get('/api/platform/tenants/:id/items/template', platformAuth, async (req, re
   if (!tenant) return res.status(404).json({ error: 'Company not found' });
   const fieldDefs = await FieldDefDB.find({ tenantId: tenant.id, active: true });
   const headers = fieldDefs.map(fieldHeaderLabel);
-  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`) : [];
+  const categoryHeaders = tenant.enableVariants ? (tenant.variantCategories || []).map(c => `${c.label} (comma-separated) *`) : [];
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
   ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
@@ -1209,17 +1835,17 @@ app.get('/api/platform/tenants/:id/items/template', platformAuth, async (req, re
 // ── PASSWORD SETUP (public, token-based — for new company admins) ───────────
 app.get('/api/auth/setup-token/:token', async (req, res) => {
   const entry = await PasswordSetupTokenDB.findOne({ token: req.params.token });
-  if (!entry || entry.used || new Date(entry.expiresAt) < new Date()) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
+  if (!entry || entry.used || new Date(entry.expiresAt) < new Date()) return res.status(400).json({ error: 'This link is invalid or has expired.' });
   const user = await UserDB.findOne({ id: entry.userId });
   const tenant = await TenantDB.findOne({ id: entry.tenantId });
-  if (!user || !tenant) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
-  res.json({ name: user.name, companyName: tenant.name, companySlug: tenant.slug });
+  if (!user || !tenant) return res.status(400).json({ error: 'This link is invalid or has expired.' });
+  res.json({ name: user.name, companyName: tenant.name, companySlug: tenant.slug, role: user.role, purpose: entry.purpose || 'setup' });
 });
 app.post('/api/auth/set-password', loginLimiter, async (req, res) => {
   const { token, password } = req.body;
   if (!password || password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   const entry = await PasswordSetupTokenDB.findOne({ token });
-  if (!entry || entry.used || new Date(entry.expiresAt) < new Date()) return res.status(400).json({ error: 'This setup link is invalid or has expired.' });
+  if (!entry || entry.used || new Date(entry.expiresAt) < new Date()) return res.status(400).json({ error: 'This link is invalid or has expired.' });
   await UserDB.update({ id: entry.userId }, { password: bcrypt.hashSync(password, 10) });
   await PasswordSetupTokenDB.update({ id: entry.id }, { used: true });
   log.info({ userId: entry.userId, tenantId: entry.tenantId }, 'Password set via setup link');
@@ -1236,18 +1862,41 @@ app.post('/api/companies/register', async (req, res) => {
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
 app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
-  const { loginId, password } = req.body;
+  const { loginId, password, confirmDualLogin } = req.body;
   if (!loginId || !password) return res.status(400).json({ error: 'Login ID and password are required' });
   const user = await UserDB.findOne({ tenantId: req.tenant.id, loginId: String(loginId).toLowerCase() });
   if (!user || !user.active || !bcrypt.compareSync(password, user.password)) {
     log.warn({ tenant: req.tenant.slug, loginId, ip: req.ip }, 'Failed login attempt');
     return res.status(401).json({ error: 'Invalid login ID or password' });
   }
-  const token = jwt.sign({ id: user.id, tenantId: req.tenant.id, role: user.role, loginId: user.loginId, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
+  // Warn before kicking someone out, rather than doing it silently — but
+  // only after the password's already been checked, so this can't be used
+  // to probe whether an account is currently active without knowing its
+  // password. Skipped entirely if the company has dual-login allowed (see
+  // allowDualLogin), or if the frontend already showed this warning and
+  // the person chose to continue.
+  if (!req.tenant.allowDualLogin && !confirmDualLogin && user.currentSessionId) {
+    return res.json({ needsConfirmation: true, message: 'This account is already signed in somewhere else. Continuing will sign that device out.' });
+  }
+  // A fresh session ID on every login — this is what actually enforces
+  // "one device at a time" for this login. Any token issued before this
+  // moment (from another device) stops working the instant auth() next
+  // checks it, since its embedded sessionId no longer matches.
+  const sessionId = uuid();
+  await UserDB.update({ id: user.id }, { currentSessionId: sessionId });
+  const token = jwt.sign({ id: user.id, tenantId: req.tenant.id, role: user.role, loginId: user.loginId, name: user.name, sessionId }, JWT_SECRET, { expiresIn: '7d' });
   const { password: _pw, ...safeUser } = user;
   req.user = safeUser; // so logAudit can pick up actor info for this request
   logAudit(req, 'auth.login', 'user', user.id);
   res.json({ token, user: safeUser, tenant: req.tenant });
+});
+// Clears the session marker so the NEXT login for this account doesn't
+// wrongly warn "already signed in elsewhere" — without this, that warning
+// would fire after every single login forever, since currentSessionId
+// otherwise only ever gets overwritten, never cleared.
+app.post('/api/auth/logout', resolveTenant, auth, async (req, res) => {
+  await UserDB.update({ id: req.user.id }, { currentSessionId: null });
+  res.json({ ok: true });
 });
 
 // Client self-signup — exhibition buyers create their own login within a company
@@ -1294,13 +1943,26 @@ app.put('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req,
   if (!staffUser) return res.status(404).json({ error: 'Staff member not found' });
   const updates = {};
   ['name', 'phone', 'email', 'active'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
-  if (req.body.newPassword) {
-    if (req.body.newPassword.length < 6) return res.status(400).json({ error: 'Password min 6 characters' });
-    updates.password = bcrypt.hashSync(req.body.newPassword, 10);
-  }
   await UserDB.update({ id: req.params.id }, updates);
   logAudit(req, 'staff.update', 'user', req.params.id, { fields: Object.keys(updates) });
   res.json({ ok: true });
+});
+// Passwords are reset by link only now, not typed directly by the admin —
+// the admin never needs to know or communicate the actual password, and
+// the staff member sets their own via the same set-password.html flow the
+// initial account setup uses. Admin shares the link however they already
+// talk to their staff (WhatsApp, etc.) — nothing here sends anything itself.
+app.post('/api/staff/:id/reset-link', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const staffUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'staff' });
+  if (!staffUser) return res.status(404).json({ error: 'Staff member not found' });
+  const resetLink = await createPasswordResetLink(staffUser, req.tenant, req);
+  logAudit(req, 'staff.password_reset_link_generated', 'user', staffUser.id);
+  res.json({ ok: true, resetLink });
+});
+app.get('/api/staff/:id/login-activity', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const staffUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'staff' });
+  if (!staffUser) return res.status(404).json({ error: 'Staff member not found' });
+  res.json(await getLoginActivity(req.tenant.id, staffUser.id));
 });
 
 app.delete('/api/staff/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
@@ -1340,13 +2002,21 @@ app.put('/api/clients/:id', resolveTenant, auth, requireRole('admin'), async (re
   if (!clientUser) return res.status(404).json({ error: 'Buyer login not found' });
   const updates = {};
   ['name', 'phone', 'email', 'active'].forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
-  if (req.body.newPassword) {
-    if (req.body.newPassword.length < 6) return res.status(400).json({ error: 'Password min 6 characters' });
-    updates.password = bcrypt.hashSync(req.body.newPassword, 10);
-  }
   await UserDB.update({ id: req.params.id }, updates);
   logAudit(req, 'client.update', 'user', req.params.id, { fields: Object.keys(updates) });
   res.json({ ok: true });
+});
+app.post('/api/clients/:id/reset-link', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const clientUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });
+  if (!clientUser) return res.status(404).json({ error: 'Buyer login not found' });
+  const resetLink = await createPasswordResetLink(clientUser, req.tenant, req);
+  logAudit(req, 'client.password_reset_link_generated', 'user', clientUser.id);
+  res.json({ ok: true, resetLink });
+});
+app.get('/api/clients/:id/login-activity', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const clientUser = await UserDB.findOne({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });
+  if (!clientUser) return res.status(404).json({ error: 'Buyer login not found' });
+  res.json(await getLoginActivity(req.tenant.id, clientUser.id));
 });
 app.delete('/api/clients/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });
@@ -1462,7 +2132,7 @@ function validateFormula(expr, allowedNames) {
   const used = new Set();
   parsed.traverse(node => { if (node.isSymbolNode) used.add(node.name); });
   const unknown = [...used].filter(n => !allowedNames.has(n));
-  if (unknown.length) return { ok: false, error: `Formula uses unknown field(s): ${unknown.join(', ')}` };
+  if (unknown.length) return { ok: false, error: `Formula uses unknown field(s): ${unknown.map(n => JSON.stringify(n)).join(', ')}` };
   return { ok: true };
 }
 
@@ -1525,6 +2195,9 @@ async function saveOrderViewColumnsForTenant(tenant, list, headerFields, footerF
       if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
       col.formula = formula;
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+      col.unit = String(raw.unit || '').trim().slice(0, 10);
+      const decimalsRaw = raw.decimals === undefined || raw.decimals === null || raw.decimals === '' ? 2 : Number(raw.decimals);
+      col.decimals = Math.min(Math.max(Number.isFinite(decimalsRaw) ? decimalsRaw : 2, 0), 6);
       col.showTotal = !!raw.showTotal;
     } else if (raw.type === 'images') {
       col.label = (raw.label || 'Photo').trim().slice(0, 60) || 'Photo';
@@ -1595,12 +2268,40 @@ app.post('/api/companies/logo', resolveTenant, auth, requireRole('admin'), (req,
 // field is stored regardless of its show/hide toggle — a company can type
 // in its GST number to have on file without necessarily publishing it —
 // the public order route below is what actually filters by `show`.
-const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage'];
+// note1/note2 are free-text lines a company admin can fill in for anything
+// not covered by the structured fields (terms, a delivery note, etc.) —
+// unlike every other field here, their show/hide toggle is platform-admin
+// only: the client can write the text, but AuroCircle decides whether it
+// actually goes live on the public link.
+// Default cards for any company that's never used the dashboard card
+// builder (tenant.dashboardCards missing or empty) — matches the original
+// fixed 3 this feature started as, so nobody's dashboard goes blank just
+// because they haven't touched the builder yet. Platform admin can freely
+// add/edit/remove from here once they do.
+const DEFAULT_DASHBOARD_CARDS = [
+  { id: 'default-today', label: 'Orders today', scope: { type: 'today' }, metrics: [{ type: 'orderCount', label: 'Orders' }] },
+  { id: 'default-ongoing', label: 'Orders in ongoing exhibitions', scope: { type: 'ongoing' }, metrics: [{ type: 'orderCount', label: 'Orders' }] },
+  { id: 'default-pending', label: 'Pending confirmation', scope: { type: 'ongoing' }, metrics: [{ type: 'pending', label: 'Pending' }] },
+];
+// 'orderViewColumn' replaces the old separate 'field'/'formula' metric
+// types — instead of re-typing a formula in a second place, this
+// references a column that already exists in Order View Layout (and
+// already has "Show total" on there), reusing its formula/fieldKey/
+// unit/decimals exactly as configured. One source of truth for "what's
+// Amount, and how is it calculated" instead of two.
+const DASHBOARD_METRIC_TYPES = ['orderCount', 'qty', 'pending', 'orderViewColumn'];
+const DASHBOARD_SCOPE_TYPES = ['today', 'ongoing', 'exhibition', 'daterange'];
+const FOOTER_TEXT_FIELDS = ['address', 'gstNumber', 'whatsappNumber', 'instagram', 'facebook', 'twitter', 'youtube', 'website', 'whatsappMessage', 'note1', 'note2'];
 const FOOTER_SHOW_KEYS = ['logo', ...FOOTER_TEXT_FIELDS];
-async function saveFooterForTenant(tenantId, body) {
+const PLATFORM_ONLY_SHOW_KEYS = ['note1', 'note2'];
+async function saveFooterForTenant(tenantId, body, { isPlatform = false } = {}) {
+  const existing = await TenantDB.findOne({ id: tenantId });
+  const existingShow = existing?.footer?.show || {};
   const footer = { show: {} };
   for (const key of FOOTER_TEXT_FIELDS) footer[key] = String(body[key] || '').trim().slice(0, 300);
-  for (const key of FOOTER_SHOW_KEYS) footer.show[key] = !!body.show?.[key];
+  for (const key of FOOTER_SHOW_KEYS) {
+    footer.show[key] = (!isPlatform && PLATFORM_ONLY_SHOW_KEYS.includes(key)) ? !!existingShow[key] : !!body.show?.[key];
+  }
   await TenantDB.update({ id: tenantId }, { footer });
   return footer;
 }
@@ -1757,6 +2458,21 @@ app.get('/api/items/scan/:code', resolveTenant, auth, async (req, res) => {
 // the tenant's field defs actually has a value. Unlike the scanner-key
 // (Unique Barcode) uniqueness check above, this has nothing to do with
 // duplicates — Item Name is required but duplicate names are fine.
+// Checks the item cap for this company's participation in this specific
+// exhibition (see maxItems on ExhibitionParticipant) — not a flat
+// per-company limit, since different shows can have different caps.
+// Returns an error message string if the limit's been reached, or null
+// if there's room (or no limit set, or no exhibition to check against).
+async function checkItemLimit(tenant, exhibitionId) {
+  if (!exhibitionId) return null;
+  const participant = await ExhibitionParticipantDB.findOne({ tenantId: tenant.id, exhibitionId });
+  if (!participant || participant.maxItems == null) return null;
+  const count = await ItemDB.count({ tenantId: tenant.id, exhibitionId, active: true });
+  if (count >= participant.maxItems) {
+    return `Item limit reached for this exhibition (${participant.maxItems}). Contact ExpoOrders to increase it.`;
+  }
+  return null;
+}
 function validateRequiredFields(fieldDefs, fields) {
   for (const def of fieldDefs) {
     if (def.required && !String(fields?.[def.key] ?? '').trim()) {
@@ -1767,21 +2483,46 @@ function validateRequiredFields(fieldDefs, fields) {
 }
 
 // Validates a {categoryKey: [values]} map against the tenant's own
-// variantCategories definitions — unknown categories are dropped, and
-// values not in that category's own list are dropped too (silently, for
-// the UI tick-path where this can't happen anyway; Excel import does its
-// own stricter checking with warnings, see importItemsFromExcel).
-function resolveVariantSelections(tenant, rawSelections) {
-  if (!tenant.enableVariants || !rawSelections || typeof rawSelections !== 'object') return {};
-  const out = {};
-  (tenant.variantCategories || []).forEach(cat => {
-    const raw = rawSelections[cat.key];
+// Auto-expands a variant category's value list when a new value shows up
+// in the data, instead of silently dropping it — same idea whether it's a
+// manual item-add API call or a bulk Excel import: categories are meant
+// to grow FROM what's actually typed/imported, not require every value
+// pre-configured up front. Matching against existing values is
+// case/whitespace-insensitive (so "Red" and "red" merge into the same
+// tag), but a genuinely new value is simply accepted and added — a typo
+// becomes a new tag rather than a rejected one, by design (accepted
+// tradeoff for not having to pre-type every value in Settings first).
+// Operates on a plain array of categories, not the tenant object itself,
+// so the same function works for both a single request and a loop across
+// many Excel rows without repeatedly re-reading/re-writing the tenant.
+// Variant values are purely item-wise now — nothing displays or validates
+// against a company-wide value list (the order-taking picker already
+// builds its buttons from each specific item's own variantSelections, not
+// from a shared list), so this just cleans and stores whatever's
+// typed/imported for a category that's actually defined, no matching or
+// expansion needed. Dedup is case-insensitive within one item's own
+// values only (so "Red, red" on the same row collapses to one), not
+// against any other item — a genuinely new spelling on a different item
+// is just its own value, by design (typos are an accepted tradeoff for
+// not needing every value pre-approved anywhere).
+function resolveVariantSelections(categories, rawSelections) {
+  const resolved = {};
+  if (!rawSelections || typeof rawSelections !== 'object') return resolved;
+  const validKeys = new Set(categories.map(c => c.key));
+  Object.keys(rawSelections).forEach(key => {
+    if (!validKeys.has(key)) return;
+    const raw = rawSelections[key];
     if (!Array.isArray(raw)) return;
-    const valueSet = new Set(cat.values);
-    const picked = raw.filter(v => valueSet.has(v));
-    if (picked.length) out[cat.key] = picked;
+    const seen = new Set(), cleaned = [];
+    raw.forEach(v => {
+      const trimmed = String(v ?? '').trim();
+      if (!trimmed || seen.has(trimmed.toLowerCase())) return;
+      seen.add(trimmed.toLowerCase());
+      cleaned.push(trimmed);
+    });
+    if (cleaned.length) resolved[key] = cleaned;
   });
-  return out;
+  return resolved;
 }
 // Tags are required, same as the fixed Barcode/Item Name fields — every
 // category the company has defined needs at least one value ticked.
@@ -1807,11 +2548,13 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   // items actually start getting assigned to real exhibitions.
   if (scannerCode && await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId: exhibitionId || '', scannerCode, active: true }))
     return res.status(400).json({ error: `An item with scanner code "${scannerCode}" already exists${exhibitionId ? ' in this exhibition' : ''}` });
+  const limitErr = await checkItemLimit(req.tenant, exhibitionId || '');
+  if (limitErr) return res.status(400).json({ error: limitErr });
   const imageCode = String(fields.imageCode || '').trim();
   // Variant selections only apply if this company has the feature turned
   // on — silently ignored otherwise, so a jewelry company's item payload
   // (which will never include these) behaves identically to before.
-  const variantSelections = resolveVariantSelections(req.tenant, req.body.variantSelections);
+  const variantSelections = req.tenant.enableVariants ? resolveVariantSelections(req.tenant.variantCategories || [], req.body.variantSelections) : {};
   const variantErr = validateVariantSelectionsComplete(req.tenant, variantSelections);
   if (variantErr) return res.status(400).json({ error: variantErr });
   const item = {
@@ -1842,17 +2585,31 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     if (newCode !== oldCode) updates.images = newCode ? await getImagesForCode(req.tenant.id, updates.fields.imageCode) : [];
   }
   if (req.tenant.enableVariants && req.body.variantSelections) {
-    const resolved = resolveVariantSelections(req.tenant, req.body.variantSelections);
+    const resolved = resolveVariantSelections(req.tenant.variantCategories || [], req.body.variantSelections);
     const variantErr = validateVariantSelectionsComplete(req.tenant, resolved);
     if (variantErr) return res.status(400).json({ error: variantErr });
     updates.variantSelections = resolved;
   }
   await ItemDB.update({ id: req.params.id }, updates);
+  if (req.body.fields) {
+    const oldCode = String(item.fields?.imageCode || '').trim();
+    const newCode = String(updates.fields?.imageCode || '').trim();
+    if (oldCode && oldCode.toLowerCase() !== newCode.toLowerCase()) {
+      // Awaited, not fire-and-forget — if this ran in the background,
+      // creating/editing another item with the old code before cleanup
+      // finished would make it look "still in use" and the stale images
+      // would never get deleted, then get silently inherited by whatever
+      // new item reuses that code next.
+      await cleanupImageCodeIfOrphaned(req.tenant.id, oldCode).catch(err => log.error({ err }, 'Image cleanup failed after Image Code change'));
+    }
+  }
   res.json({ ok: true });
 });
 
 app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const item = await ItemDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   await ItemDB.remove({ id: req.params.id, tenantId: req.tenant.id });
+  if (item) await cleanupImageCodeIfOrphaned(req.tenant.id, item.fields?.imageCode).catch(err => log.error({ err }, 'Image cleanup failed after item delete'));
   logAudit(req, 'item.delete', 'item', req.params.id);
   res.json({ ok: true });
 });
@@ -1860,9 +2617,15 @@ app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), as
   const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.filter(Boolean))] : [];
   if (!ids.length) return res.status(400).json({ error: 'No items selected' });
   if (ids.length > 500) return res.status(400).json({ error: 'Too many at once — delete in smaller batches (max 500)' });
+  const items = await ItemDB.find({ tenantId: req.tenant.id, id: { $in: ids } }).catch(() => []);
+  // Fallback for the lowdb path, whose query object can't express $in —
+  // fetch everything for this tenant and filter in JS instead.
+  const itemsForCleanup = items.length ? items : (await ItemDB.find({ tenantId: req.tenant.id })).filter(it => ids.includes(it.id));
+  const imageCodes = [...new Set(itemsForCleanup.map(it => it.fields?.imageCode).filter(Boolean))];
   for (const id of ids) {
     await ItemDB.remove({ id, tenantId: req.tenant.id });
   }
+  await Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after bulk delete'));
   logAudit(req, 'item.bulk_delete', 'item', ids.length, { count: ids.length, ids });
   res.json({ ok: true, deleted: ids.length });
 });
@@ -1872,9 +2635,32 @@ app.post('/api/items/delete-all', resolveTenant, auth, requireRole('admin'), asy
   const q = { tenantId: req.tenant.id };
   if (req.body.exhibitionId) q.exhibitionId = req.body.exhibitionId;
   const existing = await ItemDB.find(q);
+  const imageCodes = [...new Set(existing.map(it => it.fields?.imageCode).filter(Boolean))];
   await ItemDB.remove(q);
+  await Promise.all(imageCodes.map(code => cleanupImageCodeIfOrphaned(req.tenant.id, code))).catch(err => log.error({ err }, 'Image cleanup failed after delete-all'));
   logAudit(req, 'item.delete_all', 'item', existing.length, { count: existing.length, exhibitionId: req.body.exhibitionId || null });
   res.json({ ok: true, deleted: existing.length });
+});
+// Self-heal route — sweeps every stored Image Code for this company and
+// cleans up any that are orphaned (no active item actually uses them
+// anymore) but never got cleaned up properly. Exists specifically to fix
+// the aftermath of a race condition in the delete routes above (now
+// fixed) where deleting items and then quickly re-creating new ones with
+// the same Image Code could leave stale images behind that got wrongly
+// "inherited" by the new items. Safe to run anytime — it only touches
+// Image Codes with zero current item references.
+app.post('/api/items/cleanup-orphaned-images', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const allSets = await ImageSetDB.find({ tenantId: req.tenant.id });
+  let cleaned = 0;
+  for (const set of allSets) {
+    const stillUsed = await findItemsByImageCode(req.tenant.id, set.imageCode);
+    if (stillUsed.length) continue;
+    await Promise.all((set.images || []).map(deleteStoredImage));
+    await ImageSetDB.remove({ id: set.id });
+    cleaned++;
+  }
+  logAudit(req, 'items.cleanup_orphaned_images', 'imageset', cleaned, { cleaned });
+  res.json({ ok: true, cleaned, checked: allSets.length });
 });
 
 // Photos are named from the item's Image Code (see makeItemImageUploader) —
@@ -1911,7 +2697,9 @@ app.delete('/api/items/:id/images/:index', resolveTenant, auth, requireRole('adm
   if (!imageCode) return res.status(404).json({ error: 'This item has no Image Code set' });
   const idx = Number(req.params.index);
   const current = await getImagesForCode(req.tenant.id, imageCode);
+  const removedUrl = current[idx];
   const images = await applyImagesForCode(req.tenant.id, imageCode, current.filter((_, i) => i !== idx));
+  if (removedUrl) deleteStoredImage(removedUrl).catch(err => log.error({ err }, 'Image file cleanup failed after single-image delete'));
   res.json({ ok: true, images });
 });
 
@@ -1961,35 +2749,88 @@ app.post('/api/items/bulk-images', resolveTenant, auth, requireRole('admin', 'st
       (groups[key] ??= []).push({ file, slot, ext });
     });
 
-    let matched = 0, unmatchedCode = 0, full = 0;
+    let added = 0, replaced = 0, unmatchedCode = 0;
+    const fileErrors = [];
     for (const code of Object.keys(groups)) {
       const candidates = groups[code].sort((a, b) => a.slot - b.slot);
-      if (!codesInUse.has(code.toLowerCase())) { unmatchedCode += candidates.length; continue; }
+      if (!codesInUse.has(code.toLowerCase())) {
+        unmatchedCode += candidates.length;
+        candidates.forEach(c => fileErrors.push({ file: c.file.originalname, reason: `No item found with Image Code "${code}"` }));
+        continue;
+      }
 
+      // images stays a plain compact array — every other consumer (item
+      // thumbnails, "X/3 photos" counts, the order-taking cart) already
+      // assumes that shape, so storage format doesn't change. Slot
+      // identity instead comes from parsing each stored URL's own
+      // filename the same way an incoming upload's filename gets parsed
+      // — the slot is encoded right there (…_1.jpg, …_2.jpg), so this
+      // correctly finds "what's currently in slot N" regardless of the
+      // array's order, and keeps working across separate upload sessions,
+      // not just within one batch.
       const images = await getImagesForCode(req.tenant.id, code);
+      const urlBySlot = {};
+      images.forEach(url => { urlBySlot[parseImageFilename(url.split('/').pop()).slot] = url; });
+
       for (const c of candidates) {
-        if (images.length >= 3) { full++; continue; }
+        const slot = c.slot; // 0, 1, or 2 — parseImageFilename caps it there already
         const safeCode = code.replace(/[^A-Za-z0-9_-]/g, '_');
-        const filename = `${safeCode}${IMAGE_SLOT_SUFFIXES[images.length]}${c.ext}`;
+        const filename = `${safeCode}${IMAGE_SLOT_SUFFIXES[slot]}${c.ext}`;
+        const existingUrl = urlBySlot[slot];
+        let newUrl;
         if (useR2) {
           const key = `exo/${req.tenant.id}/items/${filename}`;
           await s3Client.send(new S3PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: c.file.buffer, ContentType: c.file.mimetype }));
-          images.push(`${R2_PUBLIC_URL}/${key}`);
+          newUrl = `${R2_PUBLIC_URL}/${key}`;
         } else {
           const dest = path.join(__dirname, 'uploads', 'images', req.tenant.id);
           fs.mkdirSync(dest, { recursive: true });
           fs.writeFileSync(path.join(dest, filename), c.file.buffer);
-          images.push(`/uploads/images/${req.tenant.id}/${filename}`);
+          newUrl = `/uploads/images/${req.tenant.id}/${filename}`;
         }
-        matched++;
+        if (existingUrl) {
+          replaced++;
+          const idx = images.indexOf(existingUrl);
+          if (idx !== -1) images[idx] = newUrl; else images.push(newUrl);
+          // Same filename+extension means the write above already
+          // silently overwrote the old file in place on disk/R2 — nothing
+          // extra to delete. Different extension (jpg replaced by png,
+          // say) leaves the old file at a genuinely different path/key,
+          // now orphaned, needing an explicit cleanup.
+          if (existingUrl !== newUrl) deleteStoredImage(existingUrl).catch(err => log.error({ err }, 'Old photo cleanup failed after replace'));
+        } else {
+          images.push(newUrl);
+          added++;
+        }
+        urlBySlot[slot] = newUrl; // keep in sync for any later file in this same batch targeting the same slot
       }
       // Cascades to every item sharing this Image Code, not just one —
       // this was the actual bug: previously only the last-seen item per
       // code got the photos, silently dropping any others sharing it.
       await applyImagesForCode(req.tenant.id, code, images);
     }
-    res.json({ ok: true, totalFiles: req.files.length, matched, unmatchedCode, full });
+    res.json({ ok: true, totalFiles: req.files.length, added, replaced, unmatchedCode, fileErrors });
   });
+});
+// Turns either kind of bulk-operation error list (item import row errors,
+// or bulk photo file errors) into a downloadable Excel — POST rather than
+// GET because the error data only exists in the browser, from the JSON
+// response of the import/upload that just ran; nothing's stored
+// server-side to fetch by reference.
+app.post('/api/items/error-report/excel', resolveTenant, auth, requireRole('admin', 'staff'), (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ error: 'No errors to export' });
+  const isImportErrors = 'row' in (rows[0] || {});
+  const headers = isImportErrors ? ['Row', 'Scan Code', 'Reason'] : ['File', 'Reason'];
+  const dataRows = isImportErrors ? rows.map(r => [r.row, r.scannerCode || '', r.reason]) : rows.map(r => [r.file, r.reason]);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+  ws['!cols'] = headers.map(() => ({ wch: 28 }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Errors');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="import-errors.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
 });
 
 // ── EXCEL TEMPLATE / BULK IMPORT / EXPORT ─────────────────────────────────────
@@ -2025,7 +2866,7 @@ app.get('/api/items/template/excel', resolveTenant, auth, async (req, res) => {
     // One column per variant category (Color, Size, whatever's defined) —
     // comma-separated, required just like the fixed fields are, so bulk
     // imports can't silently skip past them the way they were before.
-    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`) : [];
+    const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated) *`) : [];
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
     ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
@@ -2042,7 +2883,7 @@ app.get('/api/items/export/excel', resolveTenant, auth, requireRole('admin', 'st
     const fieldDefs = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
     const headers = fieldDefs.map(fieldHeaderLabel);
     const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
-    const categoryHeaders = categories.map(c => `${c.label} (comma-separated: ${c.values.join(', ')}) *`);
+    const categoryHeaders = categories.map(c => `${c.label} (comma-separated) *`);
     const q = { tenantId: req.tenant.id, active: true };
     if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
     const items = await ItemDB.find(q);
@@ -2086,8 +2927,16 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
       const labelToCategory = {};
       categories.forEach(c => { labelToCategory[c.label.trim().toLowerCase()] = c; });
 
-      let created = 0, updated = 0, skipped = 0, tagWarnings = [];
+      let created = 0, updated = 0, skipped = 0, rowErrors = [];
+      let rowNum = 1; // header is row 1 in the spreadsheet, first data row is 2
+      // Fetched once, not re-queried per row — a running in-memory count is
+      // enough to know when a batch of creates crosses the cap partway
+      // through, without hitting the DB for a fresh count on every row.
+      const participant = await ExhibitionParticipantDB.findOne({ tenantId: req.tenant.id, exhibitionId });
+      const maxItems = participant?.maxItems ?? null;
+      let itemCount = maxItems != null ? await ItemDB.count({ tenantId: req.tenant.id, exhibitionId, active: true }) : 0;
       for (const row of rows) {
+        rowNum++;
         const rawFields = {};
         Object.keys(row).forEach(header => {
           const key = labelToKey[baseLabelFromHeader(header)];
@@ -2095,27 +2944,20 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         });
         const fields = normalizeFieldValues(fieldDefs, rawFields);
         const scannerCode = scannerField ? String(fields[scannerField.key] || '').trim() : '';
-        if (!scannerCode) { skipped++; continue; }
-        if (validateRequiredFields(fieldDefs, fields)) { skipped++; continue; }
+        if (!scannerCode) { skipped++; rowErrors.push({ row: rowNum, scannerCode: '', reason: `Missing ${scannerField?.label || 'scan code'} — required to identify the item` }); continue; }
+        const missingErr = validateRequiredFields(fieldDefs, fields);
+        if (missingErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: missingErr }); continue; }
 
-        // Match each tag column's comma-separated text against that
-        // category's own value list — case/whitespace-insensitive, same
-        // reasoning as everywhere else typed input meets a fixed list.
-        // Unrecognized values are dropped (not silently accepted as new
-        // values) and reported; a category left with nothing matched
-        // fails the same "required" check the chip UI enforces.
-        const variantSelections = {};
-        let rowHasUnmatched = false;
+        // Each tag column's comma-separated text becomes that category's
+        // selections for this row, trimmed and deduped — no matching
+        // against a stored list, since values are purely item-wise now.
+        const rawSelections = {};
         Object.keys(row).forEach(header => {
           const cat = labelToCategory[baseLabelFromHeader(header)];
           if (!cat || row[header] === '') return;
-          const typed = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
-          const canonicalByLower = {}; cat.values.forEach(v => { canonicalByLower[v.toLowerCase()] = v; });
-          const matched = [], unmatched = [];
-          typed.forEach(v => { const c = canonicalByLower[v.toLowerCase()]; if (c) matched.push(c); else unmatched.push(v); });
-          if (matched.length) variantSelections[cat.key] = [...new Set(matched)];
-          if (unmatched.length) { rowHasUnmatched = true; tagWarnings.push(`"${scannerCode}": ${cat.label} value(s) not recognized — ${unmatched.join(', ')}`); }
+          rawSelections[cat.key] = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
         });
+        const variantSelections = resolveVariantSelections(categories, rawSelections);
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
         // Validated against the MERGED result, not just this row's own tag
         // columns — a row updating only some other field, with the tag
@@ -2125,17 +2967,22 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           ? { ...(existing?.variantSelections || {}), ...variantSelections }
           : {};
         const completenessErr = validateVariantSelectionsComplete(req.tenant, mergedTags);
-        if (completenessErr) { skipped++; tagWarnings.push(`"${scannerCode}": skipped — ${completenessErr}`); continue; }
+        if (completenessErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: `Skipped — ${completenessErr}` }); continue; }
 
         if (existing) {
           await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields }, variantSelections: mergedTags });
           updated++;
         } else {
+          if (maxItems != null && itemCount >= maxItems) {
+            skipped++;
+            rowErrors.push({ row: rowNum, scannerCode, reason: `Skipped — item limit reached for this exhibition (${maxItems})` });
+            continue;
+          }
           await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, variantSelections: mergedTags, images: [], active: true, createdAt: new Date().toISOString() });
-          created++;
+          created++; itemCount++;
         }
       }
-      res.json({ ok: true, created, updated, skipped, total: rows.length, tagWarnings: tagWarnings.slice(0, 20) });
+      res.json({ ok: true, created, updated, skipped, total: rows.length, rowErrors });
     } catch (err) { res.status(500).json({ error: 'Could not read that file — please use the template format. (' + err.message + ')' }); }
   });
 });
@@ -2162,26 +3009,97 @@ function callVisionApi(base64Image) {
     req.end();
   });
 }
+// Curated list of major Indian business hubs. The target market here is
+// India-based trade/jewellery businesses, so checking card text directly
+// against a compact list catches the large majority of real cards without
+// needing a geocoding API call per scan.
+const CARD_OCR_CITIES = [
+  'Mumbai','New Delhi','Delhi','Bengaluru','Bangalore','Hyderabad','Ahmedabad','Chennai',
+  'Kolkata','Surat','Pune','Jaipur','Lucknow','Kanpur','Nagpur','Indore','Thane','Bhopal',
+  'Visakhapatnam','Patna','Vadodara','Ghaziabad','Ludhiana','Agra','Nashik','Faridabad',
+  'Meerut','Rajkot','Kalyan','Vasai','Varanasi','Coimbatore','Jodhpur','Madurai','Raipur',
+  'Kota','Guwahati','Chandigarh','Mysuru','Mysore','Bareilly','Aligarh','Tiruppur','Moradabad',
+  'Jalandhar','Bhubaneswar','Salem','Guntur','Bhavnagar','Dehradun','Kochi','Cochin','Amritsar',
+  'Jamnagar','Ujjain','Noida','Gurugram','Gurgaon','Navi Mumbai','Trichy','Mangaluru','Mangalore',
+];
+const FIRM_SUFFIX_RE = /\b(pvt\.?\s*ltd\.?|private\s+limited|l\.?l\.?p\.?|ltd\.?|limited|&\s?co\.?|&\s?sons|jewell?ers?|jewell?ery|enterprises?|industries|exports?|imports?|international|trading|corporation|corp\.?|group|inc\.?|company|gems?|diamonds?|goldsmiths?|bullion|creations?|designs?)\b/i;
+const DESIGNATION_RE = /\b(proprietor|director|partner|c\.?e\.?o\.?|managing director|owner|manager|founder|chairman|president)\b/i;
+const NAME_PREFIX_RE = /^(mr|mrs|ms|miss|dr)\.?\s+/i;
 function parseCardText(text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const phoneMatch = text.match(/(\+?\d[\d\s-]{8,}\d)/);
+  const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
-  return {
-    firmName: lines[0] || '',
-    contactPerson: lines[1] || '',
-    phone: phoneMatch ? phoneMatch[1].replace(/\s+/g, '') : '',
-    email: emailMatch ? emailMatch[0] : '',
+  const email = emailMatch ? emailMatch[0] : '';
+
+  // Phone: collect every number-like sequence, not just the first match —
+  // cards often have a landline AND a mobile, or two mobiles. Score
+  // candidates instead of blindly taking whichever appears first: an
+  // explicit "+" is the clearest signal (per the original ask), then a
+  // bare "91" prefix, then the Indian-mobile digit pattern (10 digits
+  // starting 6-9). The digit-count filter also drops 6-digit PIN codes
+  // and other short numeric fragments that used to get matched by mistake.
+  const phoneCandidates = [...text.matchAll(/(\+?\d[\d\s\-().]{7,}\d)/g)]
+    .map(m => ({ raw: m[1], digits: m[1].replace(/\D/g, ''), hasPlus: m[1].trim().startsWith('+') }))
+    .filter(p => p.digits.length >= 10 && p.digits.length <= 13);
+  const phoneBest =
+    phoneCandidates.find(p => p.hasPlus) ||
+    phoneCandidates.find(p => p.digits.length === 12 && p.digits.startsWith('91')) ||
+    phoneCandidates.find(p => p.digits.length === 10 && /^[6-9]/.test(p.digits)) ||
+    phoneCandidates[0];
+  const phone = phoneBest ? (phoneBest.hasPlus ? '+' + phoneBest.digits : phoneBest.digits) : '';
+
+  // City: curated list first (fast, reliable for this market), then fall
+  // back to "the word right before a 6-digit PIN code" — how Indian
+  // addresses are almost always formatted when the city itself isn't a
+  // recognized major hub.
+  let city = '';
+  for (const c of CARD_OCR_CITIES) {
+    if (new RegExp('\\b' + c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(text)) { city = c; break; }
+  }
+  if (!city) {
+    const pinMatch = text.match(/([A-Za-z]+)[\s,-]*\d{6}\b/);
+    if (pinMatch) city = pinMatch[1];
+  }
+
+  // Firm name / contact person: classify by keyword, not line position.
+  // A line is a firm-name candidate if it contains a business suffix
+  // (Pvt Ltd, Jewellers, Enterprises, etc); a contact-person candidate if
+  // it carries a title (Mr/Dr) or a designation (Proprietor/Director) —
+  // both far more reliable signals than "whichever line happened to be
+  // first or second" on a card whose layout varies wildly.
+  const isNoiseLine = (line) => {
+    if (email && line.includes(email)) return true;
+    if (/@|www\.|https?:\/\//i.test(line)) return true;
+    if ((line.match(/\d/g) || []).length >= 5) return true; // phone/PIN/address-heavy line
+    return false;
   };
+  const nameLines = rawLines.filter(l => !isNoiseLine(l));
+
+  let firmName = nameLines.find(l => FIRM_SUFFIX_RE.test(l)) || '';
+  const contactRaw = nameLines.find(l => DESIGNATION_RE.test(l) || NAME_PREFIX_RE.test(l)) || '';
+  let contactPerson = contactRaw
+    .replace(NAME_PREFIX_RE, '').replace(DESIGNATION_RE, '')
+    .replace(/[-,|:]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Still nothing? Fall back to position order among whatever's left —
+  // better a rough guess for staff to correct than a blank field (same
+  // "best-effort, staff always reviews" spirit as before), just now
+  // skipping lines already claimed or classified as noise instead of
+  // blindly taking line 1 / line 2 regardless of what they actually are.
+  const leftover = nameLines.filter(l => l !== firmName && l !== contactRaw);
+  if (!firmName) firmName = leftover[0] || nameLines[0] || '';
+  if (!contactPerson) contactPerson = leftover.find(l => l !== firmName) || '';
+
+  return { firmName, contactPerson, phone, email, city };
 }
 async function runVisitingCardOcr(base64Image) {
-  if (!process.env.OCR_API_KEY) return { firmName: '', contactPerson: '', phone: '', email: '' };
+  if (!process.env.OCR_API_KEY) return { firmName: '', contactPerson: '', phone: '', email: '', city: '' };
   try {
     const result = await callVisionApi(base64Image);
     const text = result?.responses?.[0]?.fullTextAnnotation?.text || '';
     return parseCardText(text);
   } catch (e) {
     log.error({ err: e }, 'OCR Vision API call failed');
-    return { firmName: '', contactPerson: '', phone: '', email: '' };
+    return { firmName: '', contactPerson: '', phone: '', email: '', city: '' };
   }
 }
 
@@ -2334,6 +3252,22 @@ app.get('/api/parties/:id', resolveTenant, auth, async (req, res) => {
 // from creation — but a line's own `extra` values (if the staff typed an
 // override, e.g. this sale's actual melting % differs from the item
 // master default) win over the item master default for that field.
+// Order line items deliberately don't store photos — this looks them up
+// fresh from the item's CURRENT state every time an order is displayed,
+// so photos added after an order was placed still show up on it, and a
+// photo swapped out for a better one updates everywhere immediately
+// instead of old orders being stuck with whatever existed at the moment
+// they were created. Fetches the whole tenant's catalog and matches in
+// JS rather than an $in query, since $in isn't supported by the lowdb
+// fallback and this way behaves identically on both storage backends.
+async function attachLiveImages(order) {
+  const itemIds = new Set((order.items || []).map(i => i.itemId).filter(Boolean));
+  if (!itemIds.size) return order;
+  const allItems = await ItemDB.find({ tenantId: order.tenantId });
+  const byId = {}; allItems.forEach(it => { byId[it.id] = it; });
+  order.items = (order.items || []).map(line => ({ ...line, images: byId[line.itemId]?.images || [] }));
+  return order;
+}
 async function buildOrderLines(tenant, items) {
   const orderFields = tenant.orderFields || [];
   const orderKeys = new Set(orderFields.map(f => f.key));
@@ -2372,7 +3306,7 @@ async function buildOrderLines(tenant, items) {
     const baseLabel = item.fields?.itemName || item.fields?.productName || item.scannerCode || item.id;
     lineItems.push({
       itemId: item.id, label: hasTags ? `${baseLabel} (${Object.values(variantTags).join(' / ')})` : baseLabel,
-      scannerCode: item.scannerCode, images: item.images || [],
+      scannerCode: item.scannerCode,
       qty, extra, comment: typeof line.comment === 'string' ? line.comment.trim().slice(0, 500) : '',
       ...(hasTags ? { variantTags } : {}),
     });
@@ -2467,6 +3401,7 @@ app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 
     columnsSnapshot: req.tenant.orderViewColumns || [],
     customFields: normalizeCustomFields(req.tenant.orderCustomFields || [], customFields),
     showImages: req.tenant.orderShowImages !== false,
+    suppressAutoOrderRemark: true,
     shareToken: uuid(), createdAt: new Date().toISOString(),
   };
   await OrderDB.create(order);
@@ -2475,7 +3410,25 @@ app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 
   // or forgotten env var shouldn't silently break every shared order link —
   // tenantBaseUrl falls back to the actual request's host, which is always correct.
   const baseUrl = tenantBaseUrl(req, req.tenant);
+  // Fire-and-forget — never awaited, so a slow/failing email provider can't
+  // delay the response staff are waiting on to hand the buyer their link.
+  sendAdminOrderEmail(req.tenant, order, party, baseUrl).catch(err => log.error({ err }, 'sendAdminOrderEmail failed'));
   res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
+});
+
+// On-demand "Send Email" button — the equivalent of "Send on WhatsApp" but
+// for email. Staff/admin trigger this explicitly per order; nothing here
+// happens automatically.
+app.post('/api/orders/:id/send-email', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  const party = await PartyDB.findOne({ id: order.partyId, tenantId: req.tenant.id });
+  if (!party) return res.status(404).json({ error: 'Buyer not found' });
+  const baseUrl = tenantBaseUrl(req, req.tenant);
+  const result = await sendPartyOrderEmail(req.tenant, order, party, baseUrl);
+  if (!result.ok) return res.status(400).json({ error: result.reason });
+  logAudit(req, 'order.email_sent', 'order', order.id, { to: party.email });
+  res.json({ ok: true });
 });
 
 app.get('/api/orders', resolveTenant, auth, async (req, res) => {
@@ -2489,14 +3442,68 @@ app.get('/api/orders', resolveTenant, auth, async (req, res) => {
     const party = await PartyDB.findOne({ tenantId: req.tenant.id, phone: user.phone });
     q.partyId = party ? party.id : '__none__';
   }
-  const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
-  res.json(orders);
+  let orders = (await OrderDB.find(q)).filter(o => !o.deleted);
+  // Applied after the DB fetch, same as the !o.deleted filter above — a
+  // simple string-prefix match works identically whether running on
+  // Mongoose or the local JSON fallback, unlike trying to express "today"
+  // as part of the DB query object itself.
+  if (req.query.date === 'today') {
+    const today = istDateString();
+    orders = orders.filter(o => istDateString(new Date(o.createdAt)) === today);
+  }
+  // Same tenantBaseUrl() the create route uses — always resolves to the
+  // company's own subdomain regardless of which host (bare domain, www,
+  // or the tenant subdomain itself) the browser loaded this list from.
+  // Without this, a link built client-side from location.host gave an
+  // admin browsing on the bare domain a different link than staff on the
+  // tenant subdomain got, for the exact same order.
+  const baseUrl = tenantBaseUrl(req, req.tenant);
+  res.json(orders.map(o => ({ ...o, shareUrl: `${baseUrl}/order/${o.shareToken}` })));
+});
+
+// Lists soft-deleted orders still inside the 30-day recovery window, and
+// — as a side effect, since there's no scheduled-job infrastructure in
+// this app — permanently purges any that have aged past it. "Lazy purge"
+// piggybacking on a route that's already querying this exact data is
+// simpler than standing up a cron job for something this low-stakes.
+// MUST be declared before /api/orders/:id below — Express matches routes
+// in declaration order, and :id is a wildcard that matches literally any
+// path segment, including the word "deleted". Declared after it (as this
+// was, for a long time), every request here silently got swallowed by the
+// :id route instead, treating "deleted" as if it were an order ID, never
+// finding one, and returning a plain 404 "Order not found" — which is
+// exactly why this whole feature looked broken despite the underlying
+// soft-delete logic being correct all along.
+app.get('/api/orders/deleted', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const allOrdersForTenant = await OrderDB.find({ tenantId: req.tenant.id });
+  const all = allOrdersForTenant.filter(o => o.deleted);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const [recoverable, expired] = [[], []];
+  for (const o of all) (new Date(o.deletedAt || 0).getTime() < cutoff ? expired : recoverable).push(o);
+  await Promise.all(expired.map(o => OrderDB.remove({ id: o.id, tenantId: req.tenant.id })));
+  // Temporary diagnostic — ?debug=1 returns raw counts and a sample of
+  // actual field values instead of just the filtered list, so a mismatch
+  // between "what SHOULD be there" and "what's actually stored" can be
+  // seen directly rather than guessed at from code review alone.
+  if (req.query.debug) {
+    return res.json({
+      tenantId: req.tenant.id,
+      totalOrdersForTenant: allOrdersForTenant.length,
+      countWithDeletedTrue: all.length,
+      countRecoverable: recoverable.length,
+      countJustExpiredAndPurged: expired.length,
+      sampleOfAllOrders: allOrdersForTenant.slice(0, 5).map(o => ({ id: o.id, orderNo: o.orderNo, deleted: o.deleted, deletedType: typeof o.deleted, deletedAt: o.deletedAt })),
+    });
+  }
+  res.json(recoverable.sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt)));
 });
 
 app.get('/api/orders/:id', resolveTenant, auth, async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
-  res.json(order);
+  await attachLiveImages(order);
+  const baseUrl = tenantBaseUrl(req, req.tenant);
+  res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
 });
 
 // Edit an order's items/remark — pending only. Once confirmed or cancelled,
@@ -2530,7 +3537,8 @@ app.put('/api/orders/:id', resolveTenant, auth, requireRole('admin', 'staff'), a
 
 app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const { status } = req.body;
-  if (!['pending', 'confirmed', 'cancelled'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  const allowed = (req.tenant.orderStatuses && req.tenant.orderStatuses.length) ? req.tenant.orderStatuses : ['pending', 'confirmed', 'cancelled'];
+  if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
   const before = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { status });
   logAudit(req, 'order.status_change', 'order', req.params.id, { from: before?.status, to: status });
@@ -2539,12 +3547,37 @@ app.put('/api/orders/:id/status', resolveTenant, auth, requireRole('admin'), asy
 
 // Soft delete — kept in the database for audit/history, just hidden from
 // every normal view (list, reports, the buyer's own share link). Admin-only.
+// Soft delete — recoverable for 30 days via /api/orders/deleted +
+// /api/orders/:id/restore, then permanently purged (see the lazy-purge
+// note on the deleted-orders list route below). Previously this was a
+// permanent, unrecoverable OrderDB.remove() — one accidental click on a
+// live order meant it was gone for good, with no trash to undo from.
 app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  await OrderDB.remove({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, {
+    deleted: true, deletedAt: new Date().toISOString(), deletedByName: req.user.name,
+  });
   logAudit(req, 'order.delete', 'order', req.params.id, { orderNo: order.orderNo });
   res.json({ ok: true });
+});
+app.put('/api/orders/:id/restore', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || !order.deleted) return res.status(404).json({ error: 'Deleted order not found' });
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { deleted: false, deletedAt: null, deletedByName: null });
+  logAudit(req, 'order.restore', 'order', req.params.id, { orderNo: order.orderNo });
+  res.json({ ok: true });
+});
+// Independent of delete/restore and of order status — this only ever
+// touches whether the buyer's own link works, nothing else about the
+// order changes either way.
+app.put('/api/orders/:id/toggle-link', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const order = await OrderDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  const linkActive = !!req.body.linkActive;
+  await OrderDB.update({ id: req.params.id, tenantId: req.tenant.id }, { linkActive });
+  logAudit(req, linkActive ? 'order.link_activated' : 'order.link_deactivated', 'order', req.params.id, { orderNo: order.orderNo });
+  res.json({ ok: true, linkActive });
 });
 
 // Public — no auth, no tenant header required. shareToken is a random uuid so it
@@ -2553,6 +3586,7 @@ app.delete('/api/orders/:id', resolveTenant, auth, requireRole('admin'), async (
 app.get('/api/orders/public/:token', async (req, res) => {
   const order = await OrderDB.findOne({ shareToken: req.params.token });
   if (!order || order.deleted) return res.status(404).json({ error: 'Order not found' });
+  if (order.linkActive === false) return res.status(403).json({ error: 'This order link has been deactivated by the seller.', linkDeactivated: true });
   const tenant = await TenantDB.findOne({ id: order.tenantId });
   // Order View Layout is live, not frozen at order-creation time — unlike
   // orderFieldsSnapshot (which preserves what was actually collected on the
@@ -2599,9 +3633,10 @@ app.get('/api/orders/public/:token', async (req, res) => {
   if (footer.whatsappNumber && rawFooter.whatsappMessage) footer.whatsappMessage = rawFooter.whatsappMessage;
   const showLogo = !!(rawFooter.show?.logo && tenant?.logoUrl);
   const platformSettings = await PlatformSettingsDB.findOne({ id: 'singleton' });
+  await attachLiveImages(order);
   res.json({
     order: { ...order, columnsSnapshot: columns },
-    company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer },
+    company: { name: tenant?.name, logoUrl: showLogo ? tenant.logoUrl : '', footer, allowPdfDownload: !!tenant?.allowPdfDownload },
     platformLogoUrl: platformSettings?.logoUrl || '',
     // Live like the column layout, not frozen at order-creation time — same
     // reasoning: this is a display method AuroCircle chose for the client,
@@ -2620,14 +3655,14 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
   const participants = await ExhibitionParticipantDB.find({ tenantId: req.tenant.id });
   const exhibitions = await ExhibitionDB.find({});
   const byId = {}; exhibitions.forEach(e => { byId[e.id] = e; });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istDateString();
   const [allItems, allOrders] = await Promise.all([
     ItemDB.find({ tenantId: req.tenant.id, active: true }),
     OrderDB.find({ tenantId: req.tenant.id }),
   ]);
   const itemCountByEx = {}, orderCountByEx = {};
   allItems.forEach(i => { if (i.exhibitionId) itemCountByEx[i.exhibitionId] = (itemCountByEx[i.exhibitionId] || 0) + 1; });
-  allOrders.forEach(o => { if (o.exhibitionId) orderCountByEx[o.exhibitionId] = (orderCountByEx[o.exhibitionId] || 0) + 1; });
+  allOrders.filter(o => !o.deleted).forEach(o => { if (o.exhibitionId) orderCountByEx[o.exhibitionId] = (orderCountByEx[o.exhibitionId] || 0) + 1; });
   const result = participants
     .map(p => {
       const ex = byId[p.exhibitionId];
@@ -2696,12 +3731,12 @@ const REPORT_META_COLUMNS = {
     { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
     { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
     { key: 'staff_name', label: 'Staff' }, { key: 'item_code', label: 'Item Code' },
-    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark' },
+    { key: 'item_name', label: 'Item Name' }, { key: 'qty', label: 'Qty' }, { key: 'remark', label: 'Remark (item, falls back to order)' }, { key: 'order_remark', label: 'Order Remark' },
   ],
   order: [
     { key: 'order_no', label: 'Order No' }, { key: 'order_date', label: 'Order Date' }, { key: 'order_status', label: 'Order Status' },
     { key: 'party_name', label: 'Buyer' }, { key: 'party_contact', label: 'Contact Person' }, { key: 'party_phone', label: 'Phone' }, { key: 'party_email', label: 'Email' },
-    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' },
+    { key: 'staff_name', label: 'Staff' }, { key: 'item_count', label: 'Item Count' }, { key: 'remark', label: 'Remark' }, { key: 'order_remark', label: 'Order Remark' },
   ],
 };
 function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields, variantCategories) {
@@ -2739,11 +3774,13 @@ function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields
       if (rowType === 'order' && f.type !== 'number') throw Object.assign(new Error(`"${f.label}" is text, not a number — order-level rows can only total numeric Item Master fields`), { status: 400 });
       col.fieldKey = raw.fieldKey; col.unit = f.unit || ''; col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+      if (f.type === 'number') col.showTotal = !!raw.showTotal;
     } else if (raw.type === 'orderfield') {
       const f = orderFieldByKey[raw.fieldKey];
       if (!f) throw Object.assign(new Error(`"${raw.fieldKey}" isn't one of the Order Details fields`), { status: 400 });
       col.fieldKey = raw.fieldKey; col.decimals = f.type === 'number' ? (f.decimals ?? 2) : undefined;
       col.label = (raw.label || f.label || '').trim().slice(0, 60) || f.label;
+      if (f.type === 'number') col.showTotal = !!raw.showTotal;
     } else { // formula
       const formula = String(raw.formula || '').trim();
       if (!formula) throw Object.assign(new Error('Formula column needs a formula'), { status: 400 });
@@ -2751,6 +3788,7 @@ function validateReportColumns(rawColumns, rowType, fieldDefs, orderCustomFields
       if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
       col.formula = formula;
       col.label = (raw.label || 'Amount').trim().slice(0, 60) || 'Amount';
+      col.showTotal = !!raw.showTotal; // formulas are always numeric
     }
     out.push(col);
   }
@@ -2776,6 +3814,7 @@ function reportItemColumnValue(col, item, order) {
       case 'item_name': return item.label || '';
       case 'qty': return item.qty;
       case 'remark': return item.comment || order.remark || '';
+      case 'order_remark': return order.remark || '';
       default: return '';
     }
   }
@@ -2802,6 +3841,66 @@ function reportItemColumnValue(col, item, order) {
 // order's lines — same "compute per piece, then add the results together"
 // principle used for merged-row formulas and column totals elsewhere,
 // applied here at the whole-order level instead of a merged-item level.
+// Filters an already-fetched, already-deleted-filtered order list down to
+// one card's scope. 'exhibition'/'daterange' fall back to "every order" if
+// their own required detail (exhibitionId / start+end dates) is missing —
+// safer than silently showing zero for a half-configured card.
+function ordersForScope(orders, scope, today, currentExhibitionIds) {
+  switch (scope?.type) {
+    case 'today': return orders.filter(o => istDateString(new Date(o.createdAt)) === today);
+    case 'ongoing': return orders.filter(o => currentExhibitionIds.has(o.exhibitionId));
+    case 'exhibition': return scope.exhibitionId ? orders.filter(o => o.exhibitionId === scope.exhibitionId) : orders;
+    case 'daterange': {
+      if (!scope.startDate || !scope.endDate) return orders;
+      return orders.filter(o => { const d = istDateString(new Date(o.createdAt)); return d >= scope.startDate && d <= scope.endDate; });
+    }
+    default: return orders;
+  }
+}
+// One metric's value for a given order set. 'field' reads the same
+// pre-computed per-order fieldTotals the printed-order footer already
+// uses; 'formula' reuses reportItemColumnValue's exact evaluator (the
+// same one behind Order View Layout formula columns and Custom Reports),
+// evaluated per line item and summed across every order in the set.
+function computeMetricValue(metric, orders, tenant) {
+  switch (metric.type) {
+    case 'orderCount': return orders.length;
+    case 'pending': return orders.filter(o => o.status === 'pending').length;
+    case 'qty': return orders.reduce((sum, o) => sum + (o.items || []).reduce((s, it) => s + (Number(it.qty) || 0), 0), 0);
+    case 'orderViewColumn': {
+      const col = (tenant.orderViewColumns || []).find(c => c._id === metric.columnId || c.id === metric.columnId);
+      if (!col) return 0;
+      let sum = 0;
+      for (const o of orders) {
+        for (const item of o.items || []) {
+          const v = col.type === 'formula'
+            ? reportItemColumnValue({ type: 'formula', formula: col.formula }, item, o)
+            : reportItemColumnValue({ type: 'itemfield', fieldKey: col.fieldKey }, item, o);
+          if (typeof v === 'number') sum += v;
+        }
+      }
+      return Number(sum.toFixed(col.decimals ?? 2));
+    }
+    default: return 0;
+  }
+}
+function computeDashboardCards(tenant, orders, currentExhibitionIds, today) {
+  const cardDefs = Array.isArray(tenant.dashboardCards) && tenant.dashboardCards.length ? tenant.dashboardCards : DEFAULT_DASHBOARD_CARDS;
+  return cardDefs.map(card => {
+    const scoped = ordersForScope(orders, card.scope, today, currentExhibitionIds);
+    return {
+      id: card.id, label: card.label,
+      metrics: (card.metrics || []).map(m => {
+        let label = m.label || '', unit = m.unit || '';
+        if (m.type === 'orderViewColumn') {
+          const col = (tenant.orderViewColumns || []).find(c => c._id === m.columnId || c.id === m.columnId);
+          if (col) { label = m.label || col.label || 'Amount'; unit = col.unit || ''; }
+        }
+        return { label, unit, value: computeMetricValue(m, scoped, tenant) };
+      }),
+    };
+  });
+}
 async function computeReport(tenant, reportDef, exhibitionId) {
   const q = { tenantId: tenant.id };
   if (exhibitionId) q.exhibitionId = exhibitionId;
@@ -2836,22 +3935,93 @@ async function computeReport(tenant, reportDef, exhibitionId) {
       rows.push(row);
     }
   }
-  return rows;
+  // Grand totals — one number per showTotal column, summed across every
+  // row in the report (not per-order; this is the whole report's total,
+  // the way a printed ledger's bottom line adds up every row on the page).
+  const totals = {};
+  reportDef.columns.forEach(col => {
+    if (!col.showTotal) return;
+    totals[col.id] = rows.reduce((sum, row) => sum + (typeof row[col.id] === 'number' ? row[col.id] : 0), 0);
+  });
+  return { rows, totals };
 }
 
+// When a tenant displays multi-piece sets as one row on the buyer-facing
+// link (orderRowGrouping: 'itemName' — e.g. a necklace + earrings sold and
+// scanned as two separate barcodes but named identically so they look like
+// one product to the buyer), reports should count them as one set too, not
+// as two separate Item Codes with duplicate-looking rows. This mirrors
+// exactly the buyer-facing grouping key (label + variantTags) and exactly
+// its qty rule: a set's quantity comes from one of its pieces, not summed
+// across them — two scans of "one set" is still 1 set, the same way the
+// order-view page already treats it. Only kicks in when the tenant has
+// actually turned row-grouping on; every other tenant's reports are
+// unaffected, still keyed by the real Item Code as before.
+function consolidateSetLines(items) {
+  const groups = {}, order = [];
+  for (const item of items || []) {
+    const key = (item.label || '') + '::' + JSON.stringify(item.variantTags || {});
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(item);
+  }
+  return order.map(key => {
+    const group = groups[key];
+    if (group.length === 1) return group[0];
+    return {
+      itemId: group.map(g => g.itemId).join(','), itemIds: group.map(g => g.itemId), label: group[0].label,
+      scannerCode: [...new Set(group.map(g => g.scannerCode).filter(Boolean))].join(', '),
+      qty: group[0].qty, variantTags: group[0].variantTags,
+    };
+  });
+}
 async function getReportsForTenant(tenantId, exhibitionId) {
+  const tenant = await TenantDB.findOne({ id: tenantId });
   const q = { tenantId };
   if (exhibitionId) q.exhibitionId = exhibitionId;
   const orders = (await OrderDB.find(q)).filter(o => !o.deleted);
+  const grouped = tenant?.orderRowGrouping === 'itemName';
+  // Current photos, not whatever was true when each order happened to be
+  // placed — same reasoning as attachLiveImages, applied here since Best
+  // Sellers builds its own item summary straight from order lines rather
+  // than going through that helper.
+  const allItems = await ItemDB.find({ tenantId });
+  const itemImagesById = {}; allItems.forEach(it => { itemImagesById[it.id] = it.images || []; });
   const byParty = {}, byItem = {}, byStaff = {};
   for (const o of orders) {
     byParty[o.partyId] ??= { partyId: o.partyId, partyName: o.partyName, partyPhone: o.partyPhone, orderCount: 0 };
     byParty[o.partyId].orderCount += 1;
     byStaff[o.staffId] ??= { staffId: o.staffId, staffName: o.staffName, orderCount: 0 };
     byStaff[o.staffId].orderCount += 1;
-    for (const line of o.items || []) {
-      byItem[line.itemId] ??= { itemId: line.itemId, label: line.label, scannerCode: line.scannerCode, images: line.images || [], qty: 0 };
-      byItem[line.itemId].qty += line.qty;
+    const lines = grouped ? consolidateSetLines(o.items) : (o.items || []);
+    for (const line of lines) {
+      // With Row Grouping on, every color/size variant of an item merges
+      // into one Best Sellers row too — consistent with what Row Grouping
+      // already means for orders ("treat this as one clubbed unit"), so a
+      // company that's opted into that view isn't left seeing "Necklace
+      // 5K" fragmented into a separate row per color anyway. With it off
+      // (the default), a variant stays its own distinct row, same as
+      // before — a color/size is a genuinely different product line for
+      // reporting purposes unless the company has said otherwise.
+      // grouped mode needs the CLEAN item name for both the key and the
+      // displayed label — line.label already has the variant baked in as
+      // a suffix (e.g. "B012001657 (White / Plating1)"), so keying by it
+      // directly would never actually merge different variants; every
+      // one has a different label string by construction. Same fallback
+      // order/view.html's own clubbing already uses: prefer the real
+      // Item Name field, otherwise strip a trailing "(...)" from the
+      // label.
+      const cleanLabel = line.extra?.itemName || String(line.label || '').replace(/\s*\([^)]*\)\s*$/, '');
+      const key = grouped ? cleanLabel : (line.itemId + '::' + JSON.stringify(line.variantTags || {}));
+      const lineItemIds = line.itemIds || [line.itemId];
+      byItem[key] ??= { itemId: line.itemId, itemIds: [], variantTags: grouped ? null : (line.variantTags || {}), label: grouped ? cleanLabel : line.label, scannerCode: line.scannerCode, images: [], qty: 0 };
+      // Accumulated across every line sharing this key, not just taken
+      // from the first one — with grouping on, different variants can be
+      // genuinely different Item Master records (different colors as
+      // separate items sharing a label), so later lines can carry item
+      // IDs and photos the first line never had.
+      lineItemIds.forEach(id => { if (!byItem[key].itemIds.includes(id)) byItem[key].itemIds.push(id); });
+      lineItemIds.forEach(id => { (itemImagesById[id] || []).forEach(url => { if (!byItem[key].images.includes(url)) byItem[key].images.push(url); }); });
+      byItem[key].qty += line.qty;
     }
   }
   return {
@@ -2860,14 +4030,61 @@ async function getReportsForTenant(tenantId, exhibitionId) {
     byStaff: Object.values(byStaff).sort((a, b) => b.orderCount - a.orderCount),
   };
 }
-// Best sellers for the Dashboard — same underlying aggregation as the
-// Reports tab's item-wise table, just capped to the top N and exposed on
-// its own lightweight endpoint so Dashboard doesn't have to pull every
+// Best sellers for the Dashboard — reuses getReportsForTenant's byItem
+// aggregation, just capped to the top N and exposed on its own
+// lightweight endpoint so Dashboard doesn't have to pull every
 // party/staff aggregate it doesn't need.
 app.get('/api/dashboard/best-sellers', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 50);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 1000);
   const { byItem } = await getReportsForTenant(req.tenant.id, req.query.exhibitionId);
   res.json(byItem.slice(0, limit));
+});
+// Drill-down for one Best Sellers row — which specific orders (and
+// buyers) contributed to it. itemIds is an array since a "set" row can be
+// multiple merged items; variantTags must match exactly, since a
+// different color/size of the same item is a different row and shouldn't
+// bleed into this one's order list.
+app.post('/api/dashboard/best-sellers/orders', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const { exhibitionId, itemIds, variantTags } = req.body;
+  if (!exhibitionId || !Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ error: 'exhibitionId and itemIds are required' });
+  const orders = (await OrderDB.find({ tenantId: req.tenant.id, exhibitionId })).filter(o => !o.deleted);
+  const idSet = new Set(itemIds);
+  // null specifically means "Row Grouping merged every variant into this
+  // one row" — match any variant of these items, not just untagged ones.
+  const matchAnyVariant = variantTags === null || variantTags === undefined;
+  const targetTags = JSON.stringify(variantTags || {});
+  const rows = [];
+  for (const o of orders) {
+    let qty = 0;
+    for (const line of o.items || []) {
+      if (!idSet.has(line.itemId)) continue;
+      if (!matchAnyVariant && JSON.stringify(line.variantTags || {}) !== targetTags) continue;
+      qty += line.qty;
+    }
+    if (qty > 0) rows.push({ orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, qty });
+  }
+  rows.sort((a, b) => b.qty - a.qty);
+  res.json(rows);
+});
+// Backs the Overview tab's stat row. Kept to just what isn't already
+// derivable from /api/exhibitions on the client (order counts per
+// exhibition are already in that response — "orders today" needs its own
+// date-filtered count, so that's the only thing computed here).
+app.get('/api/dashboard/stats', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const today = istDateString();
+  const [orders, participants] = await Promise.all([
+    OrderDB.find({ tenantId: req.tenant.id }),
+    ExhibitionParticipantDB.find({ tenantId: req.tenant.id }),
+  ]);
+  const liveOrders = orders.filter(o => !o.deleted);
+  // Same "ongoing" rule GET /api/exhibitions uses (closed by the company,
+  // or AuroCircle's paid-for window expired, either way it's no longer
+  // "ongoing").
+  const currentExhibitionIds = new Set(
+    participants.filter(p => !p.closed && !(p.validTill && p.validTill < today)).map(p => p.exhibitionId)
+  );
+  const cards = computeDashboardCards(req.tenant, liveOrders, currentExhibitionIds, today);
+  res.json({ cards });
 });
 
 // ── Custom reports (client-facing) ────────────────────────────────────────
@@ -2878,20 +4095,22 @@ app.get('/api/reports/custom', resolveTenant, auth, requireRole('admin', 'staff'
 app.get('/api/reports/custom/:id', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const report = await ReportDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!report) return res.status(404).json({ error: 'Report not found' });
-  const rows = await computeReport(req.tenant, report, req.query.exhibitionId);
-  res.json({ name: report.name, rowType: report.rowType, columns: report.columns.map(c => ({ id: c.id, label: c.label, unit: c.unit, decimals: c.decimals })), rows });
+  const { rows, totals } = await computeReport(req.tenant, report, req.query.exhibitionId);
+  res.json({ name: report.name, rowType: report.rowType, columns: report.columns.map(c => ({ id: c.id, label: c.label, unit: c.unit, decimals: c.decimals, showTotal: !!c.showTotal })), rows, totals });
 });
 app.get('/api/reports/custom/:id/export', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
   const report = await ReportDefDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
   if (!report) return res.status(404).json({ error: 'Report not found' });
   try {
-    const rows = await computeReport(req.tenant, report, req.query.exhibitionId);
+    const { rows, totals } = await computeReport(req.tenant, report, req.query.exhibitionId);
     const headers = report.columns.map(c => c.label);
-    const dataRows = rows.map(row => report.columns.map(c => {
-      const v = row[c.id];
-      if (typeof v === 'number' && c.decimals != null) return Number(v.toFixed(c.decimals));
-      return v ?? '';
-    }));
+    const fmt = (v, c) => (typeof v === 'number' && c.decimals != null) ? Number(v.toFixed(c.decimals)) : (v ?? '');
+    const dataRows = rows.map(row => report.columns.map(c => fmt(row[c.id], c)));
+    // A totals row at the bottom, same idea as the printed-order footer
+    // totals — only if at least one column actually has showTotal on.
+    if (Object.keys(totals).length) {
+      dataRows.push(report.columns.map((c, i) => i === 0 ? 'Total' : (c.id in totals ? fmt(totals[c.id], c) : '')));
+    }
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
     ws['!cols'] = headers.map(() => ({ wch: 18 }));
@@ -2901,18 +4120,6 @@ app.get('/api/reports/custom/:id/export', resolveTenant, auth, requireRole('admi
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/reports/party-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id)).byParty);
-});
-
-app.get('/api/reports/item-wise', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id)).byItem);
-});
-
-app.get('/api/reports/staff-wise', resolveTenant, auth, requireRole('admin'), async (req, res) => {
-  res.json((await getReportsForTenant(req.tenant.id)).byStaff);
 });
 
 // Admin-only view into the audit trail — filter by tenant automatically,
@@ -2927,8 +4134,18 @@ app.get('/api/audit-log', resolveTenant, auth, requireRole('admin'), async (req,
 });
 
 // ── STATIC PAGES ──────────────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'public')));
-// A request to "/" on a company subdomain (kaashvi.expoorders.com) should
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html') || filePath.endsWith('.js')) {
+      // no-cache still allows caching, it just forces a revalidation
+      // round-trip (a cheap 304 if nothing changed) before ever reusing a
+      // cached copy — so a fresh deploy is visible immediately, not only
+      // after a manual hard-refresh.
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
+}));
+// A request to "/" on a company subdomain (meridian.expoorders.com) should
 // go straight to that company's login, not the generic marketing page —
 // the marketing page is only for the bare/www domain, where there's no
 // specific company to log into yet.
