@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.101.1';
-const BUILD_TIME   = '2026-08-19T18:41:45Z';
+const APP_VERSION  = '1.101.3';
+const BUILD_TIME   = '2026-08-19T18:51:03Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -269,6 +269,13 @@ const tenantSchema = new mongoose.Schema({
   // a dedicated @media print stylesheet on that page (see order/view.html)
   // so it doesn't need a heavy server-side rendering dependency.
   allowPdfDownload: { type: Boolean, default: false },
+  // Hides the built-in "Remark (optional)" textarea on the Take Order
+  // screen — that field is always present regardless of configuration,
+  // which is redundant for a company that's already added their own
+  // remark-style field under Order Details. Off by default (field stays
+  // visible, unchanged for every existing company) until a platform admin
+  // turns it on for one that doesn't need it.
+  hideBuiltInRemark: { type: Boolean, default: false },
   // Free-form dashboard stat cards (scope + one or more metrics each) —
   // platform-admin controlled. Missing/empty (every company before this
   // shipped) falls back to the original 3 fixed cards — see
@@ -1268,6 +1275,13 @@ app.put('/api/platform/tenants/:id/allow-pdf-download', platformAuth, async (req
   const value = !!req.body.allowPdfDownload;
   await TenantDB.update({ id: tenant.id }, { allowPdfDownload: value });
   res.json({ ok: true, allowPdfDownload: value });
+});
+app.put('/api/platform/tenants/:id/hide-builtin-remark', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const value = !!req.body.hideBuiltInRemark;
+  await TenantDB.update({ id: tenant.id }, { hideBuiltInRemark: value });
+  res.json({ ok: true, hideBuiltInRemark: value });
 });
 // Lean list for the dashboard card builder's "specific exhibition" scope
 // picker — just enough to populate a dropdown, not the full item/order
@@ -3912,9 +3926,18 @@ async function getReportsForTenant(tenantId, exhibitionId) {
       // (the default), a variant stays its own distinct row, same as
       // before — a color/size is a genuinely different product line for
       // reporting purposes unless the company has said otherwise.
-      const key = grouped ? line.label : (line.itemId + '::' + JSON.stringify(line.variantTags || {}));
+      // grouped mode needs the CLEAN item name for both the key and the
+      // displayed label — line.label already has the variant baked in as
+      // a suffix (e.g. "B012001657 (White / Plating1)"), so keying by it
+      // directly would never actually merge different variants; every
+      // one has a different label string by construction. Same fallback
+      // order/view.html's own clubbing already uses: prefer the real
+      // Item Name field, otherwise strip a trailing "(...)" from the
+      // label.
+      const cleanLabel = line.extra?.itemName || String(line.label || '').replace(/\s*\([^)]*\)\s*$/, '');
+      const key = grouped ? cleanLabel : (line.itemId + '::' + JSON.stringify(line.variantTags || {}));
       const lineItemIds = line.itemIds || [line.itemId];
-      byItem[key] ??= { itemId: line.itemId, itemIds: [], variantTags: grouped ? null : (line.variantTags || {}), label: line.label, scannerCode: line.scannerCode, images: [], qty: 0 };
+      byItem[key] ??= { itemId: line.itemId, itemIds: [], variantTags: grouped ? null : (line.variantTags || {}), label: grouped ? cleanLabel : line.label, scannerCode: line.scannerCode, images: [], qty: 0 };
       // Accumulated across every line sharing this key, not just taken
       // from the first one — with grouping on, different variants can be
       // genuinely different Item Master records (different colors as

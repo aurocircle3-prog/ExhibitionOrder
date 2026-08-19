@@ -123,8 +123,10 @@
   <div class="tab-panel" id="otab-details">
     <div class="card">
       <div id="orderDetailFields"></div>
-      <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
-      <textarea id="remark" rows="2" oninput="saveDraft()"></textarea>
+      <div id="builtInRemarkWrap">
+        <label style="margin-top:14px">Remark <span class="muted">(optional)</span></label>
+        <textarea id="remark" rows="2" oninput="saveDraft()"></textarea>
+      </div>
       <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, submitOrder)">Create order</button>
     </div>
   </div>
@@ -213,6 +215,7 @@ async function refreshOfflineCache(){
     localStorage.setItem('exo_tenant_logo', me.tenant?.logoUrl || '');
     orderFields = me.tenant?.orderFields || [];
     cartTotalColumns = me.tenant?.cartTotalConfig || [];
+    document.getElementById('builtInRemarkWrap').style.display = me.tenant?.hideBuiltInRemark ? 'none' : 'block';
     if (JSON.stringify(orderCustomFields) !== JSON.stringify(me.tenant?.orderCustomFields || [])) {
       orderCustomFields = me.tenant?.orderCustomFields || [];
       renderOrderDetailFields();
