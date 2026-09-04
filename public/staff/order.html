@@ -26,6 +26,13 @@
     </div>
   </div>
 
+  <div class="lightbox" id="overbookedModal">
+    <div class="crop-box" style="max-width:480px;text-align:left">
+      <h3 style="margin-top:0">Item limit reached</h3>
+      <div id="overbookedList"></div>
+    </div>
+  </div>
+
   <div class="card" id="shareCard" style="display:none">
     <h3 style="margin-top:0">Order created ✅</h3>
     <p>Order <b id="orderNo"></b></p>
@@ -536,10 +543,14 @@ function renderSearchSuggestions(q){
     return it.scannerCode?.toLowerCase().includes(q) || String(it.fields?.itemName || '').toLowerCase().includes(q);
   }).sort((a, b) => String(a.fields?.itemName || a.scannerCode || '').localeCompare(String(b.fields?.itemName || b.scannerCode || ''), undefined, { sensitivity: 'base', numeric: true })).slice(0, 8);
   if (!matches.length) { box.style.display = 'none'; return; }
-  box.innerHTML = matches.map(it => `
-    <div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
-      <b>${EXO.esc(it.fields?.itemName || it.scannerCode)}</b> <span class="muted">${EXO.esc(it.scannerCode)}</span>
-    </div>`).join('');
+  box.innerHTML = matches.map(it => it.overbooked === true
+    ? `<div style="padding:8px 12px;border-bottom:1px solid var(--line);opacity:0.5;cursor:not-allowed">
+        <b>${EXO.esc(it.fields?.itemName || it.scannerCode)}</b> <span class="muted">${EXO.esc(it.scannerCode)}</span>
+        <span class="badge cancelled" style="margin-left:6px">Overbooked</span>
+      </div>`
+    : `<div onclick="selectSearchItem('${it.id}')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)">
+        <b>${EXO.esc(it.fields?.itemName || it.scannerCode)}</b> <span class="muted">${EXO.esc(it.scannerCode)}</span>
+      </div>`).join('');
   box.style.display = 'block';
 }
 function selectSearchItem(id){
@@ -576,6 +587,10 @@ async function lookupItem(){
 // — never both, so a garment company's items don't get a stray plain
 // cart line before the picker's even been used.
 function handleFoundItem(item){
+  if (item.overbooked === true) {
+    EXO.toast(`"${item.fields?.itemName || item.scannerCode}" is overbooked — staff already stopped taking further orders for it. Contact admin to re-enable.`, 'error');
+    return;
+  }
   const hasVariants = enableVariants && item.variantSelections && Object.values(item.variantSelections).some(v => v && v.length);
   if (hasVariants) openVariantPicker(item);
   else addToCart(item);
@@ -800,6 +815,7 @@ async function submitOrder(){
     document.getElementById('shareUrl').value = lastOrder.shareUrl;
     document.getElementById('sendEmailBtn').style.display = lastOrder.partyEmail ? 'inline-block' : 'none';
     document.getElementById('shareCard').scrollIntoView({behavior:'smooth'});
+    if (lastOrder.overbookedItems && lastOrder.overbookedItems.length) showOverbookedPrompt(lastOrder.overbookedItems);
   } catch(e) {
     if (!isNetworkFailure(e)) { err.textContent = e.message; err.style.display='block'; return; }
     // Offline — queue it. If the buyer is also still-unsynced (local: id),
@@ -810,6 +826,32 @@ async function submitOrder(){
     document.getElementById('queuedCard').scrollIntoView({behavior:'smooth'});
     updateSyncBanner();
   }
+}
+function showOverbookedPrompt(items){
+  document.getElementById('overbookedList').innerHTML = items.map(it => `
+    <div class="card" style="background:var(--bg);padding:12px;margin-bottom:10px">
+      <p style="margin:0 0 8px"><b>${EXO.esc(it.label)}</b> has reached its limit — ${it.orderedQty} of ${it.maxOrderQty} ordered.</p>
+      <p class="muted" style="margin:0 0 10px">Stop taking further orders for this item, or continue?</p>
+      <div class="btn-row">
+        <button class="danger small" onclick="decideOverbooked('${it.itemId}',true,this)">Stop taking orders</button>
+        <button class="ghost small" onclick="decideOverbooked('${it.itemId}',false,this)">Continue</button>
+      </div>
+    </div>`).join('');
+  document.getElementById('overbookedModal').classList.add('open');
+}
+async function decideOverbooked(itemId, stop, btn){
+  const card = btn.closest('.card');
+  try {
+    await EXO.apiFetch('/items/'+itemId+'/overbooked-decision', { method: 'PUT', body: JSON.stringify({ stop }) });
+    card.innerHTML = `<p class="muted" style="margin:0">${stop ? 'Item disabled for further orders.' : 'Continuing — no further prompts for this item.'}</p>`;
+    if (!document.getElementById('overbookedList').querySelector('.btn-row')) {
+      setTimeout(() => document.getElementById('overbookedModal').classList.remove('open'), 1200);
+    }
+    // Refresh the local catalog cache so the grey-out reflects this
+    // immediately on this device, without waiting for the next full sync.
+    const idx = catalogItems.findIndex(it => it.id === itemId);
+    if (idx !== -1) catalogItems[idx].overbooked = stop;
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 function waLink(){
   const msg = encodeURIComponent(`Your order ${lastOrder.orderNo}\n${lastOrder.shareUrl}`);

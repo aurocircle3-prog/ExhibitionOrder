@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.101.9';
-const BUILD_TIME   = '2026-08-19T19:48:49Z';
+const APP_VERSION  = '1.102.0';
+const BUILD_TIME   = '2026-09-04T07:48:03Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -175,6 +175,23 @@ function escHtml(s) {
 // and what the pre-filled message targets), so email defaults to
 // available-but-not-automatic rather than every order silently emailing
 // the buyer whether or not that's actually wanted for that order.
+// Fires once, the moment an item's cumulative ordered quantity first
+// reaches its "Maximum order to take" — regardless of whether staff ends
+// up choosing Stop or Continue, admin gets visibility either way, since
+// they may not be standing at that booth when it happens.
+async function sendOverbookedEmail(tenant, item, order, baseUrl) {
+  if (!useEmail || !tenant.emailNotificationsEnabled) return;
+  const admin = await UserDB.findOne({ tenantId: tenant.id, role: 'admin' });
+  const itemName = item.fields?.itemName || item.scannerCode;
+  if (admin?.email) {
+    sendEmail({
+      to: admin.email, toName: admin.name,
+      subject: `Overbooked — ${itemName} (${order.orderNo})`,
+      html: `<p><b>${escHtml(itemName)}</b> (${escHtml(item.scannerCode)}) has reached its maximum order quantity of ${item.maxOrderQty}, as of order <b>${escHtml(order.orderNo)}</b>.</p>
+        <p>Staff will be asked whether to stop taking further orders for this item, or continue. You can also change or remove the limit any time from Item Master.</p>`,
+    }).catch(err => log.error({ err }, 'Overbooked-notification email failed'));
+  }
+}
 async function sendAdminOrderEmail(tenant, order, party, baseUrl) {
   if (!useEmail || !tenant.emailNotificationsEnabled) return;
   const shareUrl = `${baseUrl}/order/${order.shareToken}`;
@@ -419,6 +436,25 @@ const itemSchema = new mongoose.Schema({
   variantSelections: { type: mongoose.Schema.Types.Mixed, default: {} },
   active: { type: Boolean, default: true },
   createdAt: { type: String, default: () => new Date().toISOString() },
+  // "Maximum order to take" — optional, per item, item-wise only (not
+  // per-variant, by deliberate choice — tracking each color/size
+  // separately was judged too tricky for how these businesses actually
+  // work). null/undefined means completely untouched: no tracking, no
+  // prompts, no notifications, identical to before this feature existed.
+  maxOrderQty: { type: Number, default: null },
+  // Running total ordered so far (this exhibition) — incremented
+  // atomically ($inc) at order-creation time, never read-then-written,
+  // specifically because multiple staff can be taking orders for the same
+  // physical stock at the same moment; a read-then-write here would let
+  // two staff both pass the same check and jointly oversell.
+  orderedQty: { type: Number, default: 0 },
+  // null = limit not yet reached, or reached but no decision made yet.
+  // true = staff chose "Stop" — item is disabled for further orders,
+  // shown greyed out / "Overbooked" wherever it's scanned or searched.
+  // false = staff chose "Continue" — no further prompts for this item,
+  // fully orderable by anyone, forever (a one-time decision, not
+  // something that re-prompts on every subsequent order).
+  overbooked: { type: Boolean, default: null },
 });
 
 const partySchema = new mongoose.Schema({
@@ -644,6 +680,23 @@ function makeCollectionOps(Model, lowdbKey, defaultSort) {
     async count(q = {}) { return useMongoose ? Model.countDocuments(q) : db.get(lowdbKey).filter(q).size().value(); },
     async create(doc) { if (useMongoose) await Model.create(doc); else db.get(lowdbKey).push(doc).write(); return doc; },
     async update(q, u) { if (useMongoose) await Model.updateOne(q, { $set: u }); else db.get(lowdbKey).find(q).assign(u).write(); },
+    // Atomically increments a numeric field and returns the document's
+    // POST-increment state — genuinely atomic under Mongoose (the
+    // database serializes concurrent $inc operations against the same
+    // document, so two simultaneous callers can never both see the same
+    // "before" value), which matters here specifically because this is
+    // used where multiple staff can be selling the same physical stock at
+    // the same moment. Safe under lowdb too, since Node's single-threaded
+    // event loop means this read+write completes with no await in
+    // between, so nothing else can interleave.
+    async increment(q, field, amount) {
+      if (useMongoose) return Model.findOneAndUpdate(q, { $inc: { [field]: amount } }, { new: true }).lean();
+      const doc = db.get(lowdbKey).find(q).value();
+      if (!doc) return null;
+      doc[field] = (doc[field] || 0) + amount;
+      db.get(lowdbKey).find(q).assign({ [field]: doc[field] }).write();
+      return doc;
+    },
     async remove(q) { if (useMongoose) await Model.deleteMany(q); else db.get(lowdbKey).remove(q).write(); },
   };
 }
@@ -2557,10 +2610,15 @@ app.post('/api/items', resolveTenant, auth, requireRole('admin', 'staff'), async
   const variantSelections = req.tenant.enableVariants ? resolveVariantSelections(req.tenant.variantCategories || [], req.body.variantSelections) : {};
   const variantErr = validateVariantSelectionsComplete(req.tenant, variantSelections);
   if (variantErr) return res.status(400).json({ error: variantErr });
+  let maxOrderQty = null;
+  if (req.body.maxOrderQty !== undefined && req.body.maxOrderQty !== '' && req.body.maxOrderQty !== null) {
+    maxOrderQty = Number(req.body.maxOrderQty);
+    if (!Number.isFinite(maxOrderQty) || maxOrderQty < 0) return res.status(400).json({ error: 'Invalid maximum order quantity' });
+  }
   const item = {
     id: uuid(), tenantId: req.tenant.id, exhibitionId: exhibitionId || '',
     scannerCode, fields, images: imageCode ? await getImagesForCode(req.tenant.id, imageCode) : [],
-    variantSelections,
+    variantSelections, maxOrderQty,
     active: true, createdAt: new Date().toISOString(),
   };
   await ItemDB.create(item);
@@ -2590,6 +2648,11 @@ app.put('/api/items/:id', resolveTenant, auth, requireRole('admin', 'staff'), as
     if (variantErr) return res.status(400).json({ error: variantErr });
     updates.variantSelections = resolved;
   }
+  if (req.body.maxOrderQty !== undefined) {
+    const maxOrderQty = req.body.maxOrderQty === '' || req.body.maxOrderQty === null ? null : Number(req.body.maxOrderQty);
+    if (maxOrderQty !== null && (!Number.isFinite(maxOrderQty) || maxOrderQty < 0)) return res.status(400).json({ error: 'Invalid maximum order quantity' });
+    updates.maxOrderQty = maxOrderQty;
+  }
   await ItemDB.update({ id: req.params.id }, updates);
   if (req.body.fields) {
     const oldCode = String(item.fields?.imageCode || '').trim();
@@ -2611,6 +2674,36 @@ app.delete('/api/items/:id', resolveTenant, auth, requireRole('admin'), async (r
   await ItemDB.remove({ id: req.params.id, tenantId: req.tenant.id });
   if (item) await cleanupImageCodeIfOrphaned(req.tenant.id, item.fields?.imageCode).catch(err => log.error({ err }, 'Image cleanup failed after item delete'));
   logAudit(req, 'item.delete', 'item', req.params.id);
+  res.json({ ok: true });
+});
+// Staff's one-time Stop/Continue decision after an item hits its "Maximum
+// order to take" — either admin or staff can make this call (whoever's
+// actually at the booth when it comes up), same access as taking an order
+// in the first place.
+app.put('/api/items/:id/overbooked-decision', resolveTenant, auth, requireRole('admin', 'staff'), async (req, res) => {
+  const item = await ItemDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (item.maxOrderQty == null) return res.status(400).json({ error: 'This item has no order limit set' });
+  const stop = !!req.body.stop;
+  await ItemDB.update({ id: req.params.id, tenantId: req.tenant.id }, { overbooked: stop });
+  logAudit(req, stop ? 'item.overbooked_stop' : 'item.overbooked_continue', 'item', req.params.id, { label: item.fields?.itemName || item.scannerCode });
+  res.json({ ok: true, overbooked: stop });
+});
+// Admin re-enabling a stopped item — always allows raising the limit at
+// the same time, rather than a bare on/off toggle, since a plain
+// re-enable with the same number would just re-trigger the same prompt
+// on the very next order.
+app.put('/api/items/:id/re-enable', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const item = await ItemDB.findOne({ id: req.params.id, tenantId: req.tenant.id });
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const updates = { overbooked: null };
+  if (req.body.maxOrderQty !== undefined) {
+    const maxOrderQty = req.body.maxOrderQty === '' || req.body.maxOrderQty === null ? null : Number(req.body.maxOrderQty);
+    if (maxOrderQty !== null && (!Number.isFinite(maxOrderQty) || maxOrderQty < 0)) return res.status(400).json({ error: 'Invalid quantity' });
+    updates.maxOrderQty = maxOrderQty;
+  }
+  await ItemDB.update({ id: req.params.id, tenantId: req.tenant.id }, updates);
+  logAudit(req, 'item.re_enable', 'item', req.params.id, { label: item.fields?.itemName || item.scannerCode, newMaxOrderQty: updates.maxOrderQty });
   res.json({ ok: true });
 });
 app.post('/api/items/bulk-delete', resolveTenant, auth, requireRole('admin'), async (req, res) => {
@@ -3413,7 +3506,35 @@ app.post('/api/orders', orderLimiter, resolveTenant, auth, requireRole('admin', 
   // Fire-and-forget — never awaited, so a slow/failing email provider can't
   // delay the response staff are waiting on to hand the buyer their link.
   sendAdminOrderEmail(req.tenant, order, party, baseUrl).catch(err => log.error({ err }, 'sendAdminOrderEmail failed'));
-  res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}` });
+
+  // "Maximum order to take" tracking — only touches items that actually
+  // have a limit set and haven't already had a stop/continue decision
+  // made. Per-item quantities across this order are combined first (an
+  // order can have more than one line for the same item, e.g. different
+  // comments), then incremented atomically once per item — genuinely
+  // atomic even with multiple staff ordering the same item at the same
+  // moment, since the database itself serializes concurrent increments
+  // against the same document. The crossing is detected by comparing the
+  // before/after totals from that single atomic operation, not by a
+  // separate read that could go stale — so no matter how many staff
+  // trigger this at once, exactly one of them is the one that actually
+  // crossed the line, and only that one triggers the prompt/notification.
+  const qtyByItemId = {};
+  for (const line of lineItems) qtyByItemId[line.itemId] = (qtyByItemId[line.itemId] || 0) + line.qty;
+  const overbookedItems = [];
+  for (const [itemId, qty] of Object.entries(qtyByItemId)) {
+    const item = await ItemDB.findOne({ id: itemId, tenantId: req.tenant.id });
+    if (!item || item.maxOrderQty == null || item.overbooked !== null) continue;
+    const updated = await ItemDB.increment({ id: itemId, tenantId: req.tenant.id }, 'orderedQty', qty);
+    if (!updated) continue;
+    const before = updated.orderedQty - qty;
+    if (before < item.maxOrderQty && updated.orderedQty >= item.maxOrderQty) {
+      overbookedItems.push({ itemId, label: item.fields?.itemName || item.scannerCode, maxOrderQty: item.maxOrderQty, orderedQty: updated.orderedQty });
+      sendOverbookedEmail(req.tenant, item, order, baseUrl).catch(err => log.error({ err }, 'sendOverbookedEmail failed'));
+    }
+  }
+
+  res.json({ ...order, shareUrl: `${baseUrl}/order/${order.shareToken}`, overbookedItems });
 });
 
 // On-demand "Send Email" button — the equivalent of "Send on WhatsApp" but

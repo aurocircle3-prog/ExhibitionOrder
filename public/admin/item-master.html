@@ -96,6 +96,11 @@
       <h3 style="margin-top:0" id="formTitle">Add item</h3>
       <div id="itemForm" class="grid cols-3"></div>
       <div id="itemTagChips"></div>
+      <div style="margin-top:14px">
+        <label>Maximum order to take <span class="muted">(optional — leave blank for no limit)</span></label>
+        <input id="maxOrderQty" type="number" min="0" placeholder="e.g. 10" style="max-width:160px">
+        <p class="muted" style="margin-top:4px" id="overbookedStatus"></p>
+      </div>
       <div style="margin-top:14px" id="photosSection">
         <label>Photos <span class="muted">— shared by Image Code, uploaded via the bulk uploader above</span></label>
         <div id="existingPhotos" style="display:flex;gap:10px;margin-bottom:8px"></div>
@@ -329,7 +334,7 @@ function renderItemsTable(list){
     <tr>
       <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
       <td class="thumb-cell"><img src="${EXO.esc(it.images?.[0]||'')}" onerror="this.style.visibility='hidden'"></td>
-      ${fields.map(f=>`<td>${EXO.esc(it.fields[f.key] ?? '')}</td>`).join('')}
+      ${fields.map((f,fi)=>`<td>${EXO.esc(it.fields[f.key] ?? '')}${fi===0 && it.overbooked===true ? ' <span class="badge cancelled" title="Staff stopped taking further orders for this item">Overbooked</span>' : ''}</td>`).join('')}
       ${tagCols.map(c=>`<td>${EXO.esc((it.variantSelections?.[c.key]||[]).join(', ')) || '—'}</td>`).join('')}
       <td>${(it.images||[]).length}/3</td>
       <td>
@@ -359,11 +364,31 @@ function editItem(id){
   renderExistingPhotos();
   itemTagSelections = { ...(it.variantSelections || {}) };
   renderItemTagChips();
+  document.getElementById('maxOrderQty').value = it.maxOrderQty ?? '';
+  const statusEl = document.getElementById('overbookedStatus');
+  if (it.maxOrderQty != null) {
+    const ordered = it.orderedQty || 0;
+    if (it.overbooked === true) statusEl.innerHTML = `<b style="color:var(--danger)">Overbooked</b> — ${ordered} of ${it.maxOrderQty} ordered, staff chose to stop taking further orders. <button class="ghost small" onclick="reEnableItem('${it.id}')">Re-enable</button>`;
+    else if (it.overbooked === false) statusEl.textContent = `${ordered} of ${it.maxOrderQty} ordered — staff chose to continue taking orders past the limit.`;
+    else statusEl.textContent = `${ordered} of ${it.maxOrderQty} ordered so far.`;
+  } else statusEl.textContent = '';
   document.getElementById('formTitle').scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function reEnableItem(id){
+  const newMax = prompt('Re-enable this item. Leave the max order quantity as-is, or type a new (higher) number:');
+  if (newMax === null) return;
+  try {
+    await EXO.apiFetch('/items/'+id+'/re-enable', { method: 'PUT', body: JSON.stringify({ maxOrderQty: newMax.trim() === '' ? undefined : newMax }) });
+    EXO.toast('Item re-enabled');
+    loadItems();
+    if (editingId === id) editItem(id);
+  } catch (e) { EXO.toast(e.message, 'error'); }
 }
 function resetForm(){
   editingId = null; editingImages = [];
   document.getElementById('formTitle').textContent = 'Add item';
+  document.getElementById('maxOrderQty').value = '';
+  document.getElementById('overbookedStatus').textContent = '';
   renderItemForm(); renderExistingPhotos();
 }
 function renderExistingPhotos(){
@@ -398,9 +423,10 @@ async function saveItem(){
   }
   const values = {};
   fields.forEach(f => { const el = document.getElementById('f_'+f.key); if (el && el.value !== '') values[f.key] = el.value; });
+  const maxOrderQty = document.getElementById('maxOrderQty').value;
   try {
-    if (editingId) await EXO.apiFetch('/items/'+editingId, { method:'PUT', body: JSON.stringify({ fields: values, variantSelections: itemTagSelections }) });
-    else await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values, exhibitionId: currentExhibitionId, variantSelections: itemTagSelections }) });
+    if (editingId) await EXO.apiFetch('/items/'+editingId, { method:'PUT', body: JSON.stringify({ fields: values, variantSelections: itemTagSelections, maxOrderQty }) });
+    else await EXO.apiFetch('/items', { method:'POST', body: JSON.stringify({ fields: values, exhibitionId: currentExhibitionId, variantSelections: itemTagSelections, maxOrderQty }) });
     resetForm();
     loadItems();
   } catch(e) { err.textContent = e.message; err.style.display='block'; }
