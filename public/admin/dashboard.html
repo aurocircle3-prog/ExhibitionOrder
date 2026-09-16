@@ -6,7 +6,27 @@
 <div class="wrap">
   <div class="card" id="noExhibitionsCard" style="display:none">
     <h3 style="margin-top:0">No exhibitions yet</h3>
-    <p class="muted">Exhibitions are set up centrally by ExpoOrders. Contact them to get your company added to one — once you are, it'll show up here.</p>
+    <p class="muted">Create your first exhibition to start taking orders — or ExpoOrders can add you to one directly, if you'd rather.</p>
+    <button class="primary" onclick="showCreateExhibition()">Create your first exhibition</button>
+  </div>
+
+  <div class="lightbox" id="createExhibitionModal">
+    <div class="crop-box" style="max-width:420px;text-align:left">
+      <h3 style="margin-top:0">Create exhibition</h3>
+      <div class="error" id="createExErr" style="display:none"></div>
+      <label>Name</label>
+      <input id="createExName" placeholder="e.g. Delhi Winter Expo 2026">
+      <label>Location <span class="muted">(optional)</span></label>
+      <input id="createExLocation">
+      <div class="grid cols-2">
+        <div><label>Start date <span class="muted">(optional)</span></label><input id="createExStart" type="date"></div>
+        <div><label>End date <span class="muted">(optional)</span></label><input id="createExEnd" type="date"></div>
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="primary" onclick="EXO.busy(this, submitCreateExhibition)">Create</button>
+        <button class="ghost" onclick="document.getElementById('createExhibitionModal').classList.remove('open')">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <div class="tabs" id="dashTabs" style="display:none">
@@ -17,7 +37,10 @@
   <div class="tab-panel" id="dashtab-overview">
     <p class="muted" style="text-align:right;margin:0 0 6px;font-size:12px">Last updated: <span id="lastUpdated"></span> · <a href="#" onclick="load();return false;">Refresh</a></p>
     <div class="grid cols-4" id="statRow" style="margin-bottom:18px"></div>
-    <h3>Current exhibitions</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3>Current exhibitions</h3>
+      <button class="ghost small" onclick="showCreateExhibition()">+ Create exhibition</button>
+    </div>
     <div class="grid cols-2" id="currentExhibitions"></div>
   </div>
 
@@ -102,6 +125,29 @@ function enterExhibition(id, name){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
   localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, name);
   location.href = '/admin/exhibition-hub.html';
+}
+function showCreateExhibition(){
+  document.getElementById('createExErr').style.display = 'none';
+  document.getElementById('createExName').value = '';
+  document.getElementById('createExLocation').value = '';
+  document.getElementById('createExStart').value = '';
+  document.getElementById('createExEnd').value = '';
+  document.getElementById('createExhibitionModal').classList.add('open');
+}
+async function submitCreateExhibition(){
+  const err = document.getElementById('createExErr'); err.style.display = 'none';
+  const name = document.getElementById('createExName').value.trim();
+  if (!name) { err.textContent = 'Name is required'; err.style.display = 'block'; return; }
+  const body = {
+    name, location: document.getElementById('createExLocation').value.trim(),
+    startDate: document.getElementById('createExStart').value, endDate: document.getElementById('createExEnd').value,
+  };
+  try {
+    await EXO.apiFetch('/exhibitions', { method: 'POST', body: JSON.stringify(body) });
+    document.getElementById('createExhibitionModal').classList.remove('open');
+    EXO.toast('Exhibition created');
+    load();
+  } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
 }
 async function closeExhibition(id, name){
   if (!confirm(`Mark "${name}" as completed? It'll move to Completed and won't be offered for new items or orders — you can reopen it any time.`)) return;

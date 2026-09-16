@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.105.1';
-const BUILD_TIME   = '2026-09-16T12:21:51Z';
+const APP_VERSION  = '1.106.0';
+const BUILD_TIME   = '2026-09-16T12:51:49Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -342,6 +342,13 @@ const tenantSchema = new mongoose.Schema({
   // company's own admin. null/0 means unlimited (existing companies before
   // this feature keep working exactly as before with no cap).
   maxStaff: { type: Number, default: null },
+  // How many exhibitions this company can create for ITSELF (see the
+  // company-facing exhibition-creation route below) — null means
+  // unlimited, which is what every existing company gets by default
+  // (they're managed by platform admin adding them to exhibitions
+  // directly, this limit is specifically for self-signup companies who
+  // have no platform admin doing that for them).
+  maxExhibitions: { type: Number, default: null },
   // Which of the company's own Settings sections its admin is allowed to
   // configure themselves — platform-admin controlled, default-DENY. AuroCircle
   // does all setup based on what the client asks for; a company admin sees
@@ -1271,6 +1278,10 @@ async function createTenantWithAdmin({ companyName, slug, adminName, email, phon
   const tenant = {
     id: uuid(), name: companyName, slug, natureOfBusiness: natureOfBusiness || '', plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
+    // Self-signup companies default to 1 (they have to create their own —
+    // no platform admin doing it for them). Platform-admin-created
+    // companies stay unlimited, matching the existing default exactly.
+    maxExhibitions: selfChosenPassword ? 1 : null,
     settingsPermissions: template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
   };
   if (template) {
@@ -1307,6 +1318,12 @@ async function createTenantWithAdmin({ companyName, slug, adminName, email, phon
       for (let i = 0; i < templateFields.length; i++) {
         const { id: _oldId, _id: _oldMongoId, tenantId: _oldTenant, createdAt: _oldCreatedAt, ...rest } = templateFields[i];
         await FieldDefDB.create({ ...rest, id: uuid(), tenantId: tenant.id, order: FIXED_FIELDS.length + i, createdAt: new Date().toISOString() });
+      }
+      // Custom Reports — same clone pattern as Item Master fields above.
+      const templateReports = await ReportDefDB.find({ tenantId: template.id });
+      for (const r of templateReports) {
+        const { id: _oldRId, _id: _oldRMongoId, tenantId: _oldRTenant, createdAt: _oldRCreatedAt, ...rest } = r;
+        await ReportDefDB.create({ ...rest, id: uuid(), tenantId: tenant.id, createdAt: new Date().toISOString() });
       }
     }
 
@@ -4041,6 +4058,27 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
     })
     .filter(Boolean);
   res.json(result);
+});
+// Lets a company create its OWN exhibition — for self-signup companies
+// specifically, who have no platform admin adding them to one. Respects
+// maxExhibitions (null = unlimited, matching every platform-admin-created
+// company's default) by counting this company's own participations, not
+// exhibitions in general (a shared exhibition another company created
+// doesn't count against this company's own limit).
+app.post('/api/exhibitions', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  const { name, location, startDate, endDate } = req.body;
+  if (!name) return res.status(400).json({ error: 'Exhibition name is required' });
+  if (req.tenant.maxExhibitions != null) {
+    const myCount = await ExhibitionParticipantDB.count({ tenantId: req.tenant.id });
+    if (myCount >= req.tenant.maxExhibitions) {
+      return res.status(400).json({ error: `You've reached your limit of ${req.tenant.maxExhibitions} exhibition${req.tenant.maxExhibitions === 1 ? '' : 's'}. Contact ExpoOrders to increase it.` });
+    }
+  }
+  const exhibition = { id: uuid(), name, location: location || '', startDate: startDate || '', endDate: endDate || '', active: true, createdAt: new Date().toISOString() };
+  await ExhibitionDB.create(exhibition);
+  await ExhibitionParticipantDB.create({ id: uuid(), exhibitionId: exhibition.id, tenantId: req.tenant.id, validTill: '', addedAt: new Date().toISOString() });
+  logAudit(req, 'exhibition.self_create', 'exhibition', exhibition.id, { name });
+  res.json(exhibition);
 });
 // Company admin's own manual close/reopen — independent of validTill,
 // private to this company (other companies sharing the same exhibition
