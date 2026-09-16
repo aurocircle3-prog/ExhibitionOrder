@@ -38,6 +38,18 @@
     if (!onPlatformHost && parts.length > 2 && parts[0] !== 'www') return parts[0];
     return '';
   }
+  // Deliberately skips the cached-value shortcut above — for something
+  // like signup, whoever's on this page right now should always get
+  // whichever company's subdomain they're actually standing on, never a
+  // stale value left over from browsing a different company earlier in
+  // the same browser.
+  function getTenantSlugFromHostOnly() {
+    const host = location.hostname.toLowerCase();
+    const onPlatformHost = PLATFORM_HOST_SUFFIXES.some(suf => host.endsWith(suf)) || host === 'localhost';
+    const parts = host.split('.');
+    if (!onPlatformHost && parts.length > 2 && parts[0] !== 'www') return parts[0];
+    return new URLSearchParams(location.search).get('tenant') || '';
+  }
 
   async function apiFetch(path, opts = {}) {
     const headers = Object.assign({}, opts.headers || {});
@@ -309,7 +321,7 @@
     const jsEscaped = String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
     return jsEscaped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, exhibitionSubNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr, showChangePasswordModal };
+  window.EXO = { getTenantSlug, getTenantSlugFromHostOnly, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, exhibitionSubNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr, showChangePasswordModal };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;

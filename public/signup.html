@@ -4,9 +4,10 @@
 <link rel="icon" href="/logo.svg">
 <div class="topbar"><div class="brand"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div></div>
 <div class="wrap" style="max-width:420px">
-  <div class="card">
+  <div class="card" id="formCard">
     <h2 style="margin-top:0">Create your account</h2>
     <p class="muted">See all your past and future orders in one place — no need to keep track of separate links.</p>
+    <p class="muted" id="companyLabel" style="font-weight:600"></p>
     <div class="error" id="err"></div>
     <label>Your name</label>
     <input id="name">
@@ -19,11 +20,27 @@
     <button class="primary" style="width:100%;margin-top:18px" onclick="EXO.busy(this, signup)">Create account</button>
     <p class="muted" style="text-align:center;margin-top:12px">Already have an account? <a href="/login.html">Sign in</a></p>
   </div>
+  <div class="card" id="sentCard" style="display:none">
+    <h2 style="margin-top:0">Check your email</h2>
+    <p class="muted">We've sent a link to <b id="sentEmail"></b> to finish creating your account. Click it to confirm and sign in — it expires in 24 hours.</p>
+    <p class="muted">Didn't get it? Check spam, or <a href="#" onclick="location.reload();return false;">try again</a>.</p>
+  </div>
   <p class="muted" id="versionTag" style="text-align:center;margin-top:14px;font-size:11px"></p>
 </div>
 <script src="/app.js"></script>
 <script>
 EXO.showVersion('versionTag');
+// Deliberately ignores any cached tenant value from earlier browsing —
+// signup should always be for whichever company's subdomain this page is
+// actually on right now. Also corrects the cache itself, so the API call
+// below (which reads the cache internally) picks up the right value too.
+const resolvedSlug = EXO.getTenantSlugFromHostOnly();
+if (resolvedSlug) localStorage.setItem('exo_tenant', resolvedSlug);
+document.getElementById('companyLabel').textContent = resolvedSlug ? `Creating an account with: ${resolvedSlug}` : '';
+if (!resolvedSlug) {
+  document.getElementById('err').textContent = 'Could not determine which company this signup is for — please use the link your company gave you, or visit their own page directly.';
+  document.getElementById('err').style.display = 'block';
+}
 async function signup(){
   const err = document.getElementById('err'); err.style.display='none';
   const body = {
@@ -34,8 +51,9 @@ async function signup(){
   };
   try {
     const data = await EXO.apiFetch('/clients/signup', { method:'POST', body: JSON.stringify(body) });
-    EXO.saveSession(data);
-    location.href = '/client/orders.html';
+    document.getElementById('formCard').style.display = 'none';
+    document.getElementById('sentEmail').textContent = data.email;
+    document.getElementById('sentCard').style.display = 'block';
   } catch(e) { err.textContent = e.message; err.style.display='block'; }
 }
 </script>

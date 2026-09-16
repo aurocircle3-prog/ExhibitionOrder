@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.104.0';
-const BUILD_TIME   = '2026-09-16T10:37:47Z';
+const APP_VERSION  = '1.104.1';
+const BUILD_TIME   = '2026-09-16T10:59:39Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -537,6 +537,19 @@ const passwordSetupTokenSchema = new mongoose.Schema({
   expiresAt: String, createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// Holds a buyer's self-signup details BEFORE the account actually
+// exists — the account only gets created once the email verification
+// link is clicked, so a random person typing in someone else's real
+// email can never gain access to that person's order history just by
+// submitting the form. Separate from PasswordSetupToken since that
+// table always refers to an existing user; this one doesn't yet.
+const pendingClientSignupSchema = new mongoose.Schema({
+  id: String, token: { type: String, unique: true, sparse: true }, tenantId: String,
+  name: String, email: String, phone: String, passwordHash: String,
+  used: { type: Boolean, default: false },
+  expiresAt: String, createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
 // Images are owned by Image Code, not by any one item — this is the single
 // source of truth. Every item sharing an Image Code gets the same photos
 // automatically; item.images stays a denormalized copy (kept in sync by
@@ -636,6 +649,7 @@ const ExhibitionParticipant = mongoose.model('ExhibitionParticipant', exhibition
 const ReportDef  = mongoose.model('ReportDef', reportDefSchema);
 const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
 const PasswordSetupToken = mongoose.model('PasswordSetupToken', passwordSetupTokenSchema);
+const PendingClientSignup = mongoose.model('PendingClientSignup', pendingClientSignupSchema);
 const ImageSet    = mongoose.model('ImageSet', imageSetSchema);
 const PlatformAdmin = mongoose.model('PlatformAdmin', platformAdminSchema);
 
@@ -713,6 +727,7 @@ const PlatformSettingsDB = makeCollectionOps(PlatformSettings, 'platformSettings
 const ReportDefDB = makeCollectionOps(ReportDef, 'reportDefs', { createdAt: -1 });
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
 const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
+const PendingClientSignupDB = makeCollectionOps(PendingClientSignup, 'pendingclientsignups', { createdAt: -1 });
 const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
 const PlatformAdminDB = makeCollectionOps(PlatformAdmin, 'platformadmins');
 
@@ -2098,42 +2113,77 @@ app.get('/api/clients/:id/login-activity', resolveTenant, auth, requireRole('adm
   res.json(await getLoginActivity(req.tenant.id, clientUser.id));
 });
 // Public self-signup for buyers — no auth, since the whole point is
-// creating the account. Email is the login ID specifically because it's
-// the one thing this flow can actually prove access to (by sending the
-// confirmation there) — a phone number typed into a form proves nothing
-// about who's really typing it.
+// creating the account. Deliberately two-step: this only stores the
+// submitted details and emails a verification link; the actual account
+// (and any access it grants to existing order history) is created only
+// once that link is clicked in POST /api/clients/verify-signup below.
+// Without that gate, anyone could type in a real existing buyer's email
+// address and be logged in as them immediately, seeing their order
+// history before the real owner ever saw a confirmation email — email
+// only proves anything if it's checked BEFORE access is granted, not
+// notified about after.
 app.post('/api/clients/signup', loginLimiter, resolveTenant, async (req, res) => {
   const { name, email, phone, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'That doesn\'t look like a valid email address' });
   const loginId = String(email).toLowerCase();
+  // Checked against every role in this tenant — admin, staff, and client
+  // logins all share one table, so an email already used by this
+  // company's own admin or staff is caught here too, not just other
+  // buyers.
   if (await UserDB.findOne({ tenantId: req.tenant.id, loginId }))
     return res.status(400).json({ error: 'An account with this email already exists — try logging in instead.' });
+  const token = uuid();
+  await PendingClientSignupDB.create({
+    id: uuid(), token, tenantId: req.tenant.id, name, email: loginId, phone: phone || '',
+    passwordHash: bcrypt.hashSync(password, 10), used: false,
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
+  });
+  const baseUrl = tenantBaseUrl(req, req.tenant);
+  const verifyLink = `${baseUrl}/verify-signup.html?token=${token}`;
+  if (!useEmail) return res.status(503).json({ error: 'Email is not configured for this account — contact the company directly to get set up.' });
+  const emailResult = await sendEmail({
+    to: loginId, toName: name,
+    subject: `Confirm your account with ${req.tenant.name}`,
+    html: `<p>Hi ${escHtml(name)},</p><p>Click below to finish creating your account with <b>${escHtml(req.tenant.name)}</b> on Expo Orders:</p><p><a href="${verifyLink}">${verifyLink}</a></p><p>This link expires in 24 hours. If you didn't request this, you can ignore this email — no account will be created.</p>`,
+  });
+  if (!emailResult.ok) {
+    log.error({ tenantId: req.tenant.id, email: loginId }, 'Client signup verification email failed to send');
+    return res.status(502).json({ error: 'Could not send the verification email — please try again shortly.' });
+  }
+  res.json({ ok: true, email: loginId });
+});
+// Completes signup once the emailed link is clicked — this is the moment
+// the account actually gets created, not the form submission above.
+app.post('/api/clients/verify-signup', loginLimiter, async (req, res) => {
+  const { token } = req.body;
+  const pending = await PendingClientSignupDB.findOne({ token });
+  if (!pending || pending.used || new Date(pending.expiresAt) < new Date()) return res.status(400).json({ error: 'This link is invalid or has expired. Please sign up again.' });
+  // Re-checked here too — the gap between submitting the form and
+  // clicking the email link is a real window where someone else could
+  // have taken this exact email in the meantime.
+  if (await UserDB.findOne({ tenantId: pending.tenantId, loginId: pending.email }))
+    return res.status(400).json({ error: 'An account with this email already exists — try logging in instead.' });
+  const tenant = await TenantDB.findOne({ id: pending.tenantId });
+  if (!tenant) return res.status(404).json({ error: 'This company no longer exists.' });
   const client = {
-    id: uuid(), tenantId: req.tenant.id, role: 'client', loginId,
-    password: bcrypt.hashSync(password, 10), name, phone: phone || '', email: loginId,
+    id: uuid(), tenantId: pending.tenantId, role: 'client', loginId: pending.email,
+    password: pending.passwordHash, name: pending.name, phone: pending.phone || '', email: pending.email,
     active: true, createdAt: new Date().toISOString(),
   };
   await UserDB.create(client);
+  await PendingClientSignupDB.update({ id: pending.id }, { used: true });
+  req.tenant = tenant; req.user = { id: client.id, name: client.name, role: 'client' };
   logAudit(req, 'client.self_signup', 'user', client.id, { name: client.name, loginId: client.loginId });
-  if (useEmail) {
-    sendEmail({
-      to: client.email, toName: client.name,
-      subject: `Your account with ${req.tenant.name}`,
-      html: `<p>Hi ${escHtml(client.name)},</p><p>Your account with <b>${escHtml(req.tenant.name)}</b> on Expo Orders is ready. Here are your login details, for your records:</p>
-        <p>Login ID: <b>${escHtml(client.email)}</b><br>Password: <b>${escHtml(password)}</b></p>
-        <p>You chose this password yourself when signing up — this email is just so you have it on file.</p>`,
-    }).catch(err => log.error({ err, tenantId: req.tenant.id }, 'Client signup confirmation email failed'));
-  }
   // Same session shape as /api/auth/login — signs the new account in
-  // immediately, rather than making someone who just typed a password
-  // re-enter it again on a separate login page.
+  // immediately once verified, rather than making them log in separately
+  // right after proving they own the email.
   const sessionId = uuid();
   await UserDB.update({ id: client.id }, { currentSessionId: sessionId });
-  const token = jwt.sign({ id: client.id, tenantId: req.tenant.id, role: client.role, loginId: client.loginId, name: client.name, sessionId }, JWT_SECRET, { expiresIn: '7d' });
+  const jwtToken = jwt.sign({ id: client.id, tenantId: tenant.id, role: client.role, loginId: client.loginId, name: client.name, sessionId }, JWT_SECRET, { expiresIn: '7d' });
   const { password: _pw, ...safeClient } = client;
-  res.json({ token, user: safeClient, tenant: req.tenant });
+  res.json({ token: jwtToken, user: safeClient, tenant });
 });
 app.delete('/api/clients/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   await UserDB.remove({ id: req.params.id, tenantId: req.tenant.id, role: 'client' });

@@ -1,0 +1,36 @@
+<title>Confirm your account — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div class="topbar"><div class="brand"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div></div>
+<div class="wrap" style="max-width:420px">
+  <div class="card">
+    <h2 style="margin-top:0" id="title">Confirming your account…</h2>
+    <div class="error" id="err" style="display:none"></div>
+    <p class="muted" id="msg"></p>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+(async () => {
+  const token = new URLSearchParams(location.search).get('token');
+  const err = document.getElementById('err');
+  if (!token) {
+    document.getElementById('title').textContent = 'Invalid link';
+    err.textContent = 'This link is missing its confirmation code.';
+    err.style.display = 'block';
+    return;
+  }
+  try {
+    const data = await EXO.apiFetch('/clients/verify-signup', { method: 'POST', body: JSON.stringify({ token }) });
+    EXO.saveSession(data);
+    document.getElementById('title').textContent = 'Account confirmed ✅';
+    document.getElementById('msg').textContent = 'Taking you to your orders…';
+    setTimeout(() => location.href = '/client/orders.html', 800);
+  } catch (e) {
+    document.getElementById('title').textContent = 'Could not confirm your account';
+    err.textContent = e.message;
+    err.style.display = 'block';
+  }
+})();
+</script>
