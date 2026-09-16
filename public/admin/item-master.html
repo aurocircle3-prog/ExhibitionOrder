@@ -149,7 +149,7 @@ function toggleNewDecimals(){
   document.getElementById('newOptionsRow').style.display = type === 'dropdown' ? 'block' : 'none';
 }
 async function loadFields(){
-  fields = await EXO.apiFetch('/fields');
+  fields = await EXO.apiFetch('/fields?includeInactive=1');
   renderFieldRows();
   renderItemForm();
 }
@@ -170,18 +170,26 @@ function renderFieldRows(){
         </td>
       </tr>`;
     }
-    return `<tr>
-      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}</td>
+    return `<tr${f.active === false ? ' style="opacity:0.5"' : ''}>
+      <td>${EXO.esc(f.label)}${f.fixed ? ' <span class="badge confirmed">★ Fixed</span>' : ''}${f.active === false ? ' <span class="muted">(inactive)</span>' : ''}</td>
       <td>${typeLabel(f)}</td>
-      <td></td>
+      <td>${f.fixed ? '' : `<label style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" ${f.active !== false ? 'checked' : ''} onchange="toggleFieldActive('${f.id}', this.checked)" style="width:auto">Active</label>`}</td>
       <td>
-        <button class="icon-btn" title="Move up" ${i===0?'disabled':''} onclick="moveField('${f.id}','up')">↑</button>
-        <button class="icon-btn" title="Move down" ${i===fields.length-1?'disabled':''} onclick="moveField('${f.id}','down')">↓</button>
+        <button class="icon-btn" title="Move up" ${i===0||f.active===false?'disabled':''} onclick="moveField('${f.id}','up')">↑</button>
+        <button class="icon-btn" title="Move down" ${i===fields.length-1||f.active===false?'disabled':''} onclick="moveField('${f.id}','down')">↓</button>
         <button class="ghost small" onclick="startEditField('${f.id}')">Edit</button>
         ${f.fixed ? '' : `<button class="danger small" onclick="deleteField('${f.id}')">Delete</button>`}
       </td>
     </tr>`;
   }).join('');
+}
+async function toggleFieldActive(id, active){
+  try {
+    await EXO.apiFetch('/fields/'+id, { method: 'PUT', body: JSON.stringify({ active }) });
+    const f = fields.find(x => x.id === id); if (f) f.active = active;
+    renderFieldRows();
+    EXO.toast(active ? 'Field re-activated' : 'Field made inactive');
+  } catch (e) { EXO.toast(e.message, 'error'); renderFieldRows(); }
 }
 function startEditField(id){ editingFieldId = id; renderFieldRows(); }
 function cancelEditField(){ editingFieldId = null; renderFieldRows(); }
@@ -223,7 +231,7 @@ async function deleteField(id){
 }
 
 function renderItemForm(){
-  document.getElementById('itemForm').innerHTML = fields.map(f => `
+  document.getElementById('itemForm').innerHTML = fields.filter(f => f.active !== false).map(f => `
     <div>
       <label>${EXO.esc(f.label)}${f.required?' <span style="color:#c0392b">*</span>':''}${f.key==='itemCode'?' (scan code)':''}${f.key==='imageCode'?' (photo file name)':''}</label>
       ${f.type==='dropdown'
@@ -329,12 +337,13 @@ function renderItemsTable(list){
   const visibleIds = list.map(it => it.id);
   const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedItemIds.has(id));
   const tagCols = enableVariants ? variantCategories : [];
-  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${fields.map(f=>`<th>${EXO.esc(f.label)}</th>`).join('')}${tagCols.map(c=>`<th>${EXO.esc(c.label)}</th>`).join('')}<th>Photos</th><th></th></tr>`;
+  const activeFields = fields.filter(f => f.active !== false);
+  document.getElementById('itemsHead').innerHTML = `<tr><th><input type="checkbox" ${allSelected?'checked':''} onchange='toggleSelectAll(this, ${JSON.stringify(visibleIds)})'></th><th>Photo</th>${activeFields.map(f=>`<th>${EXO.esc(f.label)}</th>`).join('')}${tagCols.map(c=>`<th>${EXO.esc(c.label)}</th>`).join('')}<th>Photos</th><th></th></tr>`;
   document.getElementById('itemsBody').innerHTML = list.map(it => `
     <tr>
       <td><input type="checkbox" ${selectedItemIds.has(it.id)?'checked':''} onchange="toggleSelectItem('${it.id}', this.checked)"></td>
       <td class="thumb-cell"><img src="${EXO.esc(it.images?.[0]||'')}" onerror="this.style.visibility='hidden'"></td>
-      ${fields.map((f,fi)=>`<td>${EXO.esc(it.fields[f.key] ?? '')}${fi===0 && it.overbooked===true ? ' <span class="badge cancelled" title="Staff stopped taking further orders for this item">Overbooked</span>' : ''}</td>`).join('')}
+      ${activeFields.map((f,fi)=>`<td>${EXO.esc(it.fields[f.key] ?? '')}${fi===0 && it.overbooked===true ? ' <span class="badge cancelled" title="Staff stopped taking further orders for this item">Overbooked</span>' : ''}</td>`).join('')}
       ${tagCols.map(c=>`<td>${EXO.esc((it.variantSelections?.[c.key]||[]).join(', ')) || '—'}</td>`).join('')}
       <td>${(it.images||[]).length}/3</td>
       <td>

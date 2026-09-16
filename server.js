@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.106.0';
-const BUILD_TIME   = '2026-09-16T12:51:49Z';
+const APP_VERSION  = '1.107.0';
+const BUILD_TIME   = '2026-09-16T14:53:34Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1282,7 +1282,9 @@ async function createTenantWithAdmin({ companyName, slug, adminName, email, phon
     // no platform admin doing it for them). Platform-admin-created
     // companies stay unlimited, matching the existing default exactly.
     maxExhibitions: selfChosenPassword ? 1 : null,
-    settingsPermissions: template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false },
+    settingsPermissions: selfChosenPassword
+      ? { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: true, orderFooter: false }
+      : (template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false }),
   };
   if (template) {
     tenant.enableVariants = template.enableVariants || false;
@@ -2651,6 +2653,13 @@ async function updateFieldForTenant(tenantId, fieldId, body) {
   if (body.type !== undefined && !field.fixed) updates.type = body.type; // fixed fields always stay text
   if (body.decimals !== undefined) updates.decimals = Math.max(0, Math.min(6, Number(body.decimals) || 0));
   if (body.unit !== undefined) updates.unit = String(body.unit).trim();
+  // Reversible on/off — distinct from Delete (permanent). A fixed field
+  // (Barcode, Item Name) is always mandatory and can never be turned off,
+  // same protection Delete already has.
+  if (body.active !== undefined) {
+    if (field.fixed && !body.active) throw Object.assign(new Error(`"${field.label}" is a built-in field and can't be made inactive`), { status: 400 });
+    updates.active = !!body.active;
+  }
   await FieldDefDB.update({ id: fieldId }, updates);
 }
 async function moveFieldForTenant(tenantId, fieldId, direction) {
@@ -2682,7 +2691,9 @@ async function saveOrderFieldsForTenant(tenantId, list, showImages) {
 }
 
 app.get('/api/fields', resolveTenant, auth, async (req, res) => {
-  const fields = await FieldDefDB.find({ tenantId: req.tenant.id, active: true });
+  const q = { tenantId: req.tenant.id };
+  if (!req.query.includeInactive) q.active = true;
+  const fields = await FieldDefDB.find(q);
   res.json(fields);
 });
 
