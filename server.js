@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.107.1';
-const BUILD_TIME   = '2026-09-16T16:19:14Z';
+const APP_VERSION  = '1.108.0';
+const BUILD_TIME   = '2026-09-16T16:40:26Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -364,7 +364,7 @@ const tenantSchema = new mongoose.Schema({
       itemMasterFields: { type: Boolean, default: false },
       orderFooter: { type: Boolean, default: false },
     },
-    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false }),
+    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: true }),
   },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
   // Order-level info shown above/below the item table on the buyer-facing
@@ -660,6 +660,10 @@ const reportDefSchema = new mongoose.Schema({
 const platformSettingsSchema = new mongoose.Schema({
   id: { type: String, default: 'singleton' },
   logoUrl: String,
+  // One-time migration flags — each checked once at boot, then never
+  // re-applied, so a deliberate later change via the per-company toggle
+  // is never silently undone by the same migration running again.
+  orderFooterOpenedForAll: { type: Boolean, default: false },
 });
 const PlatformSettings = mongoose.model('PlatformSettings', platformSettingsSchema);
 
@@ -1283,8 +1287,8 @@ async function createTenantWithAdmin({ companyName, slug, adminName, email, phon
     // companies stay unlimited, matching the existing default exactly.
     maxExhibitions: selfChosenPassword ? 1 : null,
     settingsPermissions: selfChosenPassword
-      ? { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: true, orderFooter: false }
-      : (template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false }),
+      ? { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: true, orderFooter: true }
+      : (template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: true }),
   };
   if (template) {
     tenant.enableVariants = template.enableVariants || false;
@@ -4666,13 +4670,37 @@ async function migrateFixedFields() {
 // closed — matching what every tenant created since would have gotten.
 async function migrateSettingsPermissionsDefault() {
   const tenants = await TenantDB.find({});
-  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: false };
+  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: true };
   for (const tenant of tenants) {
     if (tenant.settingsPermissions?.itemMasterFields === undefined) {
       await TenantDB.update({ id: tenant.id }, { settingsPermissions: closed });
       log.info({ tenant: tenant.slug }, 'Migrated pre-default-deny company to closed settings permissions');
     }
   }
+}
+// One-time: opens Order Footer editing for every existing company, not
+// just future signups. Tracked by a singleton flag rather than a
+// per-tenant check, so it runs exactly once ever — a platform admin
+// closing this again later for one specific company is a deliberate
+// choice this migration will never silently undo on a future restart.
+async function migrateOrderFooterOpenForAll() {
+  let settings = await PlatformSettingsDB.findOne({ id: 'singleton' });
+  if (settings?.orderFooterOpenedForAll) return;
+  const tenants = await TenantDB.find({});
+  for (const tenant of tenants) {
+    const perms = tenant.settingsPermissions || {};
+    if (!perms.orderFooter) {
+      await TenantDB.update({ id: tenant.id }, { settingsPermissions: { ...perms, orderFooter: true } });
+    }
+  }
+  // The singleton document genuinely may not exist yet (it's only ever
+  // created when a platform logo is first uploaded) — .update() would
+  // silently do nothing against a document that isn't there, which
+  // would defeat the whole point of this flag by re-running the
+  // migration on every future restart.
+  if (settings) await PlatformSettingsDB.update({ id: 'singleton' }, { orderFooterOpenedForAll: true });
+  else await PlatformSettingsDB.create({ id: 'singleton', orderFooterOpenedForAll: true });
+  log.info({ tenantCount: tenants.length }, 'One-time migration: opened Order Footer editing for every existing company');
 }
 
 // Items and orders created before exhibitions became mandatory don't have
@@ -4711,6 +4739,7 @@ connectDB().then(async () => {
   await ensurePlatformAdminFromEnv();
   await migrateFixedFields();
   await migrateSettingsPermissionsDefault();
+  await migrateOrderFooterOpenForAll();
   await migrateExhibitionAssignment();
   app.listen(PORT, () => log.info({ port: PORT, version: APP_VERSION, builtAt: BUILD_TIME }, 'Expo Orders running'));
 }).catch(err => {
