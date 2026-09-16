@@ -20,10 +20,10 @@ Open http://localhost:3000 and sign in at `/login.html`:
 
 | Role  | Login ID            | Password  |
 |-------|----------------------|-----------|
-| Admin | `admin@meridian.test` | `admin123`|
-| Staff | `staff@meridian.test` | `staff123`|
+| Admin | `admin@kaashvi.test` | `admin123`|
+| Staff | `staff@kaashvi.test` | `staff123`|
 
-Company link (tenant slug): `meridian`. Locally there's no real subdomain, so
+Company link (tenant slug): `kaashvi`. Locally there's no real subdomain, so
 the login/register pages ask for the company link explicitly and cache it in
 `localStorage`; every API call is sent with an `X-Tenant-Slug` header. In
 production, point `*.orders.is` (or your own domain) at this service and the
@@ -31,7 +31,7 @@ subdomain is resolved automatically — no header needed.
 
 ## How the pieces fit together
 
-- **Tenant = company.** `Tenant.slug` is the subdomain (`meridian.orders.is`),
+- **Tenant = company.** `Tenant.slug` is the subdomain (`kaashvi.orders.is`),
   chosen at signup (`/register.html`) and validated the same way ecatlog
   validates `storeSlug` — format + reserved-word + uniqueness checks.
 - **Roles**: `admin` (one per company, created at signup), `staff` (created
@@ -54,11 +54,6 @@ subdomain is resolved automatically — no header needed.
   types into the input field; a camera-based fallback uses the browser's
   native `BarcodeDetector` API where available), then submit to generate a
   shareable order link (`/order/:token`) with no login required to view.
-- **Order notification emails**: on order creation, an email fires (async,
-  never blocking the response) to the company's admin, and to the buyer too
-  if their email was captured on the party record. Skipped entirely if
-  `BREVO_API_KEY` isn't set — nothing else about placing an order depends
-  on it.
 - **Reports** (`/admin/reports.html`): party-wise, item-wise and staff-wise
   order totals, computed in application code so the logic is identical
   whether running on MongoDB or the local JSON fallback.
@@ -67,18 +62,13 @@ subdomain is resolved automatically — no header needed.
 
 See `.env.example`. Nothing is required for local dev — leave `MONGO_URI` and
 the `R2_*` vars blank to use the JSON file + local disk storage fallback.
-Leave `BREVO_API_KEY` blank to skip order-notification emails entirely —
-order creation itself never depends on email being configured.
 
 ## Deploying
 
 - **Render**: `render.yaml` defines a single Node web service (`npm start`).
-  Set `MONGO_URI` (MongoDB Atlas), the `R2_*` vars, `JWT_SECRET`, and (if you
-  want order-notification emails) the `BREVO_*` vars in the Render dashboard.
+  Set `MONGO_URI` (MongoDB Atlas), the `R2_*` vars, and `JWT_SECRET` in the
+  Render dashboard.
 - **Images**: Cloudflare R2 bucket with a public URL (or custom domain)
   configured as `R2_PUBLIC_URL`.
-- **Email**: Brevo transactional email via their HTTP API (`BREVO_API_KEY`).
-  `BREVO_SENDER_EMAIL` must be a sender verified in your Brevo account, or
-  sends will fail.
 - **Domain**: point a wildcard DNS record (`*.yourdomain.com`) at the Render
   service so `<company>.yourdomain.com` resolves per tenant.
