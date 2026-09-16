@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.104.1';
-const BUILD_TIME   = '2026-09-16T10:59:39Z';
+const APP_VERSION  = '1.105.0';
+const BUILD_TIME   = '2026-09-16T11:32:19Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -233,6 +233,12 @@ const tenantSchema = new mongoose.Schema({
   name: String,                       // "Meridian Traders"
   slug: { type: String, unique: true, sparse: true }, // "meridian" -> meridian.orders.is
   natureOfBusiness: { type: String, default: '' }, // e.g. "Jewelry Wholesaler" — helps platform admin pick relevant companies when assigning exhibition participants
+  // Marks a company as existing purely to be cloned from — never a real
+  // customer, never shown in the normal Companies list or any report,
+  // and its name is never surfaced to anyone signing up (see
+  // NatureOfBusinessDB below, which maps a category name to one of these
+  // without ever exposing which real company backs it).
+  isTemplate: { type: Boolean, default: false },
   plan: { type: String, default: 'free' },
   logoUrl: String,
   // Variant tags — off by default, invisible to every existing jewelry
@@ -550,6 +556,18 @@ const pendingClientSignupSchema = new mongoose.Schema({
   expiresAt: String, createdAt: { type: String, default: () => new Date().toISOString() },
 });
 
+// The master list shown as the "Nature of Business" dropdown at
+// self-signup — each entry points at a template-only tenant (see
+// isTemplate above) whose settings get cloned when someone picks it.
+// "Other" is handled specially in the signup route below (no
+// templateTenantId at all means a blank, unconfigured start) rather than
+// needing its own row here.
+const natureOfBusinessSchema = new mongoose.Schema({
+  id: String, label: String, templateTenantId: String,
+  order: { type: Number, default: 0 }, active: { type: Boolean, default: true },
+  createdAt: { type: String, default: () => new Date().toISOString() },
+});
+
 // Images are owned by Image Code, not by any one item — this is the single
 // source of truth. Every item sharing an Image Code gets the same photos
 // automatically; item.images stays a denormalized copy (kept in sync by
@@ -650,6 +668,7 @@ const ReportDef  = mongoose.model('ReportDef', reportDefSchema);
 const AuditLog    = mongoose.model('AuditLog', auditLogSchema);
 const PasswordSetupToken = mongoose.model('PasswordSetupToken', passwordSetupTokenSchema);
 const PendingClientSignup = mongoose.model('PendingClientSignup', pendingClientSignupSchema);
+const NatureOfBusiness = mongoose.model('NatureOfBusiness', natureOfBusinessSchema);
 const ImageSet    = mongoose.model('ImageSet', imageSetSchema);
 const PlatformAdmin = mongoose.model('PlatformAdmin', platformAdminSchema);
 
@@ -728,6 +747,7 @@ const ReportDefDB = makeCollectionOps(ReportDef, 'reportDefs', { createdAt: -1 }
 const AuditLogDB   = makeCollectionOps(AuditLog, 'auditlogs', { createdAt: -1 });
 const PasswordSetupTokenDB = makeCollectionOps(PasswordSetupToken, 'passwordsetuptokens', { createdAt: -1 });
 const PendingClientSignupDB = makeCollectionOps(PendingClientSignup, 'pendingclientsignups', { createdAt: -1 });
+const NatureOfBusinessDB = makeCollectionOps(NatureOfBusiness, 'natureofbusiness', { order: 1 });
 const ImageSetDB   = makeCollectionOps(ImageSet, 'imagesets');
 const PlatformAdminDB = makeCollectionOps(PlatformAdmin, 'platformadmins');
 
@@ -1148,7 +1168,12 @@ app.get('/api/platform/diagnose-slugs', platformAuth, async (req, res) => {
   });
 });
 app.get('/api/platform/tenants', platformAuth, async (req, res) => {
-  const tenants = await TenantDB.find({});
+  let tenants = await TenantDB.find({});
+  // Template companies exist purely to be cloned from — hidden from the
+  // normal list by default so they're never mistaken for a real
+  // customer, but still reachable via ?includeTemplates=1 for actually
+  // managing them (e.g. from the Nature of Business screen).
+  if (!req.query.includeTemplates) tenants = tenants.filter(t => !t.isTemplate);
   const summaries = await Promise.all(tenants.map(async t => {
     const [userCount, itemCount, orders, partyCount] = await Promise.all([
       UserDB.count({ tenantId: t.id }),
@@ -1157,7 +1182,7 @@ app.get('/api/platform/tenants', platformAuth, async (req, res) => {
       PartyDB.count({ tenantId: t.id }),
     ]);
     const orderCount = orders.filter(o => !o.deleted).length;
-    return { id: t.id, name: t.name, slug: t.slug, natureOfBusiness: t.natureOfBusiness || '', plan: t.plan, active: t.active !== false, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
+    return { id: t.id, name: t.name, slug: t.slug, natureOfBusiness: t.natureOfBusiness || '', plan: t.plan, active: t.active !== false, isTemplate: !!t.isTemplate, createdAt: t.createdAt, userCount, itemCount, orderCount, partyCount };
   }));
   summaries.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   res.json(summaries);
@@ -1236,31 +1261,13 @@ app.put('/api/platform/tenants/:tenantId/users/:userId', platformAuth, async (re
 // sets or sees it. (No email service is wired up yet — the link is returned
 // directly to the platform admin to share manually; hook up real sending
 // later by replacing that one response field with an actual email call.)
-app.post('/api/platform/tenants', platformAuth, async (req, res) => {
-  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness, cloneFromTenantId } = req.body;
-  if (!companyName || !rawSlug || !adminName || !email)
-    return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-    return res.status(400).json({ error: 'That doesn\'t look like a valid email address' });
-  const slug = normalizeSlug(rawSlug);
-  const slugErr = validateSlug(slug);
-  if (slugErr) return res.status(400).json({ error: slugErr });
-  const blocker = await TenantDB.findOne({ slug });
-  if (blocker) return res.status(400).json({ error: `That company link name is already used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}). Pick a different one, or delete that company first if it's no longer needed.` });
-  // Optional starting point: copy another company's CONFIGURATION onto this
-  // brand-new one — the tedious stuff to set up from scratch (Item Master
-  // fields, Order Form, variant categories, Order View Layout, settings
-  // permissions) — so two companies in the same industry (e.g. two jewelry
-  // exhibitors) don't each need identical setup done by hand. Deliberately
-  // narrow: never copies anything that identifies or contacts the SOURCE
-  // company itself (name, slug, logo, address, GST, phone, socials, staff
-  // cap) — those stay blank/default on the new company either way.
-  let template = null;
-  if (cloneFromTenantId) {
-    template = await TenantDB.findOne({ id: cloneFromTenantId });
-    if (!template) return res.status(400).json({ error: 'Company to copy settings from was not found' });
-  }
-
+// Shared by platform admin's "Create a new company" and the public
+// self-signup route below — both need the exact same sequence (tenant,
+// its Item Master fields, admin user, setup-token link), the same
+// rollback if anything fails partway through, and the same precise
+// duplicate-key diagnosis. Throws an Error with .status set, so callers
+// can just catch and respond with err.message directly.
+async function createTenantWithAdmin({ companyName, slug, adminName, email, phone, maxStaff, natureOfBusiness, template, baseUrl, selfChosenPassword }) {
   const tenant = {
     id: uuid(), name: companyName, slug, natureOfBusiness: natureOfBusiness || '', plan: 'free', orderSeq: 1000, createdAt: new Date().toISOString(),
     maxStaff: maxStaff !== undefined && maxStaff !== '' ? Number(maxStaff) : null,
@@ -1280,9 +1287,6 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     tenant.orderViewColumns = template.orderViewColumns || [];
     tenant.orderViewHeaderFields = template.orderViewHeaderFields || [];
     tenant.orderViewFooterFields = template.orderViewFooterFields || [];
-    // Only the reusable boilerplate text/policy pieces of the footer — never
-    // the source company's own address/GST/phone/socials/logo, which are
-    // that company's identity, not a "setting".
     tenant.footer = {
       whatsappMessage: template.footer?.whatsappMessage || '',
       note1: template.footer?.note1 || '', note2: template.footer?.note2 || '',
@@ -1290,7 +1294,7 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     };
   }
   let createdTenant = false;
-  let admin, setupToken, baseUrl;
+  let admin, setupToken;
   try {
     await TenantDB.create(tenant);
     createdTenant = true;
@@ -1298,8 +1302,6 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     for (let i = 0; i < FIXED_FIELDS.length; i++) {
       await FieldDefDB.create({ id: uuid(), tenantId: tenant.id, order: i, active: true, options: [], createdAt: new Date().toISOString(), ...FIXED_FIELDS[i] });
     }
-    // Copy the source company's own custom Item Master fields (everything
-    // past the two always-present fixed fields), preserving their order.
     if (template) {
       const templateFields = (await FieldDefDB.find({ tenantId: template.id, active: true })).filter(f => !f.fixed).sort((a, b) => a.order - b.order);
       for (let i = 0; i < templateFields.length; i++) {
@@ -1310,24 +1312,24 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
 
     admin = {
       id: uuid(), tenantId: tenant.id, role: 'admin', loginId: String(email).toLowerCase(),
-      password: bcrypt.hashSync(uuid(), 10), // random, unusable — real password only ever set via the token link below
+      // Self-signup provides its own password directly — no setup link
+      // needed since there's nothing left to "set" separately. The
+      // platform-admin-created path (no password passed in) keeps the
+      // exact original behavior: random, unusable, real password only
+      // ever set via the emailed token link below.
+      password: selfChosenPassword ? bcrypt.hashSync(selfChosenPassword, 10) : bcrypt.hashSync(uuid(), 10),
       name: adminName, phone: phone || '', email, active: true, createdAt: new Date().toISOString(),
     };
     await UserDB.create(admin);
 
-    setupToken = uuid();
-    await PasswordSetupTokenDB.create({
-      id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
-    });
-    baseUrl = tenantBaseUrl(req, tenant);
+    if (!selfChosenPassword) {
+      setupToken = uuid();
+      await PasswordSetupTokenDB.create({
+        id: uuid(), token: setupToken, userId: admin.id, tenantId: tenant.id, used: false,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), createdAt: new Date().toISOString(),
+      });
+    }
   } catch (err) {
-    // Anything failing partway through — after the tenant record exists
-    // but before the admin user and setup link are fully in place — used
-    // to leave a real company sitting in the list with literally no way
-    // to ever log into it, and no error clear enough to explain why. Undo
-    // everything this request created instead, so a failed attempt leaves
-    // no trace and can just be retried cleanly.
     if (createdTenant) {
       await Promise.all([
         TenantDB.remove({ id: tenant.id }),
@@ -1336,43 +1338,53 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
       ]).catch(cleanupErr => log.error({ err: cleanupErr, tenantId: tenant.id }, 'Failed to roll back a partially-created company — may need manual cleanup'));
     }
     if (err.code === 11000) {
-      // The real bug behind "every slug fails identically" — this used
-      // to always assume a duplicate-key error meant the slug conflicted,
-      // without ever checking which field MongoDB actually flagged.
-      // TenantDB.create is only one of several creates in this sequence
-      // (fields, user, password-setup token); a conflict on any of THOSE
-      // would previously get mis-reported as a slug problem every single
-      // time, regardless of the slug actually being fine.
       const conflictField = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'unknown';
       if (conflictField === 'slug') {
         const blocker = await TenantDB.findOne({ slug: tenant.slug });
         const detail = blocker ? ` It's currently used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}).` : ' (Could not find which company is using it — this may need manual database cleanup; contact support with the exact link name you tried.)';
-        return res.status(400).json({ error: `That company link name is already taken.${detail}` });
+        throw Object.assign(new Error(`That company link name is already taken.${detail}`), { status: 400 });
       }
-      // Not actually about the slug — a different unique field collided
-      // (shareToken/token on some other collection, most likely a fluke
-      // UUID collision or a stale index). Says so plainly instead of
-      // blaming the slug for something it didn't cause.
       log.error({ err, conflictField, tenantSlug: tenant.slug }, 'Company creation hit a duplicate-key error on a field other than slug');
-      return res.status(500).json({ error: `Company creation failed on an unexpected duplicate value (field: ${conflictField}), not the company link name. Please try again — if this keeps happening, contact support with this exact message.` });
+      throw Object.assign(new Error(`Company creation failed on an unexpected duplicate value (field: ${conflictField}), not the company link name. Please try again — if this keeps happening, contact support with this exact message.`), { status: 500 });
     }
     throw err;
   }
-
-  const setupLink = `${baseUrl}/set-password.html?token=${setupToken}`;
-  // Fire-and-forget, same as every other notification email in this app —
-  // a slow or failing email provider should never hold up the response,
-  // and platform admin still gets the link back directly either way as a
-  // fallback if this doesn't land.
-  if (useEmail) {
+  const setupLink = selfChosenPassword ? null : `${baseUrl}/set-password.html?token=${setupToken}`;
+  if (!selfChosenPassword && useEmail) {
     sendEmail({
       to: admin.email, toName: admin.name,
       subject: `Set your password — ${tenant.name} on Expo Orders`,
       html: `<p>Hi ${escHtml(admin.name)},</p><p>Your Expo Orders account for <b>${escHtml(tenant.name)}</b> is ready. Set your password to get started:</p><p><a href="${setupLink}">${setupLink}</a></p><p>This link expires in 7 days.</p>`,
     }).catch(err => log.error({ err, tenantId: tenant.id }, 'Setup-link email failed to send'));
   }
-  log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email, clonedFrom: template?.slug || null }, 'Platform admin created a company');
-  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink, clonedFrom: template ? { id: template.id, name: template.name } : null });
+  return { tenant, admin, setupToken, setupLink };
+}
+app.post('/api/platform/tenants', platformAuth, async (req, res) => {
+  const { companyName, slug: rawSlug, adminName, email, phone, maxStaff, natureOfBusiness, cloneFromTenantId } = req.body;
+  if (!companyName || !rawSlug || !adminName || !email)
+    return res.status(400).json({ error: 'Company name, link, admin name, and email are all required' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({ error: 'That doesn\'t look like a valid email address' });
+  const slug = normalizeSlug(rawSlug);
+  const slugErr = validateSlug(slug);
+  if (slugErr) return res.status(400).json({ error: slugErr });
+  const blocker = await TenantDB.findOne({ slug });
+  if (blocker) return res.status(400).json({ error: `That company link name is already used by "${blocker.name}" (${blocker.active !== false ? 'active' : 'inactive'}, created ${new Date(blocker.createdAt).toLocaleDateString('en-IN')}). Pick a different one, or delete that company first if it's no longer needed.` });
+  let template = null;
+  if (cloneFromTenantId) {
+    template = await TenantDB.findOne({ id: cloneFromTenantId });
+    if (!template) return res.status(400).json({ error: 'Company to copy settings from was not found' });
+  }
+  try {
+    const { tenant, admin, setupLink } = await createTenantWithAdmin({
+      companyName, slug, adminName, email, phone, maxStaff, natureOfBusiness, template,
+      baseUrl: tenantBaseUrl(req, { slug }),
+    });
+    log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email, clonedFrom: template?.slug || null }, 'Platform admin created a company');
+    res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink, clonedFrom: template ? { id: template.id, name: template.name } : null });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) => {
@@ -1383,6 +1395,70 @@ app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) =>
   await TenantDB.update({ id: tenant.id }, { maxStaff });
   res.json({ ok: true, maxStaff });
 });
+// Marks a company as existing purely to be cloned from — see isTemplate
+// on the schema. Once set, it's excluded from the normal Companies list
+// and never shown by name to anyone signing up.
+app.put('/api/platform/tenants/:id/mark-template', platformAuth, async (req, res) => {
+  const tenant = await TenantDB.findOne({ id: req.params.id });
+  if (!tenant) return res.status(404).json({ error: 'Company not found' });
+  const isTemplate = !!req.body.isTemplate;
+  await TenantDB.update({ id: tenant.id }, { isTemplate });
+  res.json({ ok: true, isTemplate });
+});
+// The Nature of Business master list — each entry is what shows in the
+// self-signup dropdown, and which template company (see isTemplate)
+// backs it. Names of the real companies are never returned here in a
+// way meant for public display; the public-facing list route below
+// strips that down to just the label.
+app.get('/api/platform/nature-of-business', platformAuth, async (req, res) => {
+  const list = await NatureOfBusinessDB.find({});
+  const templateIds = [...new Set(list.map(n => n.templateTenantId).filter(Boolean))];
+  const templates = templateIds.length ? await TenantDB.find({}) : [];
+  const templateById = {}; templates.forEach(t => { templateById[t.id] = t; });
+  res.json(list.map(n => ({ ...n, templateTenantName: n.templateTenantId ? (templateById[n.templateTenantId]?.name || '(deleted company)') : null })));
+});
+app.post('/api/platform/nature-of-business', platformAuth, async (req, res) => {
+  const label = String(req.body.label || '').trim();
+  if (!label) return res.status(400).json({ error: 'Label is required' });
+  if (req.body.templateTenantId) {
+    const t = await TenantDB.findOne({ id: req.body.templateTenantId });
+    if (!t) return res.status(400).json({ error: 'Template company not found' });
+    if (!t.isTemplate) return res.status(400).json({ error: 'That company is not marked as a template — mark it as one first' });
+  }
+  const count = await NatureOfBusinessDB.count({});
+  const entry = { id: uuid(), label, templateTenantId: req.body.templateTenantId || '', order: count, active: true, createdAt: new Date().toISOString() };
+  await NatureOfBusinessDB.create(entry);
+  res.json(entry);
+});
+app.put('/api/platform/nature-of-business/:id', platformAuth, async (req, res) => {
+  const entry = await NatureOfBusinessDB.findOne({ id: req.params.id });
+  if (!entry) return res.status(404).json({ error: 'Not found' });
+  const updates = {};
+  if (req.body.label !== undefined) updates.label = String(req.body.label).trim();
+  if (req.body.templateTenantId !== undefined) {
+    if (req.body.templateTenantId) {
+      const t = await TenantDB.findOne({ id: req.body.templateTenantId });
+      if (!t) return res.status(400).json({ error: 'Template company not found' });
+      if (!t.isTemplate) return res.status(400).json({ error: 'That company is not marked as a template — mark it as one first' });
+    }
+    updates.templateTenantId = req.body.templateTenantId || '';
+  }
+  if (req.body.order !== undefined) updates.order = Number(req.body.order) || 0;
+  if (req.body.active !== undefined) updates.active = !!req.body.active;
+  await NatureOfBusinessDB.update({ id: entry.id }, updates);
+  res.json({ ok: true });
+});
+app.delete('/api/platform/nature-of-business/:id', platformAuth, async (req, res) => {
+  await NatureOfBusinessDB.remove({ id: req.params.id });
+  res.json({ ok: true });
+});
+// Public — powers the signup dropdown. Deliberately returns only id and
+// label, never templateTenantId or any real company's name.
+app.get('/api/nature-of-business', async (req, res) => {
+  const list = (await NatureOfBusinessDB.find({})).filter(n => n.active);
+  res.json(list.map(n => ({ id: n.id, label: n.label })));
+});
+
 app.put('/api/platform/tenants/:id/row-grouping', platformAuth, async (req, res) => {
   const value = req.body.orderRowGrouping;
   if (!['none', 'itemName'].includes(value)) return res.status(400).json({ error: 'Invalid grouping method' });
@@ -1952,6 +2028,53 @@ app.put('/api/auth/change-password', resolveTenant, auth, async (req, res) => {
 // of a generic 404.
 app.post('/api/companies/register', async (req, res) => {
   res.status(403).json({ error: 'New companies are set up by ExpoOrders directly — get in touch to get started.' });
+});
+// The actual free-tier self-signup — a brand-new business creating its
+// own company and admin account together, with no platform admin
+// involved. Nature of Business picks which template (if any) to clone
+// Item Master fields / Order Form / Order View Layout etc. from — see
+// NatureOfBusinessDB. No email-verification gate here unlike buyer
+// self-signup: there's no existing person's data this could expose,
+// since the company is brand new and empty.
+app.post('/api/signup', loginLimiter, async (req, res) => {
+  const { companyName, slug: rawSlug, contactPerson, email, password, natureOfBusinessId } = req.body;
+  if (!companyName || !rawSlug || !contactPerson || !email || !password)
+    return res.status(400).json({ error: 'Company name, link, contact person, email, and password are all required' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'That doesn\'t look like a valid email address' });
+  const slug = normalizeSlug(rawSlug);
+  const slugErr = validateSlug(slug);
+  if (slugErr) return res.status(400).json({ error: slugErr });
+  const blocker = await TenantDB.findOne({ slug });
+  if (blocker) return res.status(400).json({ error: `That company link is already taken. Please pick a different one.` });
+
+  let template = null, natureOfBusinessLabel = '';
+  if (natureOfBusinessId) {
+    const nob = await NatureOfBusinessDB.findOne({ id: natureOfBusinessId });
+    if (nob) {
+      natureOfBusinessLabel = nob.label;
+      if (nob.templateTenantId) template = await TenantDB.findOne({ id: nob.templateTenantId, isTemplate: true });
+    }
+  }
+
+  try {
+    const { tenant, admin } = await createTenantWithAdmin({
+      companyName, slug, adminName: contactPerson, email, phone: '', maxStaff: null,
+      natureOfBusiness: natureOfBusinessLabel, template, selfChosenPassword: password,
+      baseUrl: tenantBaseUrl(req, { slug }),
+    });
+    log.info({ tenant: tenant.slug, admin: admin.email, natureOfBusiness: natureOfBusinessLabel, clonedFrom: template?.slug || null }, 'New company self-signed up');
+    // Same session shape as /api/auth/login — signs the new admin in
+    // immediately, rather than making them log in separately right after
+    // just finishing the signup form.
+    const sessionId = uuid();
+    await UserDB.update({ id: admin.id }, { currentSessionId: sessionId });
+    const token = jwt.sign({ id: admin.id, tenantId: tenant.id, role: admin.role, loginId: admin.loginId, name: admin.name, sessionId }, JWT_SECRET, { expiresIn: '7d' });
+    const { password: _pw, ...safeAdmin } = admin;
+    res.json({ token, user: safeAdmin, tenant });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────

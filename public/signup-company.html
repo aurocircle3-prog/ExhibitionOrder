@@ -1,0 +1,58 @@
+<title>Create your company account — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div class="topbar"><div class="brand"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div></div>
+<div class="wrap" style="max-width:460px">
+  <div class="card">
+    <h2 style="margin-top:0">Create your company account</h2>
+    <p class="muted">Free to start — take orders at your next exhibition today.</p>
+    <div class="error" id="err"></div>
+    <label>Company name</label>
+    <input id="companyName">
+    <label>Company link <span class="muted">(this becomes yourcompany.expoorders.com — letters, numbers, hyphens only)</span></label>
+    <input id="slug" placeholder="yourcompany">
+    <label>Contact person</label>
+    <input id="contactPerson">
+    <label>Nature of business</label>
+    <select id="natureOfBusiness">
+      <option value="">Loading…</option>
+    </select>
+    <label>Email <span class="muted">(this becomes your login ID)</span></label>
+    <input id="email" type="email">
+    <label>Choose a password</label>
+    <input id="password" type="password">
+    <button class="primary" style="width:100%;margin-top:18px" onclick="EXO.busy(this, signup)">Create account</button>
+    <p class="muted" style="text-align:center;margin-top:12px">Already have a company account? <a href="/login.html">Sign in</a></p>
+  </div>
+  <p class="muted" id="versionTag" style="text-align:center;margin-top:14px;font-size:11px"></p>
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.showVersion('versionTag');
+(async () => {
+  const select = document.getElementById('natureOfBusiness');
+  try {
+    const list = await fetch('/api/nature-of-business').then(r => r.json());
+    select.innerHTML = list.map(n => `<option value="${n.id}">${EXO.esc(n.label)}</option>`).join('') + '<option value="">Other</option>';
+  } catch (e) {
+    select.innerHTML = '<option value="">Other</option>';
+  }
+})();
+async function signup(){
+  const err = document.getElementById('err'); err.style.display='none';
+  const body = {
+    companyName: document.getElementById('companyName').value.trim(),
+    slug: document.getElementById('slug').value.trim(),
+    contactPerson: document.getElementById('contactPerson').value.trim(),
+    natureOfBusinessId: document.getElementById('natureOfBusiness').value,
+    email: document.getElementById('email').value.trim(),
+    password: document.getElementById('password').value,
+  };
+  try {
+    const data = await EXO.apiFetch('/signup', { method:'POST', body: JSON.stringify(body) });
+    EXO.saveSession(data);
+    location.href = '/admin/dashboard.html';
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+</script>
