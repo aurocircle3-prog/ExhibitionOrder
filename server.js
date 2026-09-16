@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.102.0';
-const BUILD_TIME   = '2026-09-04T07:48:03Z';
+const APP_VERSION  = '1.103.0';
+const BUILD_TIME   = '2026-09-16T10:13:55Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -1344,8 +1344,20 @@ app.post('/api/platform/tenants', platformAuth, async (req, res) => {
     throw err;
   }
 
+  const setupLink = `${baseUrl}/set-password.html?token=${setupToken}`;
+  // Fire-and-forget, same as every other notification email in this app —
+  // a slow or failing email provider should never hold up the response,
+  // and platform admin still gets the link back directly either way as a
+  // fallback if this doesn't land.
+  if (useEmail) {
+    sendEmail({
+      to: admin.email, toName: admin.name,
+      subject: `Set your password — ${tenant.name} on Expo Orders`,
+      html: `<p>Hi ${escHtml(admin.name)},</p><p>Your Expo Orders account for <b>${escHtml(tenant.name)}</b> is ready. Set your password to get started:</p><p><a href="${setupLink}">${setupLink}</a></p><p>This link expires in 7 days.</p>`,
+    }).catch(err => log.error({ err, tenantId: tenant.id }, 'Setup-link email failed to send'));
+  }
   log.info({ tenant: tenant.slug, admin: admin.email, platformAdmin: req.platformAdmin.email, clonedFrom: template?.slug || null }, 'Platform admin created a company');
-  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink: `${baseUrl}/set-password.html?token=${setupToken}`, clonedFrom: template ? { id: template.id, name: template.name } : null });
+  res.json({ tenant, admin: { id: admin.id, name: admin.name, email: admin.email }, setupLink, clonedFrom: template ? { id: template.id, name: template.name } : null });
 });
 
 app.put('/api/platform/tenants/:id/max-staff', platformAuth, async (req, res) => {
@@ -1902,6 +1914,20 @@ app.post('/api/auth/set-password', loginLimiter, async (req, res) => {
   await UserDB.update({ id: entry.userId }, { password: bcrypt.hashSync(password, 10) });
   await PasswordSetupTokenDB.update({ id: entry.id }, { used: true });
   log.info({ userId: entry.userId, tenantId: entry.tenantId }, 'Password set via setup link');
+  res.json({ ok: true });
+});
+// Self-service change-password for an already-logged-in user — works for
+// admin or staff alike, since all it needs is a valid token. Requires the
+// current password (not just a fresh login), same as most apps' "change
+// password" flow, so a device left logged in can't have its password
+// silently swapped by whoever picks it up.
+app.put('/api/auth/change-password', resolveTenant, auth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  const user = await UserDB.findOne({ id: req.user.id });
+  if (!user || !bcrypt.compareSync(currentPassword || '', user.password)) return res.status(401).json({ error: 'Current password is incorrect' });
+  await UserDB.update({ id: user.id }, { password: bcrypt.hashSync(newPassword, 10) });
+  log.info({ userId: user.id, tenantId: req.tenant.id }, 'Password changed by user');
   res.json({ ok: true });
 });
 

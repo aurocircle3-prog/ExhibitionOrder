@@ -99,7 +99,7 @@
       <div class="brand" style="display:flex;align-items:center;gap:8px">${brandMark}<span>${localStorage.getItem('exo_tenant_name') || 'Expo Orders'}</span></div>
       ${switcherHtml}
       <button class="nav-toggle" onclick="this.closest('.topbar').classList.toggle('nav-open')" aria-label="Menu">☰</button>
-      <nav>${items}<a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>
+      <nav>${items}<a href="#" onclick="EXO.showChangePasswordModal();return false;">Change password</a><a href="#" onclick="EXO.logout();return false;">Logout${user ? ' (' + user.name + ')' : ''}</a></nav>
       <button class="theme-toggle" onclick="EXO.toggleTheme()" title="Toggle light/dark" aria-label="Toggle light/dark theme">${themeIcon}</button>
     </div>`;
   }
@@ -220,6 +220,48 @@
     toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
   }
 
+  // Self-service change-password — available to admin and staff alike,
+  // from any page, since this whole file (and the nav link that opens
+  // this) is shared across both roles. Built into the DOM on first use
+  // rather than relying on markup that would need adding to every single
+  // page individually.
+  function showChangePasswordModal(){
+    let el = document.getElementById('exo-changepw-modal');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'exo-changepw-modal';
+      el.className = 'lightbox';
+      el.innerHTML = `
+        <div class="crop-box" style="max-width:360px;text-align:left">
+          <h3 style="margin-top:0">Change password</h3>
+          <div class="error" id="exo-changepw-err" style="display:none"></div>
+          <label>Current password</label>
+          <input type="password" id="exo-changepw-current">
+          <label style="margin-top:10px">New password <span class="muted">(at least 6 characters)</span></label>
+          <input type="password" id="exo-changepw-new">
+          <div class="btn-row" style="margin-top:14px">
+            <button class="primary" onclick="EXO.busy(this, () => window.__exoSubmitChangePassword())">Save</button>
+            <button class="ghost" onclick="document.getElementById('exo-changepw-modal').classList.remove('open')">Cancel</button>
+          </div>
+        </div>`;
+      document.body.appendChild(el);
+      window.__exoSubmitChangePassword = async () => {
+        const err = document.getElementById('exo-changepw-err'); err.style.display = 'none';
+        const currentPassword = document.getElementById('exo-changepw-current').value;
+        const newPassword = document.getElementById('exo-changepw-new').value;
+        try {
+          await apiFetch('/auth/change-password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
+          document.getElementById('exo-changepw-modal').classList.remove('open');
+          document.getElementById('exo-changepw-current').value = '';
+          document.getElementById('exo-changepw-new').value = '';
+          toast('Password changed.');
+        } catch (e) { err.textContent = e.message; err.style.display = 'block'; }
+      };
+    }
+    document.getElementById('exo-changepw-err').style.display = 'none';
+    el.classList.add('open');
+  }
+
   // Small, deliberately-boring helper for "did my last deploy actually go
   // live" — fetches the running server's version/build time and drops it
   // into whichever element asked for it. Fails silently; a missing version
@@ -267,7 +309,7 @@
     const jsEscaped = String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
     return jsEscaped.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, exhibitionSubNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr };
+  window.EXO = { getTenantSlug, apiFetch, saveSession, getUser, logout, requireRole, adminNav, staffNav, clientNav, exhibitionSubNav, toast, showVersion, busy, exitExhibition, currentExhibition, ensureExhibitionSelected, toggleTheme, esc, escAttr, showChangePasswordModal };
 
   // Caches the app shell (order-taking page + scripts) so it can still load
   // with zero connection. Registration itself needs to happen once online;
