@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.107.0';
-const BUILD_TIME   = '2026-09-16T14:53:34Z';
+const APP_VERSION  = '1.107.1';
+const BUILD_TIME   = '2026-09-16T16:19:14Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -3225,9 +3225,10 @@ app.get('/api/items/template/excel', resolveTenant, auth, async (req, res) => {
     // comma-separated, required just like the fixed fields are, so bulk
     // imports can't silently skip past them the way they were before.
     const categoryHeaders = req.tenant.enableVariants ? (req.tenant.variantCategories || []).map(c => `${c.label} (comma-separated) *`) : [];
+    const maxOrderHeader = 'Maximum order to take (optional)';
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders]]);
-    ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
+    const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders, maxOrderHeader]]);
+    ws['!cols'] = [...headers, ...categoryHeaders, maxOrderHeader].map(() => ({ wch: 22 }));
     XLSX.utils.book_append_sheet(wb, ws, 'Item Master');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Disposition', 'attachment; filename="Item_Master_Template.xlsx"');
@@ -3242,16 +3243,18 @@ app.get('/api/items/export/excel', resolveTenant, auth, requireRole('admin', 'st
     const headers = fieldDefs.map(fieldHeaderLabel);
     const categories = req.tenant.enableVariants ? (req.tenant.variantCategories || []) : [];
     const categoryHeaders = categories.map(c => `${c.label} (comma-separated) *`);
+    const maxOrderHeader = 'Maximum order to take (optional)';
     const q = { tenantId: req.tenant.id, active: true };
     if (req.query.exhibitionId) q.exhibitionId = req.query.exhibitionId;
     const items = await ItemDB.find(q);
     const rows = items.map(it => [
       ...fieldDefs.map(f => it.fields?.[f.key] ?? ''),
       ...categories.map(c => (it.variantSelections?.[c.key] || []).join(', ')),
+      it.maxOrderQty ?? '',
     ]);
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders], ...rows]);
-    ws['!cols'] = [...headers, ...categoryHeaders].map(() => ({ wch: 22 }));
+    const ws = XLSX.utils.aoa_to_sheet([[...headers, ...categoryHeaders, maxOrderHeader], ...rows]);
+    ws['!cols'] = [...headers, ...categoryHeaders, maxOrderHeader].map(() => ({ wch: 22 }));
     XLSX.utils.book_append_sheet(wb, ws, 'Items');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Disposition', 'attachment; filename="Items_Export.xlsx"');
@@ -3316,6 +3319,18 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
           rawSelections[cat.key] = String(row[header]).split(',').map(v => v.trim()).filter(Boolean);
         });
         const variantSelections = resolveVariantSelections(categories, rawSelections);
+        // Maximum order to take — matched by header text the same way tag
+        // columns are, since it's not a real Item Master field either.
+        // Blank leaves it untouched on update, or unset on create — never
+        // silently overwrites the item's current limit with a blank cell.
+        let maxOrderQtyFromRow, maxOrderQtyError;
+        const maxOrderHeaderKey = Object.keys(row).find(h => baseLabelFromHeader(h) === 'maximum order to take');
+        if (maxOrderHeaderKey && row[maxOrderHeaderKey] !== '') {
+          const n = Number(row[maxOrderHeaderKey]);
+          if (!Number.isFinite(n) || n < 0) maxOrderQtyError = 'Invalid "Maximum order to take" value';
+          else maxOrderQtyFromRow = n;
+        }
+        if (maxOrderQtyError) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: maxOrderQtyError }); continue; }
         const existing = await ItemDB.findOne({ tenantId: req.tenant.id, exhibitionId, scannerCode, active: true });
         // Validated against the MERGED result, not just this row's own tag
         // columns — a row updating only some other field, with the tag
@@ -3328,7 +3343,9 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
         if (completenessErr) { skipped++; rowErrors.push({ row: rowNum, scannerCode, reason: `Skipped — ${completenessErr}` }); continue; }
 
         if (existing) {
-          await ItemDB.update({ id: existing.id }, { fields: { ...existing.fields, ...fields }, variantSelections: mergedTags });
+          const updates = { fields: { ...existing.fields, ...fields }, variantSelections: mergedTags };
+          if (maxOrderQtyFromRow !== undefined) updates.maxOrderQty = maxOrderQtyFromRow;
+          await ItemDB.update({ id: existing.id }, updates);
           updated++;
         } else {
           if (maxItems != null && itemCount >= maxItems) {
@@ -3336,7 +3353,7 @@ app.post('/api/items/import/excel', resolveTenant, auth, requireRole('admin', 's
             rowErrors.push({ row: rowNum, scannerCode, reason: `Skipped — item limit reached for this exhibition (${maxItems})` });
             continue;
           }
-          await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, variantSelections: mergedTags, images: [], active: true, createdAt: new Date().toISOString() });
+          await ItemDB.create({ id: uuid(), tenantId: req.tenant.id, exhibitionId, scannerCode, fields, variantSelections: mergedTags, maxOrderQty: maxOrderQtyFromRow ?? null, images: [], active: true, createdAt: new Date().toISOString() });
           created++; itemCount++;
         }
       }
