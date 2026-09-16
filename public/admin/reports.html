@@ -3,115 +3,114 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
-<div id="subnav" class="wrap" style="padding-bottom:0"></div>
 <div class="wrap">
-  <div class="tabs" id="reportTabs"></div>
-  <p class="muted" id="noCustomReportsMsg" style="display:none">No reports have been set up for your company yet — contact ExpoOrders to get one built.</p>
-  <div id="reportPanels"></div>
+  <div class="tabs">
+    <button class="tab-btn" data-tab="custom" onclick="switchTab('custom')">Custom Reports</button>
+    <button class="tab-btn" data-tab="party" onclick="switchTab('party')">Party-wise</button>
+    <button class="tab-btn" data-tab="item" onclick="switchTab('item')">Item-wise</button>
+    <button class="tab-btn" data-tab="staff" onclick="switchTab('staff')">Staff-wise</button>
+  </div>
+
+  <div class="tab-panel" id="tab-custom">
+    <div class="card">
+      <h3 style="margin-top:0">Custom Reports</h3>
+      <div class="grid cols-2">
+        <div><label>Exhibition</label><select id="reportExhibition" onchange="loadReportData()"></select></div>
+        <div><label>Report</label><select id="reportPicker" onchange="loadReportData()"></select></div>
+      </div>
+      <p class="muted" id="noCustomReportsMsg" style="display:none">No custom reports have been set up for your company yet — contact ExpoOrders to get one built.</p>
+      <div id="customReportResult" style="margin-top:14px"></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-party">
+    <div class="card">
+      <h3 style="margin-top:0">Party-wise orders</h3>
+      <div class="table-scroll"><table><thead><tr><th>Buyer</th><th>Phone</th><th>Orders</th></tr></thead><tbody id="partyRows"><tr><td colspan="3" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-item">
+    <div class="card">
+      <h3 style="margin-top:0">Item-wise orders</h3>
+      <div class="table-scroll"><table><thead><tr><th>Item</th><th>Scan code</th><th>Qty ordered</th></tr></thead><tbody id="itemRows"><tr><td colspan="3" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-staff">
+    <div class="card">
+      <h3 style="margin-top:0">Staff-wise orders</h3>
+      <div class="table-scroll"><table><thead><tr><th>Staff</th><th>Orders</th></tr></thead><tbody id="staffRows"><tr><td colspan="2" class="muted">Loading…</td></tr></tbody></table></div>
+    </div>
+  </div>
 </div>
 <script src="/app.js"></script>
 <script>
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('reports');
-// Arriving with ?exhibitionId= (from the exhibition hub or its sub-nav)
-// means every report on this page should default to that one exhibition
-// instead of "All exhibitions" — and the sub-nav shows too, so this still
-// feels like part of that same exhibition's set of screens.
-const preselectExhibitionId = new URLSearchParams(location.search).get('exhibitionId') || '';
-if (preselectExhibitionId) document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('reports');
 
-let allExhibitions = [];
-let reportList = [];
-let activeReportId = null;
-
-function switchReportTab(id){
-  activeReportId = id;
-  document.querySelectorAll('#reportTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.reportId === id));
-  document.querySelectorAll('.report-panel').forEach(p => p.classList.toggle('active', p.id === 'reportpanel-' + id));
-  localStorage.setItem('exo_reports_tab', id);
-  loadReportData(id);
+function switchTab(name){
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  localStorage.setItem('exo_reports_tab', name);
 }
 
-async function init(){
+let customReportList = [];
+async function loadCustomReportsTab(){
   const [exhibitions, reports] = await Promise.all([
     EXO.apiFetch('/exhibitions'), EXO.apiFetch('/reports/custom'),
   ]);
-  allExhibitions = exhibitions;
-  reportList = reports;
-
+  customReportList = reports;
+  const exSelect = document.getElementById('reportExhibition');
+  // Every exhibition the company's ever been part of — current or
+  // completed — since a report is just as useful for a show that already
+  // wrapped up as one that's still running.
+  exSelect.innerHTML = exhibitions.map(e => `<option value="${e.id}">${e.name}${e.status==='completed'?' (completed)':''}</option>`).join('')
+    || '<option value="">— no exhibitions yet —</option>';
+  const repSelect = document.getElementById('reportPicker');
   document.getElementById('noCustomReportsMsg').style.display = reports.length ? 'none' : 'block';
-  document.getElementById('reportTabs').innerHTML = reports.map(r => `<button class="tab-btn" data-report-id="${r.id}" onclick="switchReportTab('${r.id}')">${EXO.esc(r.name)}</button>`).join('');
-
-  const exOptionsHtml = '<option value="">All exhibitions</option>' + exhibitions.map(e => `<option value="${e.id}" ${e.id===preselectExhibitionId?'selected':''}>${EXO.esc(e.name)}${e.status==='completed'?' (completed)':''}</option>`).join('');
-  const lockedExhibition = preselectExhibitionId ? exhibitions.find(e => e.id === preselectExhibitionId) : null;
-  // Locked to one exhibition (arrived via the hub — you're "inside" that
-  // show) means no picker at all, not even a disabled one: a hidden input
-  // carries the id so loadReportData/downloadReportExcel work unchanged,
-  // and a plain label shows which exhibition this is, with no way to
-  // switch to "All exhibitions" or any other show from here.
-  document.getElementById('reportPanels').innerHTML = reports.map(r => `
-    <div class="tab-panel report-panel" id="reportpanel-${r.id}">
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-          <h3 style="margin:0">${EXO.esc(r.name)}</h3>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            ${lockedExhibition
-              ? `<span class="muted" style="font-size:13px">📍 ${EXO.esc(lockedExhibition.name)}</span><input type="hidden" id="exFilter-${r.id}" value="${preselectExhibitionId}">`
-              : `<select id="exFilter-${r.id}" onchange="loadReportData('${r.id}')" style="max-width:200px">${exOptionsHtml}</select>`}
-            <input id="search-${r.id}" placeholder="Search…" oninput="renderReportTable('${r.id}')" style="max-width:200px">
-            <button class="ghost small" onclick="downloadReportExcel('${r.id}')">⬇ Excel</button>
-          </div>
-        </div>
-        <div class="table-scroll"><table id="table-${r.id}">
-          <thead><tr id="thead-${r.id}"></tr></thead>
-          <tbody id="tbody-${r.id}"><tr><td class="muted">Loading…</td></tr></tbody>
-          <tfoot id="tfoot-${r.id}"></tfoot>
-        </table></div>
-      </div>
-    </div>`).join('');
-
-  if (reports.length) switchReportTab(localStorage.getItem('exo_reports_tab') && reports.some(r => r.id === localStorage.getItem('exo_reports_tab')) ? localStorage.getItem('exo_reports_tab') : reports[0].id);
+  repSelect.parentElement.style.display = reports.length ? 'block' : 'none';
+  repSelect.innerHTML = reports.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+  if (exhibitions.length && reports.length) loadReportData();
 }
-
-const reportDataCache = {};
-async function loadReportData(id){
-  const exId = document.getElementById('exFilter-' + id).value;
-  document.getElementById('tbody-' + id).innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
+async function loadReportData(){
+  const exId = document.getElementById('reportExhibition').value;
+  const repId = document.getElementById('reportPicker').value;
+  const box = document.getElementById('customReportResult');
+  if (!exId || !repId) { box.innerHTML = ''; return; }
+  box.innerHTML = '<p class="muted">Loading…</p>';
   try {
-    reportDataCache[id] = await EXO.apiFetch(`/reports/custom/${id}` + (exId ? `?exhibitionId=${exId}` : ''));
-  } catch (e) {
-    reportDataCache[id] = null;
-    document.getElementById('tbody-' + id).innerHTML = `<tr><td><div class="error" style="display:block">${EXO.esc(e.message)}</div></td></tr>`;
-    return;
-  }
-  renderReportTable(id);
+    const data = await EXO.apiFetch(`/reports/custom/${repId}?exhibitionId=${exId}`);
+    const headers = data.columns.map(c => c.label);
+    const fmtVal = (v, c) => {
+      if (typeof v === 'number') return c.decimals != null ? v.toFixed(c.decimals) + (c.unit ? ' ' + c.unit : '') : String(v);
+      return v ?? '';
+    };
+    box.innerHTML = `
+      <div class="btn-row" style="justify-content:flex-end;margin-bottom:8px">
+        <button class="ghost small" onclick="downloadReportExcel()">⬇ Download Excel</button>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+        <tbody>${data.rows.map(row => `<tr>${data.columns.map(c => `<td>${fmtVal(row[c.id], c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${headers.length}" class="muted">No data for this exhibition yet</td></tr>`}</tbody>
+      </table></div>`;
+  } catch (e) { box.innerHTML = `<div class="error" style="display:block">${e.message}</div>`; }
 }
-function fmtVal(v, c){
-  if (typeof v === 'number') return c.decimals != null ? v.toFixed(c.decimals) + (c.unit ? ' ' + c.unit : '') : String(v);
-  return v ?? '';
-}
-function renderReportTable(id){
-  const data = reportDataCache[id];
-  if (!data) return;
-  const q = (document.getElementById('search-' + id).value || '').trim().toLowerCase();
-  document.getElementById('thead-' + id).innerHTML = data.columns.map(c => `<th>${EXO.esc(c.label)}</th>`).join('');
-  const rows = q ? data.rows.filter(row => data.columns.some(c => String(fmtVal(row[c.id], c)).toLowerCase().includes(q))) : data.rows;
-  document.getElementById('tbody-' + id).innerHTML = rows.map(row => `<tr>${data.columns.map(c => `<td>${EXO.esc(fmtVal(row[c.id], c))}</td>`).join('')}</tr>`).join('')
-    || `<tr><td colspan="${data.columns.length}" class="muted">No data for this exhibition yet</td></tr>`;
-  // Grand-total footer row — only columns with showTotal actually get a
-  // number; everything else in that row stays blank, same idea as the
-  // totals row at the bottom of a printed order/ledger.
-  const hasTotals = data.totals && Object.keys(data.totals).length;
-  document.getElementById('tfoot-' + id).innerHTML = hasTotals
-    ? `<tr style="font-weight:700;border-top:2px solid var(--line)">${data.columns.map((c, i) => `<td>${i === 0 ? 'Total' : (c.id in data.totals ? EXO.esc(fmtVal(data.totals[c.id], c)) : '')}</td>`).join('')}</tr>`
-    : '';
-}
-function downloadReportExcel(id){
-  const exId = document.getElementById('exFilter-' + id).value;
-  const p = new URLSearchParams({ token: localStorage.getItem('exo_token'), tenant: EXO.getTenantSlug() });
-  if (exId) p.set('exhibitionId', exId);
-  location.href = `/api/reports/custom/${id}/export?${p.toString()}`;
+function downloadReportExcel(){
+  const exId = document.getElementById('reportExhibition').value;
+  const repId = document.getElementById('reportPicker').value;
+  const p = new URLSearchParams({ token: localStorage.getItem('exo_token'), tenant: EXO.getTenantSlug(), exhibitionId: exId });
+  location.href = `/api/reports/custom/${repId}/export?${p.toString()}`;
 }
 
-init();
+(async function(){
+  const [byParty, byItem, byStaff] = await Promise.all([
+    EXO.apiFetch('/reports/party-wise'), EXO.apiFetch('/reports/item-wise'), EXO.apiFetch('/reports/staff-wise')
+  ]);
+  document.getElementById('partyRows').innerHTML = byParty.map(p => `<tr><td>${p.partyName}</td><td>${p.partyPhone}</td><td>${p.orderCount}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
+  document.getElementById('itemRows').innerHTML = byItem.map(i => `<tr><td>${i.label}</td><td>${i.scannerCode||''}</td><td>${i.qty}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No orders yet</td></tr>';
+  document.getElementById('staffRows').innerHTML = byStaff.map(s => `<tr><td>${s.staffName}</td><td>${s.orderCount}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No orders yet</td></tr>';
+  await loadCustomReportsTab();
+  switchTab(localStorage.getItem('exo_reports_tab') || 'custom');
+})();
 </script>

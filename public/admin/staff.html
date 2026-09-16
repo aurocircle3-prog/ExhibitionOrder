@@ -4,22 +4,6 @@
 <link rel="icon" href="/logo.svg">
 <div id="nav"></div>
 <div class="wrap">
-  <div class="card" id="resetLinkCard" style="display:none">
-    <h3 style="margin-top:0">Reset link ready ✅</h3>
-    <p class="muted">Share this with <b id="resetLinkName"></b> — valid 7 days, works once. They'll set their own new password when they open it.</p>
-    <input id="resetLinkBox" readonly onclick="this.select()">
-    <button class="ghost" style="margin-top:10px" onclick="copyResetLink()">Copy link</button>
-    <button class="ghost" style="margin-top:10px" onclick="document.getElementById('resetLinkCard').style.display='none'">Close</button>
-  </div>
-  <div class="card" id="activityCard" style="display:none">
-    <h3 style="margin-top:0">Login activity — <span id="activityName"></span></h3>
-    <p class="muted" id="activitySummary"></p>
-    <div class="table-scroll"><table>
-      <thead><tr><th>When</th><th>IP address</th></tr></thead>
-      <tbody id="activityRows"></tbody>
-    </table></div>
-    <button class="ghost" style="margin-top:10px" onclick="document.getElementById('activityCard').style.display='none'">Close</button>
-  </div>
   <div class="card">
     <h3 style="margin-top:0">Staff accounts <span class="muted" id="usage"></span></h3>
     <p class="muted">Created internally by the admin — staff cannot self-register.</p>
@@ -37,7 +21,7 @@
         <label>Phone</label>
         <div style="display:flex;gap:6px">
           <input id="phoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-          <input id="phone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
+          <input id="phone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
         </div>
       </div>
       <div><label>Email <span class="muted">(used as login ID)</span></label><input id="email" type="email"></div>
@@ -63,7 +47,7 @@
         <label>Phone</label>
         <div style="display:flex;gap:6px">
           <input id="clientPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-          <input id="clientPhone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
+          <input id="clientPhone" type="tel" inputmode="numeric" placeholder="90290 06090" style="flex:1">
         </div>
       </div>
       <div><label>Email <span class="muted">(used as login ID)</span></label><input id="clientEmail" type="email"></div>
@@ -84,49 +68,32 @@ async function load(){
   document.getElementById('usage').textContent = `— ${activeCount} / ${max ?? '∞'} used`;
   document.getElementById('rows').innerHTML = staff.map(s => `
     <tr>
-      <td>${EXO.esc(s.name)}</td><td>${EXO.esc(s.loginId)}</td><td>${EXO.esc(s.phone)||'—'}</td>
+      <td>${s.name}</td><td>${s.loginId}</td><td>${s.phone||'—'}</td>
       <td>${s.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
-        <button class="ghost small" onclick="sendResetLink('${s.id}','${EXO.escAttr(s.name)}')">Send reset link</button>
-        <button class="ghost small" onclick="showActivity('${s.id}','${EXO.escAttr(s.name)}',false)">Login activity</button>
+        <button class="ghost small" onclick="resetPassword('${s.id}','${s.name.replace(/'/g,"\\'")}')">Reset password</button>
         <button class="ghost small" onclick="toggle('${s.id}', ${!s.active})">${s.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="remove('${s.id}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No staff yet</td></tr>';
   document.getElementById('clientRows').innerHTML = clients.map(c => `
     <tr>
-      <td>${EXO.esc(c.name)}</td><td>${EXO.esc(c.loginId)}</td><td>${EXO.esc(c.phone)||'—'}</td>
+      <td>${c.name}</td><td>${c.loginId}</td><td>${c.phone||'—'}</td>
       <td>${c.active?'Active':'<span class="muted">Disabled</span>'}</td>
       <td>
-        <button class="ghost small" onclick="sendClientResetLink('${c.id}','${EXO.escAttr(c.name)}')">Send reset link</button>
-        <button class="ghost small" onclick="showActivity('${c.id}','${EXO.escAttr(c.name)}',true)">Login activity</button>
+        <button class="ghost small" onclick="resetClientPassword('${c.id}','${c.name.replace(/'/g,"\\'")}')">Reset password</button>
         <button class="ghost small" onclick="toggleClient('${c.id}', ${!c.active})">${c.active?'Disable':'Enable'}</button>
         <button class="danger small" onclick="removeClient('${c.id}')">Delete</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="5" class="muted">No buyer logins yet</td></tr>';
 }
-function showResetLink(link, name){
-  document.getElementById('resetLinkName').textContent = name;
-  document.getElementById('resetLinkBox').value = link;
-  document.getElementById('resetLinkCard').style.display = 'block';
-  document.getElementById('resetLinkCard').scrollIntoView({ behavior: 'smooth' });
-}
-function copyResetLink(){ document.getElementById('resetLinkBox').select(); document.execCommand('copy'); }
-async function sendResetLink(id, name){
+async function resetPassword(id, name){
+  const pw = prompt(`New password for ${name} (min 6 characters):`);
+  if (pw === null) return; // cancelled
+  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
   try {
-    const res = await EXO.apiFetch('/staff/'+id+'/reset-link', { method: 'POST' });
-    showResetLink(res.resetLink, name);
-  } catch(e) { EXO.toast(e.message, 'error'); }
-}
-async function showActivity(id, name, isClient){
-  try {
-    const data = await EXO.apiFetch(`/${isClient ? 'clients' : 'staff'}/${id}/login-activity`);
-    document.getElementById('activityName').textContent = name;
-    const flag = data.distinctIps24h > 1 ? `⚠️ ${data.distinctIps24h} different IPs in the last 24h` : (data.distinctIps7d > 1 ? `${data.distinctIps7d} different IPs in the last 7 days` : 'Nothing unusual — one IP recently');
-    document.getElementById('activitySummary').textContent = flag;
-    document.getElementById('activityRows').innerHTML = data.recent.map(r => `<tr><td>${new Date(r.at).toLocaleString()}</td><td>${r.ip || '—'}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No logins recorded yet</td></tr>';
-    document.getElementById('activityCard').style.display = 'block';
-    document.getElementById('activityCard').scrollIntoView({ behavior: 'smooth' });
+    await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
+    EXO.toast(`Password updated for ${name}`);
   } catch(e) { EXO.toast(e.message, 'error'); }
 }
 async function addStaff(){
@@ -164,10 +131,13 @@ async function addClient(){
     load();
   } catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Could not add buyer login — see error above', 'error'); }
 }
-async function sendClientResetLink(id, name){
+async function resetClientPassword(id, name){
+  const pw = prompt(`New password for ${name} (min 6 characters):`);
+  if (pw === null) return;
+  if (pw.length < 6) { EXO.toast('Password must be at least 6 characters', 'error'); return; }
   try {
-    const res = await EXO.apiFetch('/clients/'+id+'/reset-link', { method: 'POST' });
-    showResetLink(res.resetLink, name);
+    await EXO.apiFetch('/clients/'+id, { method:'PUT', body: JSON.stringify({ newPassword: pw }) });
+    EXO.toast(`Password updated for ${name}`);
   } catch(e) { EXO.toast(e.message, 'error'); }
 }
 async function toggleClient(id, active){ await EXO.apiFetch('/clients/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }
