@@ -81,9 +81,9 @@ function renderOrderDetailFields(){
   if (!orderCustomFields.length) { box.innerHTML = ''; return; }
   box.innerHTML = `<label style="margin-top:14px">Order details</label>` + orderCustomFields.map(f => `
     <div style="margin-top:6px">
-      <label class="muted" style="font-weight:400">${f.label}</label>
+      <label class="muted" style="font-weight:400">${EXO.esc(f.label)}</label>
       <input type="${f.type==='number'?'number':'text'}" ${f.type==='number'?`step="${1/Math.pow(10, f.decimals ?? 2)}"`:''}
-        value="${orderDetailValues[f.key] ?? ''}" oninput="orderDetailValues['${f.key}']=this.value">
+        value="${EXO.esc(orderDetailValues[f.key] ?? '')}" oninput="orderDetailValues['${f.key}']=this.value">
     </div>`).join('');
 }
 
@@ -117,12 +117,12 @@ function renderCart(){
   const existingScroll = document.querySelector('#cartRows .table-scroll');
   const scrollLeft = existingScroll ? existingScroll.scrollLeft : 0;
   if (!cart.length) { document.getElementById('cartRows').innerHTML = '<p class="muted">No items — add at least one below</p>'; return; }
-  const fieldCols = orderFields.map(f => `<th>${f.label}${f.unit ? ' ('+f.unit+')' : ''}</th>`).join('');
+  const fieldCols = orderFields.map(f => `<th>${EXO.esc(f.label)}${f.unit ? ' ('+EXO.esc(f.unit)+')' : ''}</th>`).join('');
   const rows = cart.map(c => `
     <tr>
-      <td>${c.label}<br><span class="muted">${c.code}</span></td>
-      ${orderFields.map(f => `<td><input style="width:80px" value="${c.extra?.[f.key] ?? ''}" oninput="updateExtra('${c.itemId}','${f.key}',this.value)"></td>`).join('')}
-      <td><input style="width:140px" placeholder="Optional note" value="${c.comment || ''}" oninput="updateComment('${c.itemId}',this.value)"></td>
+      <td>${EXO.esc(c.label)}<br><span class="muted">${EXO.esc(c.code)}</span></td>
+      ${orderFields.map(f => `<td><input style="width:80px" value="${EXO.esc(c.extra?.[f.key] ?? '')}" oninput="updateExtra('${c.itemId}','${f.key}',this.value)"></td>`).join('')}
+      <td><input style="width:140px" placeholder="Optional note" value="${EXO.esc(c.comment || '')}" oninput="updateComment('${c.itemId}',this.value)"></td>
       <td class="qty-ctrl"><button class="ghost small" onclick="changeQty('${c.itemId}',-1)">-</button>${c.qty}<button class="ghost small" onclick="changeQty('${c.itemId}',1)">+</button></td>
       <td><button class="danger small" onclick="removeLine('${c.itemId}')">✕</button></td>
     </tr>`).join('');

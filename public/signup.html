@@ -1,0 +1,41 @@
+<title>Create your account — Expo Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/logo.svg">
+<div class="topbar"><div class="brand"><img src="/logo.svg" alt="" style="height:22px;vertical-align:-6px;margin-right:8px">Expo Orders</div></div>
+<div class="wrap" style="max-width:420px">
+  <div class="card">
+    <h2 style="margin-top:0">Create your account</h2>
+    <p class="muted">See all your past and future orders in one place — no need to keep track of separate links.</p>
+    <div class="error" id="err"></div>
+    <label>Your name</label>
+    <input id="name">
+    <label>Email <span class="muted">(this becomes your login ID)</span></label>
+    <input id="email" type="email">
+    <label>Phone <span class="muted">(optional — helps us link this to orders you've already placed)</span></label>
+    <input id="phone" type="tel">
+    <label>Choose a password</label>
+    <input id="password" type="password">
+    <button class="primary" style="width:100%;margin-top:18px" onclick="EXO.busy(this, signup)">Create account</button>
+    <p class="muted" style="text-align:center;margin-top:12px">Already have an account? <a href="/login.html">Sign in</a></p>
+  </div>
+  <p class="muted" id="versionTag" style="text-align:center;margin-top:14px;font-size:11px"></p>
+</div>
+<script src="/app.js"></script>
+<script>
+EXO.showVersion('versionTag');
+async function signup(){
+  const err = document.getElementById('err'); err.style.display='none';
+  const body = {
+    name: document.getElementById('name').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    phone: document.getElementById('phone').value.trim(),
+    password: document.getElementById('password').value,
+  };
+  try {
+    const data = await EXO.apiFetch('/clients/signup', { method:'POST', body: JSON.stringify(body) });
+    EXO.saveSession(data);
+    location.href = '/client/orders.html';
+  } catch(e) { err.textContent = e.message; err.style.display='block'; }
+}
+</script>
