@@ -45,11 +45,10 @@ function tenantBaseUrl(req, tenant) {
 // Generates a one-time password-reset link for an existing user — the same
 // token mechanism the initial admin-setup link uses (PasswordSetupTokenDB,
 // purpose: 'reset' so set-password.html shows reset-appropriate wording).
-// Deliberately admin-triggered only, not self-serve and not emailed
-// automatically — the admin who generates it is expected to share it
-// however they already communicate with that person (WhatsApp, etc.).
-// 7-day expiry matches the initial setup link's generosity, since unlike a
-// "forgot password" request this is a known, deliberate admin action.
+// Used both when an admin manually generates one to share themselves
+// (WhatsApp, etc.), and by the self-service forgot-password route, which
+// emails this same link automatically instead. 7-day expiry matches the
+// initial setup link's generosity.
 async function createPasswordResetLink(user, tenant, req) {
   const resetToken = uuid();
   await PasswordSetupTokenDB.create({
@@ -62,8 +61,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.110.0';
-const BUILD_TIME   = '2026-09-18T09:42:49Z';
+const APP_VERSION  = '1.111.0';
+const BUILD_TIME   = '2026-09-18T10:09:53Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -2114,6 +2113,28 @@ app.post('/api/signup', loginLimiter, async (req, res) => {
 });
 
 // ── AUTH (tenant-scoped: resolved from subdomain / header / ?tenant=) ───────
+// Self-service "forgot password" — works for any role (admin, staff,
+// client), since it matches purely on loginId with no role filter.
+// Reuses the exact same reset-link mechanism admin-triggered resets
+// already use (createPasswordResetLink, set-password.html) — the only
+// new part is that the person themselves triggers it, and it's actually
+// emailed rather than shared manually. Always the same response whether
+// or not a match was found, so this can't be used to probe which emails
+// have accounts here.
+app.post('/api/auth/forgot-password', loginLimiter, resolveTenant, async (req, res) => {
+  const { loginId } = req.body;
+  if (!loginId) return res.status(400).json({ error: 'Email or login ID is required' });
+  const user = await UserDB.findOne({ tenantId: req.tenant.id, loginId: String(loginId).toLowerCase(), active: true });
+  if (user && user.email && useEmail) {
+    const resetLink = await createPasswordResetLink(user, req.tenant, req);
+    sendEmail({
+      to: user.email, toName: user.name,
+      subject: `Reset your password — ${req.tenant.name} on Expo Orders`,
+      html: `<p>Hi ${escHtml(user.name)},</p><p>Click below to set a new password for your ${escHtml(user.role)} login at <b>${escHtml(req.tenant.name)}</b>:</p><p><a href="${resetLink}">${resetLink}</a></p><p>This link expires in 7 days. If you didn't request this, you can ignore this email.</p>`,
+    }).catch(err => log.error({ err, tenantId: req.tenant.id }, 'Forgot-password email failed to send'));
+  }
+  res.json({ ok: true });
+});
 app.post('/api/auth/login', loginLimiter, resolveTenant, async (req, res) => {
   const { loginId, password, confirmDualLogin } = req.body;
   if (!loginId || !password) return res.status(400).json({ error: 'Login ID and password are required' });

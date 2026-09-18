@@ -11,7 +11,10 @@
   </div>
 
   <div class="card" id="onboardingCard" style="display:none">
-    <h3 style="margin-top:0">Getting started</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0">Getting started</h3>
+      <button class="ghost small" onclick="dismissOnboarding()">Hide this</button>
+    </div>
     <div id="onboardingSteps"></div>
   </div>
 
@@ -123,11 +126,15 @@ async function load(){
   // Shown right after the first exhibition exists, until the company has
   // both added an item and taken a real order — once both are true, this
   // has served its purpose and stays hidden for good, same as it never
-  // shows at all if they already have real activity.
+  // shows at all if they already have real activity. Also stays hidden
+  // once manually dismissed, regardless of completion state — someone
+  // who's already familiar with the flow shouldn't have to finish every
+  // step just to make it go away.
   const totalItems = exhibitions.reduce((sum, e) => sum + (e.itemCount || 0), 0);
   const totalOrders = exhibitions.reduce((sum, e) => sum + (e.orderCount || 0), 0);
   const onboardingCard = document.getElementById('onboardingCard');
-  if (exhibitions.length && (totalItems === 0 || totalOrders === 0)) {
+  const dismissed = localStorage.getItem('exo_onboarding_dismissed_' + tenantSlug) === '1';
+  if (!dismissed && exhibitions.length && (totalItems === 0 || totalOrders === 0)) {
     const firstEx = current[0] || exhibitions[0];
     onboardingCard.style.display = 'block';
     document.getElementById('onboardingSteps').innerHTML = renderOnboardingSteps(firstEx, totalItems, totalOrders);
@@ -157,6 +164,10 @@ function renderOnboardingSteps(ex, totalItems, totalOrders){
     </div>`).join('');
 }
 let onboardingSteps = [];
+function dismissOnboarding(){
+  localStorage.setItem('exo_onboarding_dismissed_' + tenantSlug, '1');
+  document.getElementById('onboardingCard').style.display = 'none';
+}
 function goToStep(ex, path){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, ex.id);
   localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, ex.name);
