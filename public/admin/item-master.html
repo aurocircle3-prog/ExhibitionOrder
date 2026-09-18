@@ -22,19 +22,22 @@
         <thead><tr><th>Label</th><th>Type</th><th></th><th style="width:170px"></th></tr></thead>
         <tbody id="fieldRows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
       </table></div>
-      <div class="grid cols-3" style="margin-top:14px">
-        <div><label>New field label</label><input id="newLabel" placeholder="e.g. Weight"></div>
-        <div><label>Type</label><select id="newType" onchange="toggleNewDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>
-        <div id="newDecimalsWrap" style="display:none"><label>Decimal places</label><input id="newDecimals" type="number" min="0" max="6" value="2"></div>
+      <p class="muted" id="fieldToggleOnlyNote" style="display:none">For any changes to these fields, or to add new ones, contact ExpoOrders.</p>
+      <div id="addFieldSection">
+        <div class="grid cols-3" style="margin-top:14px">
+          <div><label>New field label</label><input id="newLabel" placeholder="e.g. Weight"></div>
+          <div><label>Type</label><select id="newType" onchange="toggleNewDecimals()"><option value="text">Text</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="date">Date</option></select></div>
+          <div id="newDecimalsWrap" style="display:none"><label>Decimal places</label><input id="newDecimals" type="number" min="0" max="6" value="2"></div>
+        </div>
+        <div class="grid cols-3" id="newUnitRow" style="display:none">
+          <div><label>Unit <span class="muted">(shown after the value, e.g. "Grams", "Rs.", "Mts")</span></label><input id="newUnit" placeholder="e.g. Grams"></div>
+        </div>
+        <div id="newOptionsRow" style="display:none">
+          <label>Dropdown choices <span class="muted">— separate with commas, e.g. "Red, Blue, Green"</span></label>
+          <input id="newOptions" placeholder="Red, Blue, Green">
+        </div>
+        <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addField)">Add field</button>
       </div>
-      <div class="grid cols-3" id="newUnitRow" style="display:none">
-        <div><label>Unit <span class="muted">(shown after the value, e.g. "Grams", "Rs.", "Mts")</span></label><input id="newUnit" placeholder="e.g. Grams"></div>
-      </div>
-      <div id="newOptionsRow" style="display:none">
-        <label>Dropdown choices <span class="muted">— separate with commas, e.g. "Red, Blue, Green"</span></label>
-        <input id="newOptions" placeholder="Red, Blue, Green">
-      </div>
-      <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addField)">Add field</button>
     </div>
   </div>
 
@@ -118,6 +121,7 @@ document.getElementById('nav').innerHTML = EXO.adminNav('items');
 document.getElementById('subnav').innerHTML = EXO.exhibitionSubNav('items');
 let fields = [], items = [], editingId = null, editingFieldId = null;
 let enableVariants = false, variantCategories = [];
+let canManageFields = false, canToggleFields = false;
 const tenantSlug = EXO.getTenantSlug();
 const currentExhibitionId = EXO.currentExhibition()?.id || null;
 
@@ -175,10 +179,10 @@ function renderFieldRows(){
       <td>${typeLabel(f)}</td>
       <td>${f.fixed ? '' : `<label style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" ${f.active !== false ? 'checked' : ''} onchange="toggleFieldActive('${f.id}', this.checked)" style="width:auto">Active</label>`}</td>
       <td>
-        <button class="icon-btn" title="Move up" ${i===0||f.active===false?'disabled':''} onclick="moveField('${f.id}','up')">↑</button>
+        ${canManageFields ? `<button class="icon-btn" title="Move up" ${i===0||f.active===false?'disabled':''} onclick="moveField('${f.id}','up')">↑</button>
         <button class="icon-btn" title="Move down" ${i===fields.length-1||f.active===false?'disabled':''} onclick="moveField('${f.id}','down')">↓</button>
         <button class="ghost small" onclick="startEditField('${f.id}')">Edit</button>
-        ${f.fixed ? '' : `<button class="danger small" onclick="deleteField('${f.id}')">Delete</button>`}
+        ${f.fixed ? '' : `<button class="danger small" onclick="deleteField('${f.id}')">Delete</button>`}` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -528,23 +532,30 @@ async function importBulkImages(){
   // flashed the tab briefly and, if the /me call itself failed, left it
   // visible permanently instead of hidden — the opposite of what a
   // default-deny model should do when something goes wrong.
-  let canManageFields = false;
   try {
     const me = await EXO.apiFetch('/me');
-    canManageFields = me.tenant?.settingsPermissions?.itemMasterFields === true;
+    const perms = me.tenant?.settingsPermissions || {};
+    canManageFields = perms.itemMasterFields === true;
+    // Toggle-only access (a self-signup company can switch fields
+    // active/inactive but not rename or add new ones) still needs the
+    // tab itself visible — gating the whole tab on the full permission
+    // alone would have hidden the toggle too, not just Add/Edit.
+    canToggleFields = canManageFields || perms.itemMasterFieldsToggle === true;
     enableVariants = !!me.tenant?.enableVariants;
     variantCategories = me.tenant?.variantCategories || [];
-  } catch (e) { canManageFields = false; }
-  if (!canManageFields) {
+  } catch (e) { canManageFields = false; canToggleFields = false; }
+  if (!canToggleFields) {
     document.querySelector('.tab-btn[data-tab="fields"]').style.display = 'none';
   }
+  document.getElementById('addFieldSection').style.display = canManageFields ? 'block' : 'none';
+  document.getElementById('fieldToggleOnlyNote').style.display = (canToggleFields && !canManageFields) ? 'block' : 'none';
 
   try { await loadFields(); } catch (e) { document.getElementById('fieldRows').innerHTML = `<tr><td colspan="4" class="muted">Couldn't load fields: ${e.message}</td></tr>`; }
   try { await loadExhibitionLabel(); } catch (e) { /* label is cosmetic, not worth blocking the page over */ }
   try { await loadItems(); } catch (e) { document.getElementById('itemsBody').innerHTML = `<tr><td class="muted">Couldn't load items: ${e.message}</td></tr>`; }
   renderExistingPhotos();
 
-  const savedTab = localStorage.getItem('exo_itemmaster_tab') || (canManageFields ? 'fields' : 'items');
+  const savedTab = localStorage.getItem('exo_itemmaster_tab') || (canToggleFields ? 'fields' : 'items');
   const savedBtn = document.querySelector(`.tab-btn[data-tab="${savedTab}"]`);
   switchTab(savedBtn && savedBtn.style.display !== 'none' ? savedTab : document.querySelector('.tab-btn:not([style*="none"])').dataset.tab);
 })();

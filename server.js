@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.109.0';
-const BUILD_TIME   = '2026-09-18T09:13:30Z';
+const APP_VERSION  = '1.110.0';
+const BUILD_TIME   = '2026-09-18T09:42:49Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -364,7 +364,7 @@ const tenantSchema = new mongoose.Schema({
       itemMasterFields: { type: Boolean, default: false },
       orderFooter: { type: Boolean, default: false },
     },
-    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: true }),
+    default: () => ({ companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, itemMasterFieldsToggle: false, orderFooter: true }),
   },
   orderViewColumns: { type: [mongoose.Schema.Types.Mixed], default: [] },
   // Order-level info shown above/below the item table on the buyer-facing
@@ -1287,8 +1287,8 @@ async function createTenantWithAdmin({ companyName, slug, adminName, email, phon
     // companies stay unlimited, matching the existing default exactly.
     maxExhibitions: selfChosenPassword ? 1 : null,
     settingsPermissions: selfChosenPassword
-      ? { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: true, orderFooter: true }
-      : (template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: true }),
+      ? { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, itemMasterFieldsToggle: true, orderFooter: true }
+      : (template?.settingsPermissions || { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, itemMasterFieldsToggle: false, orderFooter: true }),
   };
   if (template) {
     tenant.enableVariants = template.enableVariants || false;
@@ -1379,6 +1379,19 @@ async function createTenantWithAdmin({ companyName, slug, adminName, email, phon
       subject: `Set your password — ${tenant.name} on Expo Orders`,
       html: `<p>Hi ${escHtml(admin.name)},</p><p>Your Expo Orders account for <b>${escHtml(tenant.name)}</b> is ready. Set your password to get started:</p><p><a href="${setupLink}">${setupLink}</a></p><p>This link expires in 7 days.</p>`,
     }).catch(err => log.error({ err, tenantId: tenant.id }, 'Setup-link email failed to send'));
+  }
+  // Self-signup skips the setup-link entirely (nothing left to "set"
+  // separately), but was never given its own confirmation email either
+  // — this is that missing piece: your login link, email, and the
+  // password you just chose, for your own records.
+  if (selfChosenPassword && useEmail) {
+    sendEmail({
+      to: admin.email, toName: admin.name,
+      subject: `Your Expo Orders account — ${tenant.name}`,
+      html: `<p>Hi ${escHtml(admin.name)},</p><p>Your Expo Orders account for <b>${escHtml(tenant.name)}</b> is ready. Here are your details, for your records:</p>
+        <p>Company link: <b>${escHtml(tenant.slug)}</b><br>Login link: <a href="${baseUrl}/login.html">${baseUrl}/login.html</a><br>Login ID: <b>${escHtml(admin.email)}</b><br>Password: <b>${escHtml(selfChosenPassword)}</b></p>
+        <p>You chose this password yourself when signing up — this email is just so you have it on file.</p>`,
+    }).catch(err => log.error({ err, tenantId: tenant.id }, 'Self-signup confirmation email failed to send'));
   }
   return { tenant, admin, setupToken, setupLink };
 }
@@ -2706,7 +2719,17 @@ app.post('/api/fields', resolveTenant, auth, requireRole('admin'), requireSettin
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
-app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), requireSettingPermission('itemMasterFields'), async (req, res) => {
+app.put('/api/fields/:id', resolveTenant, auth, requireRole('admin'), async (req, res) => {
+  // An active-only change (the reversible on/off toggle) is allowed by
+  // either permission; anything else touching the field's actual
+  // definition (label, type, options, etc.) still needs the full one —
+  // this is what lets a self-signup company toggle fields on/off
+  // without being able to rename or add new ones themselves.
+  const bodyKeys = Object.keys(req.body);
+  const isActiveOnly = bodyKeys.length === 1 && bodyKeys[0] === 'active';
+  const perms = req.tenant.settingsPermissions || {};
+  const allowed = isActiveOnly ? (perms.itemMasterFields === true || perms.itemMasterFieldsToggle === true) : perms.itemMasterFields === true;
+  if (!allowed) return res.status(403).json({ error: 'This setting is managed by ExpoOrders for your account — contact us to change it.' });
   try { await updateFieldForTenant(req.tenant.id, req.params.id, req.body); res.json({ ok: true }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -4675,7 +4698,7 @@ async function migrateFixedFields() {
 // closed — matching what every tenant created since would have gotten.
 async function migrateSettingsPermissionsDefault() {
   const tenants = await TenantDB.find({});
-  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, orderFooter: true };
+  const closed = { companyName: false, orderForm: false, orderDetailsFields: false, orderViewLayout: false, itemMasterFields: false, itemMasterFieldsToggle: false, orderFooter: true };
   for (const tenant of tenants) {
     if (tenant.settingsPermissions?.itemMasterFields === undefined) {
       await TenantDB.update({ id: tenant.id }, { settingsPermissions: closed });
