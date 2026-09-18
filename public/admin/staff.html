@@ -48,34 +48,21 @@
 
   <div class="card">
     <h3 style="margin-top:0">Buyer logins <span class="muted">— optional</span></h3>
-    <p class="muted">Most buyers just use the order link sent to them — no login needed. Set one up here only for a repeat buyer who wants to see their own order history any time.</p>
+    <p class="muted">Most buyers just use the order link sent to them — no login needed. A buyer who wants to see their own order history any time can create their own login at:</p>
+    <p><a id="buyerSignupLink" href="#" target="_blank"></a></p>
     <div class="error" id="clientErr"></div>
     <div class="table-scroll"><table>
       <thead><tr><th>Name</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead>
       <tbody id="clientRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
     </table></div>
   </div>
-  <div class="card">
-    <h3 style="margin-top:0">Add buyer login</h3>
-    <div class="grid cols-3">
-      <div><label>Name</label><input id="clientName"></div>
-      <div>
-        <label>Phone</label>
-        <div style="display:flex;gap:6px">
-          <input id="clientPhoneCC" value="+91" maxlength="4" style="width:60px;flex:0 0 auto">
-          <input id="clientPhone" type="tel" inputmode="numeric" placeholder="98765 43210" style="flex:1">
-        </div>
-      </div>
-      <div><label>Email <span class="muted">(used as login ID)</span></label><input id="clientEmail" type="email"></div>
-      <div><label>Password</label><input id="clientPassword" type="password"></div>
-    </div>
-    <button class="primary" style="margin-top:14px" onclick="EXO.busy(this, addClient)">Create buyer login</button>
-  </div>
 </div>
 <script src="/app.js"></script>
 <script>
 EXO.requireRole('admin');
 document.getElementById('nav').innerHTML = EXO.adminNav('staff');
+document.getElementById('buyerSignupLink').href = location.origin + '/signup.html';
+document.getElementById('buyerSignupLink').textContent = location.origin + '/signup.html';
 
 async function load(){
   const [staff, me, clients] = await Promise.all([EXO.apiFetch('/staff'), EXO.apiFetch('/me'), EXO.apiFetch('/clients')]);
@@ -148,22 +135,6 @@ async function addStaff(){
 async function toggle(id, active){ await EXO.apiFetch('/staff/'+id, { method:'PUT', body: JSON.stringify({ active }) }); load(); }
 async function remove(id){ if (!confirm('Delete this staff account?')) return; await EXO.apiFetch('/staff/'+id, { method:'DELETE' }); load(); }
 
-async function addClient(){
-  const err = document.getElementById('clientErr'); err.style.display='none';
-  try {
-    const phoneNum = document.getElementById('clientPhone').value.trim();
-    const body = {
-      name: document.getElementById('clientName').value.trim(),
-      phone: phoneNum ? document.getElementById('clientPhoneCC').value.trim() + phoneNum : '',
-      email: document.getElementById('clientEmail').value.trim(),
-      password: document.getElementById('clientPassword').value,
-    };
-    await EXO.apiFetch('/clients', { method:'POST', body: JSON.stringify(body) });
-    document.getElementById('clientName').value = document.getElementById('clientPhone').value = document.getElementById('clientEmail').value = document.getElementById('clientPassword').value = '';
-    EXO.toast('Buyer login created');
-    load();
-  } catch(e) { err.textContent = e.message; err.style.display='block'; EXO.toast('Could not add buyer login — see error above', 'error'); }
-}
 async function sendClientResetLink(id, name){
   try {
     const res = await EXO.apiFetch('/clients/'+id+'/reset-link', { method: 'POST' });

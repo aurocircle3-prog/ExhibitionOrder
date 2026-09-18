@@ -62,8 +62,8 @@ async function createPasswordResetLink(user, tenant, req) {
 // Bumped by hand for meaningful releases; BUILD_TIME is set fresh in every
 // delivered update — the fast, foolproof way to check "did my last deploy
 // actually go live" is to compare this against when you think you pushed.
-const APP_VERSION  = '1.108.0';
-const BUILD_TIME   = '2026-09-16T16:40:26Z';
+const APP_VERSION  = '1.109.0';
+const BUILD_TIME   = '2026-09-18T09:13:30Z';
 
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') {
@@ -4100,6 +4100,11 @@ app.get('/api/exhibitions', resolveTenant, auth, async (req, res) => {
 app.post('/api/exhibitions', resolveTenant, auth, requireRole('admin'), async (req, res) => {
   const { name, location, startDate, endDate } = req.body;
   if (!name) return res.status(400).json({ error: 'Exhibition name is required' });
+  // Plain YYYY-MM-DD string comparison sorts correctly for ISO dates — no
+  // need to parse into Date objects just to compare against today.
+  const today = new Date().toISOString().slice(0, 10);
+  if (startDate && startDate < today) return res.status(400).json({ error: 'Start date can\'t be in the past' });
+  if (endDate && startDate && endDate < startDate) return res.status(400).json({ error: 'End date can\'t be before the start date' });
   if (req.tenant.maxExhibitions != null) {
     const myCount = await ExhibitionParticipantDB.count({ tenantId: req.tenant.id });
     if (myCount >= req.tenant.maxExhibitions) {

@@ -10,6 +10,11 @@
     <button class="primary" onclick="showCreateExhibition()">Create your first exhibition</button>
   </div>
 
+  <div class="card" id="onboardingCard" style="display:none">
+    <h3 style="margin-top:0">Getting started</h3>
+    <div id="onboardingSteps"></div>
+  </div>
+
   <div class="lightbox" id="createExhibitionModal">
     <div class="crop-box" style="max-width:420px;text-align:left">
       <h3 style="margin-top:0">Create exhibition</h3>
@@ -115,11 +120,47 @@ async function load(){
   document.getElementById('dashTabs').style.display = exhibitions.length ? 'flex' : 'none';
   if (exhibitions.length && !document.querySelector('#dashTabs .tab-btn.active')) switchDashTab('overview');
 
+  // Shown right after the first exhibition exists, until the company has
+  // both added an item and taken a real order — once both are true, this
+  // has served its purpose and stays hidden for good, same as it never
+  // shows at all if they already have real activity.
+  const totalItems = exhibitions.reduce((sum, e) => sum + (e.itemCount || 0), 0);
+  const totalOrders = exhibitions.reduce((sum, e) => sum + (e.orderCount || 0), 0);
+  const onboardingCard = document.getElementById('onboardingCard');
+  if (exhibitions.length && (totalItems === 0 || totalOrders === 0)) {
+    const firstEx = current[0] || exhibitions[0];
+    onboardingCard.style.display = 'block';
+    document.getElementById('onboardingSteps').innerHTML = renderOnboardingSteps(firstEx, totalItems, totalOrders);
+  } else {
+    onboardingCard.style.display = 'none';
+  }
+
   document.getElementById('statRow').innerHTML = (stats.cards || []).map(renderDashboardCard).join('') || '<p class="muted">No dashboard cards set up yet — ask ExpoOrders to add some.</p>';
   document.getElementById('currentExhibitions').innerHTML = current.map(exhibitionCard).join('') || '<p class="muted">None right now.</p>';
   document.getElementById('completedExhibitions').innerHTML = completed.map(exhibitionCard).join('') || '<p class="muted">None yet.</p>';
 
   document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+}
+function renderOnboardingSteps(ex, totalItems, totalOrders){
+  const steps = [
+    { done: true, label: 'Create your exhibition', action: null },
+    { done: totalItems > 0, label: 'Add your first item', action: () => goToStep(ex, '/admin/item-master.html') },
+    { done: totalOrders > 0, label: 'Take a test order', action: () => goToStep(ex, '/staff/order.html') },
+    { done: totalOrders > 0, label: 'See it in Reports', action: () => goToStep(ex, '/admin/reports.html?exhibitionId=' + ex.id) },
+  ];
+  onboardingSteps = steps;
+  return steps.map(s => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;${s.done ? 'opacity:0.55' : ''}">
+      <span style="font-size:18px">${s.done ? '✅' : '⬜'}</span>
+      <span style="flex:1">${EXO.esc(s.label)}</span>
+      ${!s.done && s.action ? `<button class="ghost small" onclick="onboardingSteps[${steps.indexOf(s)}].action()">Go →</button>` : ''}
+    </div>`).join('');
+}
+let onboardingSteps = [];
+function goToStep(ex, path){
+  localStorage.setItem('exo_current_exhibition_' + tenantSlug, ex.id);
+  localStorage.setItem('exo_current_exhibition_name_' + tenantSlug, ex.name);
+  location.href = path;
 }
 function enterExhibition(id, name){
   localStorage.setItem('exo_current_exhibition_' + tenantSlug, id);
@@ -132,6 +173,9 @@ function showCreateExhibition(){
   document.getElementById('createExLocation').value = '';
   document.getElementById('createExStart').value = '';
   document.getElementById('createExEnd').value = '';
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('createExStart').min = today;
+  document.getElementById('createExEnd').min = today;
   document.getElementById('createExhibitionModal').classList.add('open');
 }
 async function submitCreateExhibition(){
